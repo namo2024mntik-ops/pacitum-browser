@@ -98,8 +98,8 @@ svg.i{width:16px;height:16px;flex:none}
 .x{width:34px;height:34px;border-radius:17px;display:grid;place-items:center;color:var(--sec)}.x:hover{background:var(--surf)}
 .sec{font-size:12px;font-weight:600;color:var(--sec);text-transform:uppercase;letter-spacing:.5px;margin:18px 0 10px}
 .bgs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-.bgo{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--sec);text-align:center}
-.th{height:58px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--bord);display:grid;place-items:center;color:var(--sec);background-size:cover;transition:box-shadow .16s var(--out)}
+.bgo{width:100%;display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--sec);text-align:center}
+.th{width:100%;height:58px;border-radius:10px;box-shadow:inset 0 0 0 1px var(--bord);display:grid;place-items:center;color:var(--sec);background-size:cover;transition:box-shadow .16s var(--out)}
 .bgo[aria-checked=true] .th{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--acc)}
 .t-calm{background:radial-gradient(60px 40px at 15% 10%,color-mix(in srgb,var(--blob1) 55%,transparent),transparent),radial-gradient(60px 40px at 90% 100%,#6366F166,transparent),var(--page)}
 .t-plain{background:var(--page)}.t-up{background:var(--surf)}
@@ -341,8 +341,10 @@ document.addEventListener("keydown",function(e){
     var a=f[0],z=f[f.length-1];if(!sheet.contains(document.activeElement)){e.preventDefault();a.focus()}
     else if(e.shiftKey&&document.activeElement===a){e.preventDefault();z.focus()}else if(!e.shiftKey&&document.activeElement===z){e.preventDefault();a.focus()}}
   if(e.target===document.body&&e.key.length===1&&!e.ctrlKey&&!e.metaKey&&!e.altKey)$("#q").focus()});
+/* deep links: pacitum://newtab#customize, #bg=wallpaper, #layout=focus */
+location.hash.slice(1).split("&").forEach(function(kv){var p=kv.split("=");if(p[0]==="bg"&&["calm","wallpaper","plain"].indexOf(p[1])>=0)S.bg=p[1];if(p[0]==="layout"&&["calm","focus"].indexOf(p[1])>=0)S.layout=p[1]});save();
 /* go */
 engine();sync();apply();reading();downloads();
-if(location.hash==="#customize"||sessionStorage.getItem("pacitum.sheet")){sessionStorage.removeItem("pacitum.sheet");openSheet(true)}
+if(/customize/.test(location.hash)||sessionStorage.getItem("pacitum.sheet")){sessionStorage.removeItem("pacitum.sheet");openSheet(true)}
 setInterval(greet,30e3);
 </script></body></html>

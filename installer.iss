@@ -34,7 +34,7 @@ RestartApplications=yes
 AppMutex=PacitumBrowserRunning
 VersionInfoVersion={#AppVer}
 VersionInfoProductName={#AppName}
-LZMANumBlockThreads=4
+LZMAUseSeparateProcess=yes
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
 [InstallDelete]

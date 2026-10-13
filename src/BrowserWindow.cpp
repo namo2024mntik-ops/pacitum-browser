@@ -1732,8 +1732,15 @@ void BrowserWindow::setupHome() {
 
 QString BrowserWindow::homeData() {
     QJsonObject o;
-    // Greeting name hook: "profile_name" in the settings (the profile system can supply it).
-    const QString name = readSettings().value(QStringLiteral("profile_name")).toString();
+    // Greeting name: the active profile's name (per profile); none in Guest/private or for an unnamed "Default".
+    auto* pm = ProfileManager::instance();
+    QString name;
+    if (!pm->isGuest()) {
+        name = pm->current().name.trimmed();
+        if (name.isEmpty() || (pm->current().id == QStringLiteral("default") && name == QStringLiteral("Default")))
+            name = readSettings().value(QStringLiteral("profile_name")).toString().trimmed();
+        if (name == QStringLiteral("Default")) name.clear();
+    }
     o["first"] = m_privateMode ? QString() : name.section(QLatin1Char(' '), 0, 0);
     o["dark"] = m_darkMode;
     o["reduced"] = Pacitum::reducedMotion();

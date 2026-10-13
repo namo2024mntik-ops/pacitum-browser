@@ -83,6 +83,7 @@ private:
     quint64 m_hoverId = 0;
     QVariantAnimation* m_spin = nullptr;
     qreal m_spinAngle = 0;
+    bool m_inUpdate = false;
     int m_frozenWidth = 0;                    // keep widths while closing with the mouse (Chrome-like)
     quint64 idOf(int index) const;
     int indexOfId(quint64 id) const;

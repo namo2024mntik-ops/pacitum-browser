@@ -13,6 +13,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QApplication>
+#include <QLineEdit>
+#include <QWidgetAction>
+#include <QTimer>
 
 // ---------------------------------------------------------------------------
 // Floating-tab style: Qt's QTabBar keeps doing layout, drag-reorder (with its own
@@ -180,17 +183,6 @@ void PacitumTabBar::tabInserted(int index) {
     }
     if (!m_floating) return;
     ensureId(index);
-    if (!tabButton(index, QTabBar::RightSide)) {
-        auto* b = new TabCloseButton(this);
-        connect(b, &QAbstractButton::clicked, this, [this, b] {
-            for (int i = 0; i < count(); ++i)
-                if (tabButton(i, QTabBar::RightSide) == b) {
-                    if (underMouse()) m_frozenWidth = tabRect(i).width() > kMinW ? normalTabWidth() : 0;   // next close button stays under the cursor
-                    emit tabCloseRequested(i); return;
-                }
-        });
-        setTabButton(index, QTabBar::RightSide, b);
-    }
     updateCloseButtons();
 }
 void PacitumTabBar::tabRemoved(int index) {
@@ -207,14 +199,29 @@ void PacitumTabBar::tabRemoved(int index) {
 void PacitumTabBar::tabLayoutChange() { QTabBar::tabLayoutChange(); if (m_floating) updateCloseButtons(); }
 
 void PacitumTabBar::updateCloseButtons() {
+    if (m_inUpdate) return;
+    m_inUpdate = true;
     for (int i = 0; i < count(); ++i) {
         QWidget* b = tabButton(i, QTabBar::RightSide);
+        if (!b && !m_pinned.contains(i)) {
+            auto* cb = new TabCloseButton(this);
+            connect(cb, &QAbstractButton::clicked, this, [this, cb] {
+                for (int j = 0; j < count(); ++j)
+                    if (tabButton(j, QTabBar::RightSide) == cb) {
+                        if (underMouse()) m_frozenWidth = tabRect(j).width() > kMinW ? normalTabWidth() : 0;   // next close button stays under the cursor
+                        emit tabCloseRequested(j); return;
+                    }
+            });
+            setTabButton(i, QTabBar::RightSide, cb);
+            b = cb;
+        }
         if (!b) continue;
         const int w = tabRect(i).width() - kGap;
         const bool active = i == currentIndex();
         const bool show = !m_pinned.contains(i) && (active ? w >= 56 : (idOf(i) == m_hoverId && w >= 96));
         b->setVisible(show);
     }
+    m_inUpdate = false;
 }
 
 void PacitumTabBar::setHoverIndex(int i) {
@@ -630,13 +637,30 @@ void PacitumTabWidget::updateCorner() {
 }
 
 void PacitumTabWidget::showTabList() {
+    // Tab search (spec §4.2 tab-search button): filter field + matching open tabs.
     QMenu menu(this);
+    menu.setMinimumWidth(320);
+    auto* field = new QLineEdit(&menu);
+    field->setPlaceholderText(QStringLiteral("Search tabs"));
+    field->setClearButtonEnabled(true);
+    auto* fa = new QWidgetAction(&menu); fa->setDefaultWidget(field); menu.addAction(fa);
+    menu.addSeparator();
+    QList<QAction*> rows;
     for (int i = 0; i < count(); ++i) {
         auto* a = menu.addAction(tabIcon(i), tabText(i));
         a->setCheckable(true); a->setChecked(i == currentIndex());
+        a->setData(tabText(i) + QLatin1Char(' ') + tabToolTip(i));
         connect(a, &QAction::triggered, this, [this, i]{ setCurrentIndex(i); });
+        rows << a;
     }
-    menu.exec(m_tabListBtn->mapToGlobal(QPoint(m_tabListBtn->width() - menu.sizeHint().width(), m_tabListBtn->height())));
+    connect(field, &QLineEdit::textChanged, &menu, [rows](const QString& q){
+        for (auto* a : rows) a->setVisible(q.isEmpty() || a->data().toString().contains(q, Qt::CaseInsensitive));
+    });
+    connect(field, &QLineEdit::returnPressed, &menu, [&menu, rows]{
+        for (auto* a : rows) if (a->isVisible()) { a->trigger(); menu.close(); return; } });
+    QTimer::singleShot(0, field, [field]{ field->setFocus(); });
+    QWidget* anchor = m_tabListBtn && m_tabListBtn->isVisible() ? static_cast<QWidget*>(m_tabListBtn) : static_cast<QWidget*>(this);
+    menu.exec(anchor->mapToGlobal(QPoint(anchor->width() - menu.sizeHint().width(), anchor->height())));
 }
 
 void PacitumTabWidget::showTabContextMenu(int index, const QPoint& pos) {
@@ -653,7 +677,9 @@ void PacitumTabWidget::showTabContextMenu(int index, const QPoint& pos) {
     auto* split = menu.addAction(QStringLiteral("Open in Split View"));
     connect(split, &QAction::triggered, this, [this, index]{ emit tabSplitRequested(index); });
     menu.addSeparator();
-    auto* pin = menu.addAction(activeBar()->isTabPinned(index) ? QStringLiteral("Unpin Tab") : QStringLiteral("Pin Tab"));
+    const auto& pal = ThemeManager::current();
+    auto* pin = menu.addAction(ThemeManager::icon(activeBar()->isTabPinned(index) ? QStringLiteral("tab-pin") : QStringLiteral("pin-filled"), pal.textSecondary, 18),
+                               activeBar()->isTabPinned(index) ? QStringLiteral("Unpin Tab") : QStringLiteral("Pin Tab"));
     connect(pin, &QAction::triggered, this, [this, index]{ emit tabPinRequested(index, !activeBar()->isTabPinned(index)); });
     auto* mute = menu.addAction(QStringLiteral("Mute Tab"));
     connect(mute, &QAction::triggered, this, [this, index]{ emit tabMuteRequested(index, true); });

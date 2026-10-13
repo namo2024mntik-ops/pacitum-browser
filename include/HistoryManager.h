@@ -14,6 +14,7 @@ struct HistoryEntry {
 class HistoryManager {
 public:
     explicit HistoryManager(const QString& dbPath = QStringLiteral("browser_history.db"));
+    ~HistoryManager();
 
     void addVisit(const QString& url, const QString& title = {}, bool typed = false);
     QVector<HistoryEntry> search(const QString& query, int limit = 50) const;
@@ -28,6 +29,7 @@ public:
 
 private:
     void initDb() const;
+    QString m_conn;   // one long-lived connection (opening SQLite per call was slow and leaked 'still in use' warnings)
     QString m_dbPath;
     mutable QMutex m_mutex;
 };

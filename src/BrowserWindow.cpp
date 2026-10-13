@@ -58,6 +58,10 @@
 #include <QKeyEvent>
 #include <QStyle>
 #include <QTimer>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QDateTime>
+#include <QWebEngineFullScreenRequest>
 #include <QtMath>
 #include <QUrl>
 #include <QDir>
@@ -310,7 +314,7 @@ void BrowserWindow::updateTabIcon(BrowserTab* tab) {
         if (ic.isNull()) {
             const QString u = tab->currentUrl();
             ic = u.startsWith(QStringLiteral("pacitum:")) || u.isEmpty()
-                 ? QIcon(QStringLiteral(":/icons/pacitum-icon-32.png"))
+                 ? []{ static const QIcon app(QStringLiteral(":/icons/pacitum-icon-32.png")); return app; }()
                  : letterTile(u);
             if (ic.isNull()) ic = m_theme->secondaryIcon(QStringLiteral("globe"), 16);
         }
@@ -466,6 +470,17 @@ void BrowserWindow::newTab(const QString& url) {
     connect(tab, &BrowserTab::loadDone, this, [this, tab](bool ok){ if (tab == activeTab()) m_addressBar->progressFinished(ok); });
     connect(tab, &BrowserTab::iconChanged, this, [this, tab]{ updateTabIcon(tab); });
     connect(tab, &BrowserTab::urlChanged, this, [this, tab]{ updateTabIcon(tab); });
+    connect(tab, &BrowserTab::fullScreenRequested, this, [this, tab](QWebEngineFullScreenRequest req){
+        if (req.toggleOn()) {
+            req.accept();
+            m_fullscreenTab = tab;
+            m_pageFullscreen = true;
+            enterContentFullscreen(true);
+        } else {
+            req.accept();
+            if (m_pageFullscreen && m_fullscreenTab == tab) { m_pageFullscreen = false; m_fullscreenTab.clear(); exitContentFullscreen(); }
+        }
+    });
     connect(tab, &BrowserTab::crashed, this, [this, tab]{ const int i = m_tabs->indexOf(tab); if (i >= 0) m_tabs->setTabCrashed(i, true); });
     if (tab->view()) {
         connect(tab->view()->page(), &QWebEnginePage::recentlyAudibleChanged, this, [this, tab]{ updateTabAudio(tab); });
@@ -822,15 +837,70 @@ void BrowserWindow::showBookmarksDialog() {
     QStringList lines; for (auto &b: bms) lines << b.title + QStringLiteral(" — ") + b.url;
     QMessageBox::information(this, QStringLiteral("Bookmarks (%1)").arg(bms.size()), lines.join(QStringLiteral("\n")));
 }
-void BrowserWindow::toggleBookmarksBar() { m_bookmarksBar->setVisible(!m_bookmarksBar->isVisible()); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = m_bookmarksBar->isVisible(); QFile f(QStringLiteral("browser_settings.json")); if (f.open(QIODevice::WriteOnly|QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented)); }
+void BrowserWindow::toggleBookmarksBar() { m_bookmarksBar->setVisible(!m_bookmarksBar->isVisible()); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = m_bookmarksBar->isVisible(); writeSettingsFile(s); }
 void BrowserWindow::toggleVerticalTabs() { m_verticalTabs = !m_verticalTabs; m_tabs->setVertical(m_verticalTabs); m_splitTabs->setVertical(m_verticalTabs); }
-void BrowserWindow::toggleFullscreen() { isFullScreen() ? showNormal() : showFullScreen(); }
+// ---------------- fullscreen ----------------
+// F11 (browser fullscreen) and website fullscreen (QWebEngineFullScreenRequest) share one path:
+// remember the window state, hide tab strip / toolbar / bookmarks bar (the window is frameless, so
+// no frame remains), go truly fullscreen; on exit put the chrome back and restore the old state.
+void BrowserWindow::toggleFullscreen() {
+    if (m_chromeHidden) {
+        if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view())
+            m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);   // page's exit callback restores
+        else exitContentFullscreen();
+    } else enterContentFullscreen(false);
+}
+
+void BrowserWindow::enterContentFullscreen(bool) {
+    if (!m_chromeHidden) {
+        m_preFullscreenState = windowState() & ~(Qt::WindowFullScreen | Qt::WindowMinimized);
+        setChromeHidden(true);
+    }
+    if (!isFullScreen()) showFullScreen();
+    if (m_fullscreenTab && m_fullscreenTab->view()) m_fullscreenTab->view()->setFocus();
+}
+
+void BrowserWindow::exitContentFullscreen() {
+    if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view()) {
+        // Esc / F11 during website fullscreen: ask the page to leave; its toggleOn=false request lands here again.
+        m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);
+        return;
+    }
+    m_pageFullscreen = false; m_fullscreenTab.clear();
+    if (!m_chromeHidden) return;
+    setChromeHidden(false);
+    if (m_preFullscreenState & Qt::WindowMaximized) showMaximized(); else showNormal();
+}
+
+void BrowserWindow::setChromeHidden(bool hidden) {
+    if (hidden == m_chromeHidden) return;
+    m_chromeHidden = hidden;
+    if (hidden) {
+        m_hiddenChrome.clear();
+        QList<QWidget*> chrome{ m_tabStrip, m_toolbar, m_bookmarksBar,
+                                findChild<QWidget*>(QStringLiteral("ChromeDivider")),
+                                m_tabs ? m_tabs->tabBar() : nullptr,
+                                m_splitTabs ? m_splitTabs->tabBar() : nullptr };
+        // website fullscreen in split view: hide the other pane as well
+        if (m_pageFullscreen && m_fullscreenTab && m_splitTabs) {
+            if (m_splitTabs->indexOf(m_fullscreenTab) >= 0) chrome << m_tabs;
+            else chrome << m_splitTabs;
+        }
+        for (QWidget* w : chrome) if (w && w->isVisible()) { m_hiddenChrome << w; w->hide(); }
+    } else {
+        for (const auto& w : std::as_const(m_hiddenChrome)) if (w) w->show();
+        m_hiddenChrome.clear();
+    }
+}
 void BrowserWindow::focusAddressBar() { m_addressBar->focusUrl(); }
 void BrowserWindow::zoomIn() { if(auto* t=activeTab()){ m_zoom->zoomIn(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000);} }
 void BrowserWindow::zoomOut(){ if(auto* t=activeTab()){ m_zoom->zoomOut(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000);} }
 void BrowserWindow::zoomReset(){ if(auto* t=activeTab()){ m_zoom->zoomReset(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QStringLiteral("100%")); statusBar()->showMessage(QStringLiteral("Zoom: 100%"), 1000);} }
 void BrowserWindow::showFind(){ if(auto* t=activeTab()) t->showFindBar(); }
-void BrowserWindow::handleEscape(){ if(auto* t=activeTab()) t->hideFindBar(); }
+void BrowserWindow::handleEscape(){
+    if (m_chromeHidden) { exitContentFullscreen(); return; }
+    if(auto* t=activeTab()) t->hideFindBar();
+}
 void BrowserWindow::nextTab(){ m_tabs->setCurrentIndex((m_tabs->currentIndex()+1)%m_tabs->count()); }
 void BrowserWindow::prevTab(){ m_tabs->setCurrentIndex((m_tabs->currentIndex()-1+m_tabs->count())%m_tabs->count()); }
 void BrowserWindow::lastTab(){ m_tabs->setCurrentIndex(m_tabs->count()-1); }
@@ -922,9 +992,26 @@ void BrowserWindow::applyToolbarTheme(){
     m_toolbar->setStyleSheet(QString());
 }
 
+// Settings are read from many UI paths (menus, toolbar updates, tab changes). Re-parsing the JSON
+// file each time was synchronous disk I/O on the UI thread; cache it and only re-read when the
+// file's size/mtime changed (other components such as the settings page write it directly).
 QJsonObject BrowserWindow::readSettings() const {
-    QFile f(QStringLiteral("browser_settings.json")); if(!f.open(QIODevice::ReadOnly)) return {};
-    auto doc=QJsonDocument::fromJson(f.readAll()); return doc.isObject()?doc.object():QJsonObject{};
+    const QFileInfo fi(QStringLiteral("browser_settings.json"));
+    if (!fi.exists()) { m_settingsCache = {}; m_settingsStamp = {}; m_settingsSize = -1; return {}; }
+    const QDateTime stamp = fi.lastModified();
+    if (m_settingsSize == fi.size() && m_settingsStamp == stamp) return m_settingsCache;
+    QFile f(fi.filePath()); if(!f.open(QIODevice::ReadOnly)) return {};
+    auto doc=QJsonDocument::fromJson(f.readAll());
+    m_settingsCache = doc.isObject()?doc.object():QJsonObject{};
+    m_settingsStamp = stamp; m_settingsSize = fi.size();
+    return m_settingsCache;
+}
+
+void BrowserWindow::writeSettingsFile(const QJsonObject& s) {
+    if (s == readSettings()) return;   // unchanged: skip the write entirely
+    QSaveFile f(QStringLiteral("browser_settings.json"));   // atomic: no half-written file on crash
+    if (f.open(QIODevice::WriteOnly) && f.write(QJsonDocument(s).toJson(QJsonDocument::Indented)) >= 0) f.commit();
+    m_settingsSize = -1;   // force re-stat on next read
 }
 
 void BrowserWindow::loadSettings(){
@@ -961,7 +1048,7 @@ void BrowserWindow::saveSettings(){
     s[QStringLiteral("dark_mode")] = m_darkMode;
     // (was: always wrote Dark/Light, silently turning "System" into a fixed theme on the next save)
     s[QStringLiteral("theme")] = m_themeSetting.isEmpty() ? (m_darkMode?QStringLiteral("Dark"):QStringLiteral("Light")) : m_themeSetting;
-    QFile f(QStringLiteral("browser_settings.json")); if(f.open(QIODevice::WriteOnly|QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented));
+    writeSettingsFile(s);
 }
 
 void BrowserWindow::restoreOrNewTab(){
@@ -1009,7 +1096,7 @@ void BrowserWindow::closeEvent(QCloseEvent* e){
 }
 
 void BrowserWindow::keyPressEvent(QKeyEvent* e){
-    if(e->key()==Qt::Key_Escape && isFullScreen()) showNormal();
+    if(e->key()==Qt::Key_Escape && m_chromeHidden) { exitContentFullscreen(); return; }
     QMainWindow::keyPressEvent(e);
 }
 
@@ -1017,6 +1104,22 @@ void BrowserWindow::changeEvent(QEvent* e) {
     if (e->type() == QEvent::WindowStateChange && m_maxBtn) {
         m_maxBtn->setMaximized(isMaximized());
         m_maxBtn->setToolTip(isMaximized() ? QStringLiteral("Restore") : QStringLiteral("Maximize"));
+    }
+    if (e->type() == QEvent::WindowStateChange) {
+        // Minimized: stop the tab-strip spinner animations (they repainted ~60x/s for nothing).
+        const bool minimized = isMinimized();
+        for (auto* tw : {m_tabs, m_splitTabs})
+            if (tw) if (auto* b = qobject_cast<PacitumTabBar*>(tw->stripBar())) b->setSpinnerSuspended(minimized);
+        if (minimized) m_spinTimer->stop();
+        else if (m_tabs) for (int i = 0; i < m_tabs->count(); ++i)
+            if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->isLoading()) { updateTabIcon(t); }
+        // The OS/user left fullscreen some other way (e.g. Win+Down): bring the chrome back.
+        if (m_chromeHidden && !isFullScreen() && !minimized) {
+            if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view())
+                m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);
+            m_pageFullscreen = false; m_fullscreenTab.clear();
+            setChromeHidden(false);
+        }
     }
     if (e->type() == QEvent::ActivationChange && isActiveWindow()) installPopupFactory();
     QMainWindow::changeEvent(e);
@@ -1047,6 +1150,14 @@ Qt::Edges BrowserWindow::edgesAt(const QPoint& global) const {
 }
 
 bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
+    if (m_chromeHidden && (e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride)) {
+        auto* ke = static_cast<QKeyEvent*>(e);
+        auto* w = qobject_cast<QWidget*>(o);
+        if ((ke->key() == Qt::Key_Escape || ke->key() == Qt::Key_F11) && w && w->window() == this) {
+            if (e->type() == QEvent::ShortcutOverride) { e->accept(); return false; }
+            exitContentFullscreen(); return true;
+        }
+    }
     if (o == m_toolbar && e->type() == QEvent::Resize) updateToolbarOverflow();
 #ifndef Q_OS_WIN
     // Frameless resize/move for non-Windows platforms via the compositor (startSystemResize/Move).
@@ -1067,8 +1178,9 @@ bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
                 else if (!edges && m_edgeCursor) { QGuiApplication::restoreOverrideCursor(); m_edgeCursor = false; }
             } else if (e->type() == QEvent::MouseButtonPress && me->button() == Qt::LeftButton) {
                 if (edges) { windowHandle()->startSystemResize(edges); return true; }
-                if (isCaptionArea(mapFromGlobal(g))) { windowHandle()->startSystemMove(); return true; }
-            } else if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton && isCaptionArea(mapFromGlobal(g))) {
+                // Locked while maximized/fullscreen: a caption drag must not move or un-maximize the window.
+                if (isCaptionArea(mapFromGlobal(g))) { if (!isMaximized() && !isFullScreen()) windowHandle()->startSystemMove(); return true; }
+            } else if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton && !isFullScreen() && isCaptionArea(mapFromGlobal(g))) {
                 isMaximized() ? showNormal() : showMaximized(); return true;
             }
         }
@@ -1262,6 +1374,14 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         setNcMaxHover(false);
         break;
     case WM_NCLBUTTONDOWN:
+        // Window is locked while maximized: swallow the caption press so DefWindowProc never starts
+        // a move loop (which would drag the window out of maximized / snap it). Double-click
+        // (WM_NCLBUTTONDBLCLK) still restores, and the window stays draggable when restored.
+        if (msg->wParam == HTCAPTION && (IsZoomed(hwnd) || isFullScreen())) {
+            SetForegroundWindow(hwnd);
+            *result = 0; return true;
+        }
+        [[fallthrough]];
     case WM_NCLBUTTONDBLCLK:
         if (msg->wParam == HTMAXBUTTON) {
             m_ncMaxPressed = true;
@@ -1289,6 +1409,8 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         }
         break;
     case WM_SYSCOMMAND:
+        // No keyboard/system-menu "Move" or "Size" while maximized or fullscreen.
+        if (((msg->wParam & 0xFFF0) == SC_MOVE || (msg->wParam & 0xFFF0) == SC_SIZE) && (IsZoomed(hwnd) || isFullScreen())) { *result = 0; return true; }
         // Alt+Space: show the system menu under the top-left of our caption.
         if ((msg->wParam & 0xFFF0) == SC_KEYMENU && msg->lParam == VK_SPACE) {
             RECT wr; GetWindowRect(hwnd, &wr);
@@ -1315,8 +1437,7 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
 // ---------------- first-run welcome flow ----------------
 void BrowserWindow::writeSetting(const QString& key, const QJsonValue& value) {
     auto s = readSettings(); s[key] = value;
-    QFile f(QStringLiteral("browser_settings.json"));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented));
+    writeSettingsFile(s);
 }
 
 void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {

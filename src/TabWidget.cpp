@@ -298,8 +298,14 @@ void PacitumTabBar::setTabCrashed(int index, bool on) {
     if (index < 0 || index >= count()) return;
     m_flags[ensureId(index)].crashed = on; update(tabRect(index));
 }
+void PacitumTabBar::setSpinnerSuspended(bool on) {
+    if (m_spinSuspended == on) return;
+    m_spinSuspended = on;
+    updateSpinner();
+}
 void PacitumTabBar::updateSpinner() {
     if (!m_spin) return;
+    if (m_spinSuspended) { m_spin->stop(); return; }   // no 60 fps repaints for an invisible window
     bool any = false;
     for (const auto& f : std::as_const(m_flags)) any |= f.loading;
     if (any && Pacitum::reducedMotion()) { m_spin->stop(); m_spinAngle = 0; m_spinV = 0.5; return; }   // static 270° arc

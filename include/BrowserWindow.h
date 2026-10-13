@@ -13,6 +13,9 @@
 #include <QToolButton>
 #include <QTimer>
 #include <QSet>
+#include <QPointer>
+#include <QDateTime>
+#include <QList>
 
 class PacitumTabWidget;
 class BrowserTab;
@@ -118,6 +121,19 @@ private:
     void restoreOrNewTab();
     BrowserTab* activeTab() const;
     QJsonObject readSettings() const;
+    void writeSettingsFile(const QJsonObject& s);
+    mutable QJsonObject m_settingsCache;
+    mutable QDateTime m_settingsStamp;
+    mutable qint64 m_settingsSize = -1;
+    // fullscreen (website-requested or F11): chrome hidden, previous state restored on exit
+    void enterContentFullscreen(bool fromPage);
+    void exitContentFullscreen();
+    void setChromeHidden(bool hidden);
+    bool m_pageFullscreen = false;     // a page (e.g. YouTube) owns fullscreen
+    bool m_chromeHidden = false;
+    Qt::WindowStates m_preFullscreenState;
+    QPointer<BrowserTab> m_fullscreenTab;
+    QList<QPointer<QWidget>> m_hiddenChrome;
     QToolButton* makeToolBtn(const QString& tip);
     void refreshIcons();
     void installPopupFactory();

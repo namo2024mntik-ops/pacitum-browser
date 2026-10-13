@@ -1,4 +1,4 @@
-![Pacitum_Titile](สกรีนช็อต_2026-10-13_152618.png)
+![Pacitum_Titile](สกรีนช็อต%202026-10-13%20152618.png)
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.

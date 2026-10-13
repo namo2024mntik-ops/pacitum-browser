@@ -121,6 +121,11 @@ private:
     HistoryManager* m_history = nullptr;
     BookmarkManager* m_bookmarks = nullptr;
     DownloadManager* m_downloads = nullptr;
+    class DownloadsPopup* m_downloadsPopup = nullptr;
+    class DownloadButtonBadge* m_downloadsBadge = nullptr;
+    void toggleDownloadsPopup(bool autoClose);
+    void updateDownloadsButton();
+    QIcon downloadsTabIcon() const;
     ThemeManager* m_theme = nullptr;
     SessionManager* m_session = nullptr;
     ZoomController* m_zoom = nullptr;

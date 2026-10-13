@@ -259,6 +259,7 @@ QWidget* SettingsPage::downloadsPage() {
     });
     addRow(c, QStringLiteral("Location"), QString(), w);
     addRow(c, QStringLiteral("Ask where to save each file before downloading"), QString(), makeSwitch(QStringLiteral("ask_download_location"), false));
+    addRow(c, QStringLiteral("Always show downloads button"), QStringLiteral("Otherwise it appears after the first download"), makeSwitch(QStringLiteral("pin_downloads_button"), false));
     return page;
 }
 

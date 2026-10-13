@@ -1,84 +1,873 @@
 #include "DownloadManager.h"
-#include <QVBoxLayout>
+#include "ThemeManager.h"
+#include "WebProfile.h"
+#include <QApplication>
+#include <QClipboard>
+#include <QContextMenuEvent>
+#include <QDesktopServices>
+#include <QDir>
+#include <QDrag>
+#include <QFile>
+#include <QFileInfo>
+#include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QLocale>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMimeData>
+#include <QPainter>
+#include <QPainterPath>
+#include <QProcess>
 #include <QProgressBar>
 #include <QPushButton>
-#include <QLabel>
-#include <QListWidgetItem>
-#include <QDesktopServices>
+#include <QScrollArea>
+#include <QStandardPaths>
+#include <QStyle>
+#include <QAbstractButton>
+#include <QtMath>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTimer>
+#include <QToolButton>
 #include <QUrl>
-#include <QFileInfo>
-#include <QDir>
+#include <QVBoxLayout>
+#include <QWebEnginePage>
+#include <QWebEngineProfile>
+#include <QtSql/QSqlDatabase>
+#include <QtSql/QSqlQuery>
 
-static QString fmtSize(qint64 b) {
+using DS = QWebEngineDownloadRequest;
+
+// ---------- helpers ----------
+static const PacitumPalette& pal() { return ThemeManager::current(); }
+static bool isDark() { return QColor(pal().page).lightness() < 128; }
+
+static QIcon cachedIcon(const QString& name, const QString& color, int size) {
+    static QHash<QString, QIcon> cache;
+    const QString key = name + QLatin1Char('|') + color + QLatin1Char('|') + QString::number(size);
+    auto it = cache.find(key);
+    if (it == cache.end()) it = cache.insert(key, ThemeManager::icon(name, color, size));
+    return *it;
+}
+static QPixmap iconPm(const QString& name, const QString& color, int size, qreal dpr) {
+    return cachedIcon(name, color, size).pixmap(QSize(size, size), dpr);
+}
+static QString rgba(const QString& hex, double a) {
+    QColor c(hex); return QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(a);
+}
+
+QString DownloadEntry::filePath() const { return QDir(dir).filePath(holdName.isEmpty() ? fileName : holdName); }
+QString DownloadEntry::domain() const {
+    QString h = QUrl(url).host(); if (h.startsWith(QStringLiteral("www."))) h = h.mid(4);
+    return h.isEmpty() ? QUrl(url).scheme() : h;
+}
+double DownloadEntry::speed() const {
+    if (samples.size() < 2) return 0;
+    const auto& a = samples.first(); const auto& b = samples.last();
+    const qint64 dt = b.first - a.first; return dt > 0 ? double(b.second - a.second) * 1000.0 / dt : 0;
+}
+qint64 DownloadEntry::secondsLeft() const {
+    if (total <= 0 || !started.isValid() || started.msecsTo(QDateTime::currentDateTime()) < 2000) return -1;
+    const double s = speed(); if (s <= 1) return -1;
+    return qint64((total - received) / s) + 1;
+}
+
+QString DownloadManager::formatSize(qint64 b) {
+    if (b < 0) return QStringLiteral("?");
     if (b < 1024) return QString::number(b) + QStringLiteral(" B");
-    if (b < 1024*1024) return QString::number(b/1024.0, 'f', 1) + QStringLiteral(" KB");
-    return QString::number(b/(1024.0*1024.0), 'f', 1) + QStringLiteral(" MB");
+    const char* units[] = {"KB", "MB", "GB", "TB"};
+    double v = b / 1024.0; int u = 0;
+    while (v >= 1024.0 && u < 3) { v /= 1024.0; ++u; }
+    return QString::number(v, 'f', v < 100 ? 1 : 0) + QLatin1Char(' ') + QLatin1String(units[u]);
+}
+static QString fmtLeft(qint64 s) {
+    if (s < 60) return QStringLiteral("%1 s left").arg(s);
+    if (s < 3600) return QStringLiteral("%1 min left").arg((s + 59) / 60);
+    return QStringLiteral("%1 h %2 min left").arg(s / 3600).arg((s % 3600) / 60);
 }
 
-// DownloadItemWidget
-DownloadItemWidget::DownloadItemWidget(QWebEngineDownloadRequest* dl, QWidget* parent) : QWidget(parent), m_dl(dl) {
-    auto* lay = new QVBoxLayout(this); lay->setContentsMargins(8,4,8,4); lay->setSpacing(4);
-    auto* header = new QHBoxLayout();
-    m_name = new QLabel(QStringLiteral("Downloading..."), this); m_name->setStyleSheet(QStringLiteral("font-weight:bold; font-size:13px;"));
-    m_status = new QLabel(QStringLiteral("Starting..."), this); m_status->setStyleSheet(QStringLiteral("color:#666; font-size:11px;"));
-    header->addWidget(m_name, 1); header->addWidget(m_status); lay->addLayout(header);
-
-    m_progress = new QProgressBar(this); m_progress->setFixedHeight(6); m_progress->setTextVisible(false); lay->addWidget(m_progress);
-
-    auto* btnLay = new QHBoxLayout(); btnLay->addStretch();
-    m_cancel = new QPushButton(QStringLiteral("Cancel"), this); m_cancel->setFixedSize(70,26);
-    m_open = new QPushButton(QStringLiteral("Open File"), this); m_open->setFixedSize(90,26); m_open->hide();
-    btnLay->addWidget(m_cancel); btnLay->addWidget(m_open); lay->addLayout(btnLay);
-
-    connect(m_cancel, &QPushButton::clicked, this, [this]{ emit cancelRequested(m_dl); });
-    connect(m_open, &QPushButton::clicked, this, [this]{ emit openRequested(m_path); });
-
-    connect(m_dl, &QWebEngineDownloadRequest::receivedBytesChanged, this, &DownloadItemWidget::onProgress);
-    connect(m_dl, &QWebEngineDownloadRequest::totalBytesChanged, this, &DownloadItemWidget::onProgress);
-    connect(m_dl, &QWebEngineDownloadRequest::isFinishedChanged, this, &DownloadItemWidget::onFinished);
+QString DownloadManager::fileKind(const QString& name) {
+    const QString n = name.toLower(); const QString ext = QFileInfo(n).suffix();
+    static const QStringList arch{"zip","rar","7z","tar","gz","xz","bz2","tgz","zst","iso","dmg","cab"};
+    static const QStringList vid{"mp4","mkv","webm","avi","mov","wmv","flv","m4v"};
+    static const QStringList img{"png","jpg","jpeg","gif","webp","svg","bmp","ico","tif","tiff","avif","heic"};
+    static const QStringList code{"c","cpp","h","hpp","py","js","ts","json","xml","html","css","java","rs","go","sh","ps1","cs","kt","rb","php","yml","yaml","cmake"};
+    static const QStringList aud{"mp3","wav","flac","ogg","m4a","aac","opus","wma"};
+    static const QStringList txt{"txt","md","log","csv","rtf","doc","docx","odt"};
+    if (arch.contains(ext) || n.endsWith(QStringLiteral(".tar.gz")) || n.endsWith(QStringLiteral(".tar.xz"))) return QStringLiteral("archive");
+    if (ext == QStringLiteral("pdf")) return QStringLiteral("pdf");
+    if (vid.contains(ext)) return QStringLiteral("video");
+    if (img.contains(ext)) return QStringLiteral("image");
+    if (code.contains(ext)) return QStringLiteral("code");
+    if (aud.contains(ext)) return QStringLiteral("audio");
+    if (txt.contains(ext)) return QStringLiteral("text");
+    return QString();
+}
+QString DownloadManager::kindColor(const QString& k) {
+    if (k == QStringLiteral("archive")) return QStringLiteral("#F59E0B");
+    if (k == QStringLiteral("pdf")) return QStringLiteral("#EF4444");
+    if (k == QStringLiteral("video")) return QStringLiteral("#8B5CF6");
+    if (k == QStringLiteral("image")) return QStringLiteral("#0EA5E9");
+    if (k == QStringLiteral("code")) return QStringLiteral("#22C55E");
+    if (k == QStringLiteral("audio")) return QStringLiteral("#EC4899");
+    return QStringLiteral("#64748B");
+}
+bool DownloadManager::isDangerousName(const QString& name) {
+    static const QStringList bad{"exe","msi","bat","cmd","scr","js","vbs","com","pif","jar","ps1","hta","lnk"};
+    return bad.contains(QFileInfo(name).suffix().toLower());
+}
+static QString reasonText(DS::DownloadInterruptReason r) {
+    switch (r) {
+    case DS::FileNoSpace: return QStringLiteral("No space");
+    case DS::FileAccessDenied: return QStringLiteral("Access denied");
+    case DS::FileVirusInfected: case DS::FileBlocked: case DS::FileSecurityCheckFailed: return QStringLiteral("Blocked");
+    case DS::NetworkFailed: case DS::NetworkTimeout: case DS::NetworkDisconnected: case DS::NetworkServerDown:
+    case DS::NetworkInvalidRequest: return QStringLiteral("Network error");
+    case DS::ServerUnauthorized: case DS::ServerForbidden: return QStringLiteral("Forbidden");
+    case DS::ServerFailed: case DS::ServerBadContent: case DS::ServerCertProblem: case DS::ServerUnreachable: return QStringLiteral("Server error");
+    default: return QStringLiteral("File error");
+    }
 }
 
-void DownloadItemWidget::onProgress() {
-    qint64 rec = m_dl->receivedBytes(); qint64 tot = m_dl->totalBytes();
-    if (tot > 0) { m_progress->setValue(int(rec*100/tot)); m_status->setText(fmtSize(rec)+QStringLiteral(" / ")+fmtSize(tot)); }
-    else m_status->setText(fmtSize(rec));
+// ---------- model ----------
+DownloadManager* DownloadManager::instance() { static DownloadManager* m = new DownloadManager(qApp); return m; }
+
+DownloadManager::DownloadManager(QObject* parent) : QObject(parent) {
+    QString base = Pacitum::mainProfile()->persistentStoragePath();
+    if (base.isEmpty()) base = QDir::currentPath();
+    QDir().mkpath(base);
+    m_dbPath = QDir(base).filePath(QStringLiteral("pacitum_downloads.db"));
+    load();
+    auto* t = new QTimer(this); t->setInterval(1000);   // refresh speed/time-left text even when bytes stall
+    connect(t, &QTimer::timeout, this, [this]{ for (auto& e : m_entries) if (e.state == DownloadEntry::InProgress) emit entryChanged(e.id); });
+    t->start();
 }
 
-void DownloadItemWidget::onFinished() {
-    if (!m_dl->isFinished()) { m_status->setText(QStringLiteral("Cancelled")); m_progress->setValue(0); m_cancel->hide(); return; }
-    // downloadDirectory() returns QString in Qt 6.9 (or QUrl in older) - handle both
-    QString dir = m_dl->downloadDirectory();
-    m_path = QDir(dir).filePath(m_dl->downloadFileName());
-    m_status->setText(QStringLiteral("Completed")); m_progress->setValue(100); m_cancel->hide(); m_open->show();
-    m_name->setText(m_dl->downloadFileName());
+template <typename F> static void withDb(const QString& path, F f) {
+    const QString cn = QStringLiteral("pacitum_downloads");
+    {
+        QSqlDatabase db = QSqlDatabase::contains(cn) ? QSqlDatabase::database(cn) : QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), cn);
+        if (!db.isOpen()) { db.setDatabaseName(path); if (!db.open()) return;
+            QSqlQuery(db).exec(QStringLiteral("CREATE TABLE IF NOT EXISTS downloads (id INTEGER PRIMARY KEY, url TEXT, page_url TEXT, dir TEXT, name TEXT, "
+                                              "hold_name TEXT, received INTEGER, total INTEGER, state INTEGER, reason TEXT, started INTEGER)")); }
+        QSqlQuery q(db); f(q);
+    }
 }
 
-// DownloadManager
-DownloadManager::DownloadManager(QWidget* parent) : QDialog(parent) {
-    setWindowTitle(QStringLiteral("Downloads")); setMinimumSize(600,450); resize(600,500);
-    auto* lay = new QVBoxLayout(this); lay->setContentsMargins(16,16,16,16); lay->setSpacing(12);
-    auto* header = new QLabel(QStringLiteral("Downloads"), this); header->setStyleSheet(QStringLiteral("font-size:20px; font-weight:bold;")); lay->addWidget(header);
-    m_list = new QListWidget(this);
-    m_list->setStyleSheet(QStringLiteral("QListWidget{background:transparent;border:none;} QListWidget::item{border:1px solid #e0e0e0;border-radius:8px;margin:4px 0;background:white;}"));
-    lay->addWidget(m_list, 1);
-    auto* btnLay = new QHBoxLayout();
-    auto* clearBtn = new QPushButton(QStringLiteral("Clear All"), this); clearBtn->setFixedSize(100,34);
-    auto* closeBtn = new QPushButton(QStringLiteral("Close"), this); closeBtn->setFixedSize(100,34);
-    connect(clearBtn, &QPushButton::clicked, this, &DownloadManager::clearDownloads);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
-    btnLay->addWidget(clearBtn); btnLay->addStretch(); btnLay->addWidget(closeBtn); lay->addLayout(btnLay);
+void DownloadManager::load() {
+    withDb(m_dbPath, [this](QSqlQuery& q) {
+        q.exec(QStringLiteral("SELECT id,url,page_url,dir,name,hold_name,received,total,state,reason,started FROM downloads ORDER BY started DESC, id DESC LIMIT 1000"));
+        while (q.next()) {
+            DownloadEntry e;
+            e.id = q.value(0).toLongLong(); e.url = q.value(1).toString(); e.pageUrl = q.value(2).toString();
+            e.dir = q.value(3).toString(); e.fileName = q.value(4).toString(); e.holdName = q.value(5).toString();
+            e.received = q.value(6).toLongLong(); e.total = q.value(7).toLongLong();
+            e.state = DownloadEntry::State(q.value(8).toInt()); e.reason = q.value(9).toString();
+            e.started = QDateTime::fromMSecsSinceEpoch(q.value(10).toLongLong());
+            if (e.active()) { e.state = DownloadEntry::Failed; e.reason = QStringLiteral("Interrupted"); }
+            m_nextId = qMax(m_nextId, e.id + 1);
+            m_entries.append(e);
+        }
+    });
+}
+void DownloadManager::save(const DownloadEntry& e) {
+    withDb(m_dbPath, [&](QSqlQuery& q) {
+        q.prepare(QStringLiteral("INSERT OR REPLACE INTO downloads VALUES (?,?,?,?,?,?,?,?,?,?,?)"));
+        for (const QVariant& v : {QVariant(e.id), QVariant(e.url), QVariant(e.pageUrl), QVariant(e.dir), QVariant(e.fileName), QVariant(e.holdName),
+                                  QVariant(e.received), QVariant(e.total), QVariant(int(e.state)), QVariant(e.reason), QVariant(e.started.toMSecsSinceEpoch())})
+            q.addBindValue(v);
+        q.exec();
+    });
+}
+void DownloadManager::dbRemove(qint64 id) {
+    withDb(m_dbPath, [&](QSqlQuery& q) { q.prepare(QStringLiteral("DELETE FROM downloads WHERE id=?")); q.addBindValue(id); q.exec(); });
+}
+
+DownloadEntry* DownloadManager::find(qint64 id) { for (auto& e : m_entries) if (e.id == id) return &e; return nullptr; }
+const DownloadEntry* DownloadManager::entry(qint64 id) const { for (auto& e : m_entries) if (e.id == id) return &e; return nullptr; }
+int DownloadManager::activeCount() const { int n = 0; for (auto& e : m_entries) n += e.active(); return n; }
+double DownloadManager::aggregateProgress() const {
+    qint64 r = 0, t = 0; bool any = false;
+    for (auto& e : m_entries) if (e.active()) { any = true; if (e.total > 0) { r += e.received; t += e.total; } }
+    if (!any) return -1; return t > 0 ? double(r) / t : 0.0;
+}
+
+QString DownloadManager::downloadDir() const {
+    QFile f(QStringLiteral("browser_settings.json"));
+    if (f.open(QIODevice::ReadOnly)) {
+        const QString d = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("download_path")).toString();
+        if (!d.isEmpty()) return d;
+    }
+    return QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
 }
 
 void DownloadManager::addDownload(QWebEngineDownloadRequest* dl) {
-    auto* item = new QListWidgetItem(m_list);
-    auto* w = new DownloadItemWidget(dl, m_list);
-    connect(w, &DownloadItemWidget::cancelRequested, this, &DownloadManager::cancelDownload);
-    connect(w, &DownloadItemWidget::openRequested, this, &DownloadManager::openFile);
-    item->setSizeHint(w->sizeHint()); m_list->addItem(item); m_list->setItemWidget(item, w);
-    m_downloads.append(dl); dl->accept();
+    DownloadEntry* e = nullptr;
+    const QString url = dl->url().toString();
+    if (m_pendingRetry.contains(url)) e = find(m_pendingRetry.take(url));
+    if (!e) {
+        DownloadEntry n; n.id = m_nextId++;
+        m_entries.prepend(n); e = &m_entries.first();
+    }
+    e->url = url;
+    e->pageUrl = dl->page() ? dl->page()->url().toString() : QString();
+    e->dir = dl->downloadDirectory();
+    e->fileName = dl->downloadFileName();
+    e->holdName.clear(); e->reason.clear();
+    e->received = 0; e->total = dl->totalBytes(); e->samples.clear();
+    e->state = DownloadEntry::InProgress;
+    e->started = QDateTime::currentDateTime();
+    // Potentially dangerous executable from the web: hold it under a temp name until Keep/Delete.
+    const QString scheme = dl->url().scheme();
+    if (isDangerousName(e->fileName) && scheme != QStringLiteral("file") && scheme != QStringLiteral("data") && scheme != QStringLiteral("blob")) {
+        e->holdName = e->fileName + QStringLiteral(".pacitum-hold");
+        dl->setDownloadFileName(e->holdName);
+    }
+    ++m_sessionDownloads;
+    const qint64 id = e->id;
+    attach(*e, dl);
+    if (dl->state() == DS::DownloadRequested) dl->accept();
+    save(*find(id));
+    emit listChanged();
+    emit downloadStarted(id);
 }
 
-void DownloadManager::cancelDownload(QWebEngineDownloadRequest* dl) { dl->cancel(); }
-void DownloadManager::openFile(const QString& path) { QDesktopServices::openUrl(QUrl::fromLocalFile(path)); }
-void DownloadManager::clearDownloads() { m_list->clear(); m_downloads.clear(); }
+void DownloadManager::attach(DownloadEntry& e, QWebEngineDownloadRequest* dl) {
+    e.req = dl;
+    const qint64 id = e.id;
+    auto prog = [this, id] {
+        auto* x = find(id); if (!x || !x->req) return;
+        x->received = x->req->receivedBytes(); x->total = x->req->totalBytes();
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        x->samples.append({now, x->received});
+        while (x->samples.size() > 2 && now - x->samples.first().first > 3000) x->samples.removeFirst();
+        if (now - x->lastEmit > 200) { x->lastEmit = now; emit entryChanged(id); }
+    };
+    connect(dl, &DS::receivedBytesChanged, this, prog);
+    connect(dl, &DS::totalBytesChanged, this, prog);
+    connect(dl, &DS::isPausedChanged, this, [this, id] { onState(id); });
+    connect(dl, &DS::stateChanged, this, [this, id] { onState(id); });
+}
+
+void DownloadManager::onState(qint64 id) {
+    auto* e = find(id); if (!e || !e->req) return;
+    auto* dl = e->req.data();
+    e->received = dl->receivedBytes(); e->total = dl->totalBytes();
+    const auto prev = e->state;
+    switch (dl->state()) {
+    case DS::DownloadRequested:
+    case DS::DownloadInProgress: e->state = dl->isPaused() ? DownloadEntry::Paused : DownloadEntry::InProgress; break;
+    case DS::DownloadCompleted:
+        e->state = e->holdName.isEmpty() ? DownloadEntry::Completed : DownloadEntry::Dangerous;
+        if (e->total <= 0) e->total = e->received;
+        break;
+    case DS::DownloadCancelled: e->state = DownloadEntry::Cancelled; e->reason.clear(); break;
+    case DS::DownloadInterrupted: {
+        const auto r = dl->interruptReason();
+        if (r == DS::UserCanceled) { e->state = DownloadEntry::Cancelled; break; }
+        e->state = DownloadEntry::Failed; e->reason = reasonText(r); break; }
+    }
+    if (e->state != DownloadEntry::Paused) e->samples.clear();
+    if (prev != e->state) {
+        if (e->finished() || e->state == DownloadEntry::Dangerous) {
+            if (e->state == DownloadEntry::Cancelled || e->state == DownloadEntry::Failed) {
+                if (!e->holdName.isEmpty()) { QFile::remove(e->filePath()); e->holdName.clear(); }
+            }
+            save(*e);
+            emit downloadFinished(id, e->state == DownloadEntry::Completed);
+        }
+    }
+    emit entryChanged(id);
+}
+
+void DownloadManager::pause(qint64 id) { if (auto* e = find(id); e && e->req) e->req->pause(); }
+void DownloadManager::resume(qint64 id) { if (auto* e = find(id); e && e->req) e->req->resume(); }
+void DownloadManager::cancel(qint64 id) {
+    auto* e = find(id); if (!e) return;
+    if (e->req && e->active()) e->req->cancel();
+    else { e->state = DownloadEntry::Cancelled; save(*e); emit entryChanged(id); }
+}
+void DownloadManager::retry(qint64 id) {
+    auto* e = find(id); if (!e || e->url.isEmpty()) return;
+    if (e->req && e->state == DownloadEntry::Failed && e->req->state() == DS::DownloadInterrupted) {
+        e->req->resume(); return;   // Chromium can resume interrupted downloads
+    }
+    if (!m_retryPage) m_retryPage = new QWebEnginePage(Pacitum::mainProfile(), this);
+    m_pendingRetry.insert(e->url, id);
+    m_retryPage->download(QUrl(e->url), e->fileName);
+}
+void DownloadManager::remove(qint64 id) {
+    for (int i = 0; i < m_entries.size(); ++i) if (m_entries[i].id == id) {
+        auto& e = m_entries[i];
+        if (e.req && e.active()) e.req->cancel();
+        if (e.state == DownloadEntry::Dangerous && !e.holdName.isEmpty()) QFile::remove(e.filePath());
+        m_entries.removeAt(i); dbRemove(id); emit listChanged(); return;
+    }
+}
+bool DownloadManager::deleteFile(qint64 id) {
+    auto* e = find(id); if (!e) return false;
+    const bool ok = QFile::remove(e->filePath()) || !QFileInfo::exists(e->filePath());
+    if (ok) remove(id);
+    return ok;
+}
+void DownloadManager::keepDangerous(qint64 id) {
+    auto* e = find(id); if (!e || e->state != DownloadEntry::Dangerous) return;
+    QString target = QDir(e->dir).filePath(e->fileName);
+    if (QFileInfo::exists(target)) {   // never overwrite an existing file
+        const QFileInfo fi(e->fileName);
+        for (int n = 1; QFileInfo::exists(target); ++n)
+            target = QDir(e->dir).filePath(QStringLiteral("%1 (%2)%3").arg(fi.completeBaseName()).arg(n).arg(fi.suffix().isEmpty() ? QString() : QLatin1Char('.') + fi.suffix()));
+    }
+    if (QFile::rename(e->filePath(), target)) {
+        e->fileName = QFileInfo(target).fileName(); e->holdName.clear(); e->state = DownloadEntry::Completed;
+    } else { e->state = DownloadEntry::Failed; e->reason = QStringLiteral("File error"); }
+    save(*e); emit entryChanged(id);
+}
+void DownloadManager::discardDangerous(qint64 id) { remove(id); }
+void DownloadManager::open(qint64 id) {
+    auto* e = find(id); if (!e || e->state != DownloadEntry::Completed) return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(e->filePath()));
+}
+void DownloadManager::showInFolder(qint64 id) {
+    auto* e = find(id); if (!e) return;
+    const QString path = e->filePath();
+#ifdef Q_OS_WIN
+    if (QFileInfo::exists(path)) { QProcess::startDetached(QStringLiteral("explorer.exe"), {QStringLiteral("/select,"), QDir::toNativeSeparators(path)}); return; }
+#endif
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+}
+QList<DownloadEntry> DownloadManager::clearFinished() {
+    QList<DownloadEntry> removed;
+    for (int i = m_entries.size() - 1; i >= 0; --i)
+        if (m_entries[i].finished()) { removed.prepend(m_entries[i]); dbRemove(m_entries[i].id); m_entries.removeAt(i); }
+    if (!removed.isEmpty()) emit listChanged();
+    return removed;
+}
+void DownloadManager::restore(const QList<DownloadEntry>& list) {
+    for (const auto& e : list) { m_entries.append(e); save(e); }
+    std::stable_sort(m_entries.begin(), m_entries.end(), [](const DownloadEntry& a, const DownloadEntry& b){ return a.started > b.started; });
+    emit listChanged();
+}
+
+// ---------- widgets ----------
+void ElideLabel::paintEvent(QPaintEvent*) {
+    QPainter p(this);
+    p.setPen(palette().color(foregroundRole()));
+    p.setFont(font());
+    const QRect r = contentsRect();
+    p.drawText(r, Qt::AlignLeft | Qt::AlignVCenter, fontMetrics().elidedText(text(), Qt::ElideMiddle, r.width()));
+}
+
+QString DownloadsPage::styleSheetFor(bool compact) {
+    const auto& p = pal();
+    QString s = QStringLiteral(R"(
+#DlRoot, #DlScroll, #DlScroll > QWidget > QWidget, #DlColumn { background: @page; }
+#DlTitle { font-size: 22px; font-weight: 600; color: @text; }
+#DlSearchBox { background: @surface; border-radius: 18px; }
+#DlSearch { background: transparent; border: none; color: @text; font-size: 13px; min-height: 34px; padding: 0; }
+#DlSecondary { background: @toolbar; color: @text; border: 1px solid @border; border-radius: 8px; height: 32px; min-height: 32px; padding: 0 12px; font-size: 13px; }
+#DlSecondary:hover { background: @surface; }
+#DlGroup { font-size: 12px; font-weight: 600; color: @sec; letter-spacing: 0.6px; }
+#DlCard { background: @toolbar; border: 1px solid @border; border-radius: 12px; }
+#DlCard:hover { border-color: @hoverBorder; }
+#DlCard:focus { border: 1px solid @accent; }
+#DlCard[bad="true"] { background: @badBg; border-color: rgba(239,68,68,0.45); }
+#DlRow { background: transparent; border: none; border-radius: 0; }
+#DlRow:hover, #DlRow:focus { background: @surface; }
+#DlName { color: @text; font-weight: 600; font-size: @nameSize; }
+#DlName[struck="true"] { color: @sec; font-weight: 400; }
+#DlMeta { color: @sec; font-size: 12px; }
+#DlTextBtn { background: transparent; color: @accent; border: none; border-radius: 8px; height: 30px; min-height: 30px; padding: 0 12px; font-weight: 500; }
+#DlTextBtn:hover { background: @accentSoft; }
+#DlTextBtn[secondary="true"] { color: @sec; }
+#DlTextBtn[secondary="true"]:hover { background: @surface; }
+#DlDangerBtn { background: @danger; color: #FFFFFF; border: none; border-radius: 8px; height: 30px; min-height: 30px; padding: 0 14px; font-weight: 600; }
+#DlIconBtn { background: transparent; border: none; border-radius: 8px; }
+#DlIconBtn:hover { background: @surface; }
+#DlIconBtn:pressed { background: @surfaceHover; }
+QProgressBar#DlBar { background: @surface; border: none; border-radius: 2px; max-height: 4px; min-height: 4px; }
+QProgressBar#DlBar::chunk { background: @accent; border-radius: 2px; }
+QProgressBar#DlBar[paused="true"]::chunk { background: @sec; }
+#DlEmptyTitle { color: @text; font-size: 15px; font-weight: 600; }
+#DlEmptySub { color: @sec; font-size: 13px; }
+#DlToast { background: @text; border-radius: 10px; }
+#DlToast QLabel { color: @toolbar; }
+#DlToast QPushButton { background: transparent; border: none; color: @accentOnInverse; font-weight: 600; padding: 0 8px; min-height: 28px; }
+#DlPopCard { background: @toolbar; border: 1px solid @border; border-radius: 12px; }
+#DlPopHeader { color: @text; font-weight: 600; font-size: 13px; }
+#DlPopDivider { background: @border; max-height: 1px; min-height: 1px; }
+#DlPopFooter { background: transparent; border: none; color: @accent; font-weight: 600; min-height: 40px; }
+#DlPopFooter:hover { background: @surface; border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }
+)");
+    const QString badBg = isDark() ? QStringLiteral("#2A2124") : QStringLiteral("#FDF2F2");   // 7% danger over toolbar
+    QString accInv = isDark() ? QStringLiteral("#0D9488") : QStringLiteral("#2DD4BF");
+    if (QColor(p.accent).name().compare(QStringLiteral("#2DD4BF"), Qt::CaseInsensitive) && QColor(p.accent).name().compare(QStringLiteral("#0D9488"), Qt::CaseInsensitive)) accInv = p.accent;
+    const QList<QPair<QString, QString>> vars{
+        {"@surfaceHover", p.surfaceHover}, {"@accentSoft", p.accentSoft}, {"@accentOnInverse", accInv}, {"@hoverBorder", rgba(p.textSecondary, 0.4)},
+        {"@badBg", badBg}, {"@nameSize", compact ? "13px" : "14px"}, {"@page", p.page}, {"@toolbar", p.toolbar}, {"@surface", p.surface},
+        {"@border", p.border}, {"@text", p.text}, {"@sec", p.textSecondary}, {"@accent", p.accent}, {"@danger", p.danger}};
+    for (const auto& v : vars) s.replace(v.first, v.second);
+    return s;
+}
+
+DownloadItemWidget::DownloadItemWidget(qint64 id, bool compact, QWidget* parent) : QFrame(parent), m_id(id), m_compact(compact) {
+    setObjectName(compact ? QStringLiteral("DlRow") : QStringLiteral("DlCard"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    setAttribute(Qt::WA_Hover, true);
+    setFocusPolicy(compact ? Qt::NoFocus : Qt::TabFocus);
+    if (compact) { setMinimumHeight(60); } else { setMinimumHeight(72); setMaximumWidth(840); }
+    auto* h = new QHBoxLayout(this);
+    if (compact) { h->setContentsMargins(16, 10, 12, 10); h->setSpacing(12); }
+    else { h->setContentsMargins(16, 14, 16, 14); h->setSpacing(16); }
+    const int ts = compact ? 32 : 40;
+    m_tile = new QLabel(this); m_tile->setFixedSize(ts, ts); m_tile->setAlignment(Qt::AlignCenter);
+    h->addWidget(m_tile, 0, Qt::AlignVCenter);
+    auto* col = new QVBoxLayout(); col->setContentsMargins(0, 0, 0, 0); col->setSpacing(2);
+    m_name = new ElideLabel(this); m_name->setObjectName(QStringLiteral("DlName"));
+    col->addWidget(m_name);
+    auto* metaRow = new QHBoxLayout(); metaRow->setSpacing(4); metaRow->setContentsMargins(0, 0, 0, 0);
+    m_warn = new QLabel(this); m_warn->setFixedSize(14, 14); m_warn->hide();
+    m_meta = new QLabel(this); m_meta->setObjectName(QStringLiteral("DlMeta")); m_meta->setTextFormat(Qt::RichText);
+    m_meta->setMinimumWidth(20); m_meta->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    metaRow->addWidget(m_warn); metaRow->addWidget(m_meta, 1);
+    col->addLayout(metaRow);
+    m_bar = new QProgressBar(this); m_bar->setObjectName(QStringLiteral("DlBar")); m_bar->setTextVisible(false); m_bar->setRange(0, 1000);
+    m_bar->setFixedHeight(4);
+    col->addSpacing(6); col->addWidget(m_bar);
+    h->addLayout(col, 1);
+    if (!compact) h->addSpacing(8);
+    m_primary = textBtn(QString(), QStringLiteral("DlTextBtn"));
+    m_danger = textBtn(QStringLiteral("Delete"), QStringLiteral("DlDangerBtn"));
+    m_b1 = iconBtn(QString()); m_b2 = iconBtn(QString());
+    auto* acts = new QHBoxLayout(); acts->setSpacing(compact ? 0 : 4);
+    acts->addWidget(m_primary); acts->addWidget(m_danger); acts->addWidget(m_b1); acts->addWidget(m_b2);
+    h->addLayout(acts);
+
+    auto* dm = DownloadManager::instance();
+    connect(dm, &DownloadManager::entryChanged, this, [this](qint64 x){ if (x == m_id) refresh(); });
+    connect(m_primary, &QPushButton::clicked, this, [this]{
+        auto* dm = DownloadManager::instance(); const auto* e = dm->entry(m_id); if (!e) return;
+        if (e->state == DownloadEntry::Completed) dm->open(m_id);
+        else if (e->state == DownloadEntry::Dangerous) confirmKeep();
+        else dm->retry(m_id);
+    });
+    connect(m_danger, &QPushButton::clicked, this, [this]{ DownloadManager::instance()->discardDangerous(m_id); });
+    connect(m_b1, &QToolButton::clicked, this, [this]{
+        auto* dm = DownloadManager::instance(); const auto* e = dm->entry(m_id); if (!e) return;
+        switch (e->state) {
+        case DownloadEntry::InProgress: dm->pause(m_id); break;
+        case DownloadEntry::Paused: dm->resume(m_id); break;
+        case DownloadEntry::Completed: dm->showInFolder(m_id); break;
+        case DownloadEntry::Failed: case DownloadEntry::Cancelled: dm->retry(m_id); break;   // compact only
+        case DownloadEntry::Dangerous: {
+            QMenu m(this);
+            m.addAction(QStringLiteral("Keep anyway"), this, [this]{ confirmKeep(); });
+            m.addAction(QStringLiteral("Delete"), this, [this]{ DownloadManager::instance()->discardDangerous(m_id); });
+            m.exec(m_b1->mapToGlobal(QPoint(0, m_b1->height())));
+            break; }
+        }
+    });
+    connect(m_b2, &QToolButton::clicked, this, [this]{
+        auto* dm = DownloadManager::instance(); const auto* e = dm->entry(m_id); if (!e) return;
+        if (e->active()) dm->cancel(m_id); else dm->remove(m_id);
+    });
+    refresh();
+}
+
+QToolButton* DownloadItemWidget::iconBtn(const QString& tip) {
+    auto* b = new QToolButton(this); b->setObjectName(QStringLiteral("DlIconBtn"));
+    b->setFixedSize(32, 32); b->setIconSize(QSize(18, 18)); b->setToolTip(tip); b->setCursor(Qt::PointingHandCursor);
+    b->setFocusPolicy(Qt::NoFocus);
+    return b;
+}
+QPushButton* DownloadItemWidget::textBtn(const QString& text, const QString& obj) {
+    auto* b = new QPushButton(text, this); b->setObjectName(obj); b->setCursor(Qt::PointingHandCursor);
+    b->setFixedHeight(30); b->setFocusPolicy(Qt::NoFocus);
+    return b;
+}
+
+void DownloadItemWidget::refresh() {
+    const auto* e = DownloadManager::instance()->entry(m_id); if (!e) return;
+    const auto& p = pal(); const qreal dpr = devicePixelRatioF();
+    const bool bad = e->state == DownloadEntry::Dangerous;
+    // file tile
+    const QString kind = DownloadManager::fileKind(e->fileName);
+    const QString col = bad ? p.danger : DownloadManager::kindColor(kind);
+    const QString glyph = bad ? QStringLiteral("download-dangerous") : kind.isEmpty() ? QStringLiteral("file") : QStringLiteral("file-") + kind;
+    const int ts = m_compact ? 32 : 40, gs = m_compact ? 18 : 22;
+    QPixmap tile(ts * dpr, ts * dpr); tile.setDevicePixelRatio(dpr); tile.fill(Qt::transparent);
+    { QPainter tp(&tile); tp.setRenderHint(QPainter::Antialiasing); QColor c(col); c.setAlpha(0x26);
+      tp.setPen(Qt::NoPen); tp.setBrush(c); tp.drawRoundedRect(QRectF(0, 0, ts, ts), m_compact ? 8 : 10, m_compact ? 8 : 10);
+      tp.drawPixmap(QPointF((ts - gs) / 2.0, (ts - gs) / 2.0), iconPm(glyph, col, gs, dpr)); }
+    m_tile->setPixmap(tile);
+    // name
+    m_name->setText(e->fileName);
+    const bool struck = e->state == DownloadEntry::Failed || e->state == DownloadEntry::Cancelled;
+    QFont f = m_name->font(); f.setStrikeOut(struck); m_name->setFont(f);
+    if (m_name->property("struck").toBool() != struck) { m_name->setProperty("struck", struck); m_name->style()->unpolish(m_name); m_name->style()->polish(m_name); }
+    if (property("bad").toBool() != bad) { setProperty("bad", bad); style()->unpolish(this); style()->polish(this); }
+    // meta
+    auto dang = [&](const QString& t){ return QStringLiteral("<span style=\"color:%1\">%2</span>").arg(p.danger, t.toHtmlEscaped()); };
+    QStringList parts;
+    if (!m_compact) parts << e->domain().toHtmlEscaped();
+    const QString of = DownloadManager::formatSize(e->received) + QStringLiteral(" of ") + DownloadManager::formatSize(e->total);
+    m_warn->setVisible(bad && !m_compact);
+    switch (e->state) {
+    case DownloadEntry::InProgress: {
+        parts << (e->total > 0 ? of : DownloadManager::formatSize(e->received));
+        if (!m_compact && e->speed() > 0) parts << DownloadManager::formatSize(qint64(e->speed())) + QStringLiteral("/s");
+        const qint64 left = e->secondsLeft(); if (left >= 0) parts << fmtLeft(left);
+        break; }
+    case DownloadEntry::Paused: parts << QStringLiteral("Paused — ") + (e->total > 0 ? of : DownloadManager::formatSize(e->received)); break;
+    case DownloadEntry::Completed: parts << DownloadManager::formatSize(e->total > 0 ? e->total : e->received); if (m_compact) parts << QStringLiteral("Done"); break;
+    case DownloadEntry::Failed: parts << dang(QStringLiteral("Failed — ") + (e->reason.isEmpty() ? QStringLiteral("Error") : e->reason)); break;
+    case DownloadEntry::Cancelled: parts << dang(QStringLiteral("Cancelled")); break;
+    case DownloadEntry::Dangerous:
+        if (m_compact) parts << dang(QStringLiteral("Blocked · dangerous file"));
+        else { parts.clear(); parts << dang(QStringLiteral("Blocked — this file may harm your device"));
+               m_warn->setPixmap(iconPm(QStringLiteral("warning"), p.danger, 14, dpr)); }
+        break;
+    }
+    m_meta->setText(parts.join(QStringLiteral(" &nbsp;·&nbsp; ")));
+    // progress
+    m_bar->setVisible(e->active());
+    if (e->active()) {
+        if (e->total > 0) { m_bar->setRange(0, 1000); m_bar->setValue(int(e->received * 1000 / qMax<qint64>(1, e->total))); }
+        else m_bar->setRange(0, 0);
+        const bool paused = e->state == DownloadEntry::Paused;
+        if (m_bar->property("paused").toBool() != paused) { m_bar->setProperty("paused", paused); m_bar->style()->unpolish(m_bar); m_bar->style()->polish(m_bar); }
+    }
+    // actions
+    auto setB = [&](QToolButton* b, const QString& icon, const QString& tip) {
+        b->setVisible(!icon.isEmpty()); if (icon.isEmpty()) return;
+        b->setIcon(cachedIcon(icon, p.textSecondary, 18)); b->setToolTip(tip);
+    };
+    m_primary->hide(); m_danger->hide();
+    m_primary->setProperty("secondary", false);
+    switch (e->state) {
+    case DownloadEntry::InProgress: setB(m_b1, QStringLiteral("pause"), QStringLiteral("Pause")); setB(m_b2, m_compact ? QString() : QStringLiteral("close"), QStringLiteral("Cancel")); break;
+    case DownloadEntry::Paused: setB(m_b1, QStringLiteral("play"), QStringLiteral("Resume")); setB(m_b2, m_compact ? QString() : QStringLiteral("close"), QStringLiteral("Cancel")); break;
+    case DownloadEntry::Completed:
+        if (!m_compact) { m_primary->setText(QStringLiteral("Open")); m_primary->show(); }
+        setB(m_b1, QStringLiteral("folder"), QStringLiteral("Show in folder"));
+        setB(m_b2, m_compact ? QString() : QStringLiteral("close"), QStringLiteral("Remove from list")); break;
+    case DownloadEntry::Failed: case DownloadEntry::Cancelled:
+        if (m_compact) { setB(m_b1, QStringLiteral("reload"), QStringLiteral("Retry")); setB(m_b2, QString(), QString()); }
+        else { m_primary->setText(QStringLiteral("Retry")); m_primary->show(); setB(m_b1, QString(), QString()); setB(m_b2, QStringLiteral("close"), QStringLiteral("Remove from list")); }
+        break;
+    case DownloadEntry::Dangerous:
+        if (m_compact) { setB(m_b1, QStringLiteral("more-horizontal"), QStringLiteral("More")); setB(m_b2, QString(), QString()); }
+        else { m_primary->setText(QStringLiteral("Keep anyway")); m_primary->setProperty("secondary", true); m_primary->show(); m_danger->show();
+               setB(m_b1, QString(), QString()); setB(m_b2, QString(), QString()); }
+        break;
+    }
+    m_primary->style()->unpolish(m_primary); m_primary->style()->polish(m_primary);
+    setCursor(e->state == DownloadEntry::Completed ? Qt::PointingHandCursor : Qt::ArrowCursor);
+    setToolTip(e->filePath());
+}
+
+void DownloadItemWidget::mousePressEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton) { m_pressed = true; m_pressPos = e->pos(); }
+    QFrame::mousePressEvent(e);
+}
+void DownloadItemWidget::mouseMoveEvent(QMouseEvent* ev) {
+    const auto* e = DownloadManager::instance()->entry(m_id);
+    if (m_pressed && e && e->state == DownloadEntry::Completed && (ev->pos() - m_pressPos).manhattanLength() > QApplication::startDragDistance()) {
+        m_pressed = false;
+        auto* drag = new QDrag(this); auto* md = new QMimeData; md->setUrls({QUrl::fromLocalFile(e->filePath())});
+        drag->setMimeData(md); drag->setPixmap(m_tile->pixmap()); drag->exec(Qt::CopyAction);
+        return;
+    }
+    QFrame::mouseMoveEvent(ev);
+}
+void DownloadItemWidget::mouseReleaseEvent(QMouseEvent* ev) {
+    if (m_pressed && ev->button() == Qt::LeftButton && rect().contains(ev->pos())) DownloadManager::instance()->open(m_id);
+    m_pressed = false;
+    QFrame::mouseReleaseEvent(ev);
+}
+void DownloadItemWidget::keyPressEvent(QKeyEvent* ev) {
+    auto* dm = DownloadManager::instance(); const auto* e = dm->entry(m_id);
+    if (!e) return QFrame::keyPressEvent(ev);
+    switch (ev->key()) {
+    case Qt::Key_Return: case Qt::Key_Enter: dm->open(m_id); return;
+    case Qt::Key_Delete: dm->remove(m_id); return;
+    case Qt::Key_Space: if (e->state == DownloadEntry::InProgress) dm->pause(m_id); else if (e->state == DownloadEntry::Paused) dm->resume(m_id); return;
+    case Qt::Key_Down: focusNextChild(); return;
+    case Qt::Key_Up: focusPreviousChild(); return;
+    default: QFrame::keyPressEvent(ev);
+    }
+}
+void DownloadItemWidget::contextMenuEvent(QContextMenuEvent* ev) {
+    auto* dm = DownloadManager::instance(); const auto* e = dm->entry(m_id); if (!e) return;
+    const bool done = e->state == DownloadEntry::Completed;
+    const QString url = e->url, page = e->pageUrl;
+    QMenu m(this);
+    m.addAction(QStringLiteral("Open"), this, [dm, this]{ dm->open(m_id); })->setEnabled(done);
+    m.addAction(QStringLiteral("Show in folder"), this, [dm, this]{ dm->showInFolder(m_id); })->setEnabled(done);
+    m.addSeparator();
+    m.addAction(QStringLiteral("Copy link"), this, [url]{ QApplication::clipboard()->setText(url); });
+    m.addAction(QStringLiteral("Open source page"), this, [this, page]{ emit openSourceRequested(page); })->setEnabled(!page.isEmpty());
+    m.addSeparator();
+    m.addAction(QStringLiteral("Remove from list"), this, [dm, this]{ dm->remove(m_id); });
+    m.addAction(QStringLiteral("Delete file"), this, [this]{ confirmDelete(); })->setEnabled(done);
+    m.exec(ev->globalPos());
+}
+void DownloadItemWidget::confirmDelete() {
+    const auto* e = DownloadManager::instance()->entry(m_id); if (!e) return;
+    const qint64 id = m_id;
+    if (QMessageBox::question(window(), QStringLiteral("Delete file"), QStringLiteral("Delete \"%1\" from disk? This cannot be undone.").arg(e->fileName),
+                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes)
+        if (!DownloadManager::instance()->deleteFile(id)) QMessageBox::warning(nullptr, QStringLiteral("Delete file"), QStringLiteral("The file could not be deleted."));
+}
+void DownloadItemWidget::confirmKeep() {
+    const auto* e = DownloadManager::instance()->entry(m_id); if (!e) return;
+    const qint64 id = m_id;
+    if (QMessageBox::warning(window(), QStringLiteral("Keep dangerous file?"),
+            QStringLiteral("\"%1\" may harm your device. Only keep it if you trust %2.").arg(e->fileName, e->domain()),
+            QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes)
+        DownloadManager::instance()->keepDangerous(id);
+}
+
+static QWidget* emptyState(QWidget* parent, QLabel** iconOut, bool compact) {
+    auto* w = new QWidget(parent); auto* l = new QVBoxLayout(w);
+    l->setContentsMargins(24, compact ? 32 : 80, 24, compact ? 28 : 40); l->setSpacing(6); l->setAlignment(Qt::AlignHCenter);
+    auto* ic = new QLabel(w); ic->setFixedSize(64, 64); ic->setAlignment(Qt::AlignCenter); *iconOut = ic;
+    auto* t = new QLabel(QStringLiteral("No downloads yet"), w); t->setObjectName(QStringLiteral("DlEmptyTitle")); t->setAlignment(Qt::AlignCenter);
+    auto* s = new QLabel(QStringLiteral("Files you download will appear here."), w); s->setObjectName(QStringLiteral("DlEmptySub")); s->setAlignment(Qt::AlignCenter);
+    l->addWidget(ic, 0, Qt::AlignHCenter); l->addSpacing(10); l->addWidget(t); l->addWidget(s);
+    return w;
+}
+static void paintEmptyIcon(QLabel* ic) {
+    const auto& p = pal(); const qreal dpr = ic->devicePixelRatioF();
+    QPixmap pm(64 * dpr, 64 * dpr); pm.setDevicePixelRatio(dpr); pm.fill(Qt::transparent);
+    QPainter pp(&pm); pp.setRenderHint(QPainter::Antialiasing); pp.setPen(Qt::NoPen);
+    QColor c(p.accent); c.setAlphaF(isDark() ? 0.16 : 0.12); pp.setBrush(c); pp.drawEllipse(QRectF(0, 0, 64, 64));
+    pp.drawPixmap(QPointF(18, 18), iconPm(QStringLiteral("download"), p.accent, 28, dpr)); pp.end();
+    ic->setPixmap(pm);
+}
+
+// ---------- page ----------
+DownloadsPage::DownloadsPage(QWidget* parent) : QWidget(parent) {
+    setObjectName(QStringLiteral("DlRoot")); setAttribute(Qt::WA_StyledBackground, true);
+    auto* outer = new QVBoxLayout(this); outer->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea(this); scroll->setObjectName(QStringLiteral("DlScroll")); scroll->setWidgetResizable(true); scroll->setFrameShape(QFrame::NoFrame);
+    outer->addWidget(scroll);
+    auto* host = new QWidget(); host->setObjectName(QStringLiteral("DlColumn"));
+    auto* hl = new QHBoxLayout(host); hl->setContentsMargins(24, 28, 24, 40);
+    auto* colW = new QWidget(host); colW->setObjectName(QStringLiteral("DlColumn")); colW->setMaximumWidth(840); colW->setMinimumWidth(480);
+    hl->addStretch(); hl->addWidget(colW, 100); hl->addStretch();
+    auto* col = new QVBoxLayout(colW); col->setContentsMargins(0, 0, 0, 0); col->setSpacing(0);
+    // header
+    auto* hd = new QHBoxLayout(); hd->setSpacing(12);
+    auto* title = new QLabel(QStringLiteral("Downloads"), colW); title->setObjectName(QStringLiteral("DlTitle"));
+    hd->addWidget(title, 1);
+    auto* sb = new QFrame(colW); sb->setObjectName(QStringLiteral("DlSearchBox")); sb->setFixedSize(300, 36);
+    auto* sl = new QHBoxLayout(sb); sl->setContentsMargins(14, 0, 14, 0); sl->setSpacing(8);
+    m_searchIcon = new QLabel(sb); m_searchIcon->setFixedSize(16, 16);
+    m_search = new QLineEdit(sb); m_search->setObjectName(QStringLiteral("DlSearch")); m_search->setPlaceholderText(QStringLiteral("Search downloads"));
+    m_search->setClearButtonEnabled(true);
+    sl->addWidget(m_searchIcon); sl->addWidget(m_search, 1);
+    hd->addWidget(sb);
+    m_folderBtn = new QPushButton(QStringLiteral("Open downloads folder"), colW); m_folderBtn->setObjectName(QStringLiteral("DlSecondary"));
+    m_clearBtn = new QPushButton(QStringLiteral("Clear all"), colW); m_clearBtn->setObjectName(QStringLiteral("DlSecondary"));
+    for (auto* b : {m_folderBtn, m_clearBtn}) { b->setIconSize(QSize(16, 16)); b->setCursor(Qt::PointingHandCursor); b->setFixedHeight(32); hd->addWidget(b); }
+    col->addLayout(hd); col->addSpacing(24 - 20);
+    m_listHost = new QWidget(colW); m_listHost->setObjectName(QStringLiteral("DlColumn"));
+    m_list = new QVBoxLayout(m_listHost); m_list->setContentsMargins(0, 0, 0, 0); m_list->setSpacing(8);
+    col->addWidget(m_listHost);
+    m_empty = emptyState(colW, &m_emptyIcon, false);
+    col->addWidget(m_empty);
+    col->addStretch();
+    scroll->setWidget(host);
+
+    connect(m_search, &QLineEdit::textChanged, this, &DownloadsPage::rebuild);
+    connect(m_folderBtn, &QPushButton::clicked, this, []{
+        const QString d = DownloadManager::instance()->downloadDir(); QDir().mkpath(d); QDesktopServices::openUrl(QUrl::fromLocalFile(d)); });
+    connect(m_clearBtn, &QPushButton::clicked, this, [this]{ showUndo(DownloadManager::instance()->clearFinished()); });
+    connect(DownloadManager::instance(), &DownloadManager::listChanged, this, &DownloadsPage::rebuild);
+    applyTheme();
+}
+
+void DownloadsPage::applyTheme() {
+    setStyleSheet(styleSheetFor(false));
+    const auto& p = pal();
+    m_searchIcon->setPixmap(iconPm(QStringLiteral("search"), p.textSecondary, 16, devicePixelRatioF()));
+    m_folderBtn->setIcon(cachedIcon(QStringLiteral("folder"), p.textSecondary, 16));
+    m_clearBtn->setIcon(cachedIcon(QStringLiteral("trash"), p.textSecondary, 16));
+    paintEmptyIcon(m_emptyIcon);
+    rebuild();
+}
+
+static QString groupLabel(const QDate& d) {
+    const QDate today = QDate::currentDate();
+    if (d == today) return QStringLiteral("Today");
+    if (d == today.addDays(-1)) return QStringLiteral("Yesterday");
+    return QLocale(QLocale::English).toString(d, d.year() == today.year() ? QStringLiteral("dddd, MMM d") : QStringLiteral("dddd, MMM d, yyyy"));
+}
+
+void DownloadsPage::rebuild() {
+    QWidget* focused = QApplication::focusWidget();
+    qint64 focusId = -1;
+    if (auto* fw = qobject_cast<DownloadItemWidget*>(focused); fw && m_listHost->isAncestorOf(fw)) focusId = fw->id();
+    while (auto* it = m_list->takeAt(0)) { if (auto* w = it->widget()) w->deleteLater(); delete it; }
+    const QString q = m_search->text().trimmed();
+    QDate last; int shown = 0;
+    for (const auto& e : DownloadManager::instance()->entries()) {
+        if (!q.isEmpty() && !e.fileName.contains(q, Qt::CaseInsensitive) && !e.domain().contains(q, Qt::CaseInsensitive)) continue;
+        const QDate d = e.started.date();
+        if (d != last || shown == 0) {
+            last = d;
+            auto* g = new QLabel(groupLabel(d).toUpper(), m_listHost); g->setObjectName(QStringLiteral("DlGroup"));
+            g->setContentsMargins(4, 20 - 8 + (shown ? 4 : 0), 4, 0);   // 20 top / 8 bottom with the list's 8 spacing
+            m_list->addWidget(g);
+        }
+        auto* card = new DownloadItemWidget(e.id, false, m_listHost);
+        connect(card, &DownloadItemWidget::openSourceRequested, this, &DownloadsPage::openUrlRequested);
+        m_list->addWidget(card);
+        if (e.id == focusId) card->setFocus();
+        ++shown;
+    }
+    m_empty->setVisible(shown == 0);
+    m_empty->findChild<QLabel*>(QStringLiteral("DlEmptyTitle"))->setText(q.isEmpty() || DownloadManager::instance()->entries().isEmpty() ? QStringLiteral("No downloads yet") : QStringLiteral("No matching downloads"));
+    bool anyFinished = false; for (const auto& e : DownloadManager::instance()->entries()) anyFinished |= e.finished();
+    m_clearBtn->setEnabled(anyFinished);
+}
+
+void DownloadsPage::showUndo(const QList<DownloadEntry>& removed) {
+    if (removed.isEmpty()) return;
+    m_undo = removed;
+    if (!m_toast) {
+        m_toast = new QFrame(this); m_toast->setObjectName(QStringLiteral("DlToast"));
+        auto* l = new QHBoxLayout(m_toast); l->setContentsMargins(16, 6, 8, 6); l->setSpacing(12);
+        auto* t = new QLabel(m_toast); t->setObjectName(QStringLiteral("DlToastText")); l->addWidget(t);
+        auto* u = new QPushButton(QStringLiteral("Undo"), m_toast); u->setCursor(Qt::PointingHandCursor); l->addWidget(u);
+        connect(u, &QPushButton::clicked, this, [this]{ DownloadManager::instance()->restore(m_undo); m_undo.clear(); m_toast->hide(); });
+        m_toastTimer = new QTimer(this); m_toastTimer->setSingleShot(true); m_toastTimer->setInterval(5000);
+        connect(m_toastTimer, &QTimer::timeout, this, [this]{ m_undo.clear(); m_toast->hide(); });
+    }
+    m_toast->findChild<QLabel*>(QStringLiteral("DlToastText"))->setText(QStringLiteral("Cleared %1 download%2").arg(removed.size()).arg(removed.size() == 1 ? "" : "s"));
+    m_toast->adjustSize();
+    m_toast->move((width() - m_toast->width()) / 2, height() - m_toast->height() - 24);
+    m_toast->show(); m_toast->raise(); m_toastTimer->start();
+}
+
+// ---------- popup ----------
+DownloadsPopup::DownloadsPopup(QWidget* parent) : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint) {
+    setAttribute(Qt::WA_TranslucentBackground);
+    auto* outer = new QVBoxLayout(this); outer->setContentsMargins(16, 4, 16, 28);   // room for the shadow
+    m_card = new QFrame(this); m_card->setObjectName(QStringLiteral("DlPopCard")); m_card->setFixedWidth(380);
+    auto* sh = new QGraphicsDropShadowEffect(m_card); sh->setBlurRadius(32); sh->setOffset(0, 12); m_card->setGraphicsEffect(sh);
+    outer->addWidget(m_card);
+    auto* v = new QVBoxLayout(m_card); v->setContentsMargins(0, 0, 0, 0); v->setSpacing(0);
+    auto* hdr = new QWidget(m_card); hdr->setFixedHeight(44);
+    auto* hl = new QHBoxLayout(hdr); hl->setContentsMargins(16, 0, 8, 0); hl->setSpacing(2);
+    auto* t = new QLabel(QStringLiteral("Downloads"), hdr); t->setObjectName(QStringLiteral("DlPopHeader")); hl->addWidget(t, 1);
+    m_folder = new QToolButton(hdr); m_more = new QToolButton(hdr);
+    for (auto* b : {m_folder, m_more}) { b->setObjectName(QStringLiteral("DlIconBtn")); b->setFixedSize(32, 32); b->setIconSize(QSize(18, 18)); b->setCursor(Qt::PointingHandCursor); hl->addWidget(b); }
+    m_folder->setToolTip(QStringLiteral("Open downloads folder")); m_more->setToolTip(QStringLiteral("More"));
+    v->addWidget(hdr);
+    auto* div = new QFrame(m_card); div->setObjectName(QStringLiteral("DlPopDivider")); v->addWidget(div);
+    auto* listW = new QWidget(m_card); m_list = new QVBoxLayout(listW); m_list->setContentsMargins(0, 4, 0, 4); m_list->setSpacing(0);
+    v->addWidget(listW);
+    m_empty = emptyState(m_card, &m_emptyIcon, true); v->addWidget(m_empty);
+    auto* div2 = new QFrame(m_card); div2->setObjectName(QStringLiteral("DlPopDivider")); v->addWidget(div2);
+    m_footer = new QPushButton(QStringLiteral("Show all downloads"), m_card); m_footer->setObjectName(QStringLiteral("DlPopFooter")); m_footer->setCursor(Qt::PointingHandCursor);
+    v->addWidget(m_footer);
+
+    m_autoClose = new QTimer(this); m_autoClose->setSingleShot(true); m_autoClose->setInterval(6000);
+    connect(m_autoClose, &QTimer::timeout, this, [this]{ if (!m_hovered && !underMouse()) hide(); });
+    connect(m_folder, &QToolButton::clicked, this, [this]{ hide(); const QString d = DownloadManager::instance()->downloadDir(); QDir().mkpath(d); QDesktopServices::openUrl(QUrl::fromLocalFile(d)); });
+    connect(m_more, &QToolButton::clicked, this, [this]{
+        QMenu m(this);
+        m.addAction(cachedIcon(QStringLiteral("trash"), pal().textSecondary, 16), QStringLiteral("Clear all"), this, []{ DownloadManager::instance()->clearFinished(); });
+        m.addAction(cachedIcon(QStringLiteral("settings"), pal().textSecondary, 16), QStringLiteral("Settings"), this, [this]{ hide(); emit settingsRequested(); });
+        m.exec(m_more->mapToGlobal(QPoint(0, m_more->height())));
+    });
+    connect(m_footer, &QPushButton::clicked, this, [this]{ hide(); emit showAllRequested(); });
+    connect(DownloadManager::instance(), &DownloadManager::listChanged, this, [this]{ if (isVisible()) { rebuild(); adjustSize(); } });
+    applyTheme();
+}
+
+void DownloadsPopup::applyTheme() {
+    setStyleSheet(DownloadsPage::styleSheetFor(true));
+    const auto& p = pal();
+    if (auto* sh = qobject_cast<QGraphicsDropShadowEffect*>(m_card->graphicsEffect()))
+        sh->setColor(isDark() ? QColor(0, 0, 0, 128) : QColor(16, 24, 40, 46));
+    m_folder->setIcon(cachedIcon(QStringLiteral("folder"), p.textSecondary, 18));
+    m_more->setIcon(cachedIcon(QStringLiteral("more-horizontal"), p.textSecondary, 18));
+    paintEmptyIcon(m_emptyIcon);
+    if (isVisible()) rebuild();
+}
+
+void DownloadsPopup::rebuild() {
+    while (auto* it = m_list->takeAt(0)) { if (auto* w = it->widget()) w->deleteLater(); delete it; }
+    const auto& all = DownloadManager::instance()->entries();
+    int n = 0;
+    for (const auto& e : all) {
+        if (n++ >= 5) break;
+        auto* row = new DownloadItemWidget(e.id, true, m_list->parentWidget());
+        connect(row, &DownloadItemWidget::openSourceRequested, this, [this](const QString& u){ hide(); emit openUrlRequested(u); });
+        m_list->addWidget(row);
+    }
+    m_list->parentWidget()->setVisible(n > 0);
+    m_empty->setVisible(n == 0);
+    m_footer->setText(n == 0 ? QStringLiteral("Open downloads page") : QStringLiteral("Show all downloads"));
+}
+
+void DownloadsPopup::showUnder(QWidget* button, bool autoClose) {
+    m_button = button; m_hovered = false;
+    rebuild(); adjustSize();
+    const QPoint br = button->mapToGlobal(QPoint(button->width(), button->height()));
+    const QMargins m = layout()->contentsMargins();
+    move(br.x() + 4 - (width() - m.right()), br.y() + 8 - m.top());
+    show(); raise();
+    if (autoClose) m_autoClose->start(); else m_autoClose->stop();
+    if (auto* ab = qobject_cast<QAbstractButton*>(button)) ab->setDown(true);
+}
+void DownloadsPopup::enterEvent(QEnterEvent* e) { m_hovered = true; m_autoClose->stop(); QWidget::enterEvent(e); }
+void DownloadsPopup::hideEvent(QHideEvent* e) { m_hiddenAt = QDateTime::currentMSecsSinceEpoch(); if (auto* ab = qobject_cast<QAbstractButton*>(m_button.data())) ab->setDown(false); m_autoClose->stop(); QWidget::hideEvent(e); }
+
+// ---------- toolbar badge ----------
+DownloadButtonBadge::DownloadButtonBadge(QWidget* button) : QWidget(button) {
+    setAttribute(Qt::WA_TransparentForMouseEvents); setAttribute(Qt::WA_NoSystemBackground);
+    setGeometry(button->rect());
+    m_timer = new QTimer(this); m_timer->setInterval(50);
+    connect(m_timer, &QTimer::timeout, this, [this]{ update(); if (QDateTime::currentMSecsSinceEpoch() > m_doneUntil && DownloadManager::instance()->activeCount() == 0) m_timer->stop(); });
+    auto* dm = DownloadManager::instance();
+    connect(dm, &DownloadManager::entryChanged, this, [this]{ update(); });
+    connect(dm, &DownloadManager::listChanged, this, [this]{
+        m_alert = false; for (const auto& e : DownloadManager::instance()->entries()) if (e.started.date() == QDate::currentDate() && (e.state == DownloadEntry::Dangerous)) m_alert = true;
+        update(); });
+    connect(dm, &DownloadManager::downloadStarted, this, [this]{ m_timer->start(); update(); });
+    connect(dm, &DownloadManager::downloadFinished, this, [this](qint64 id, bool ok){
+        const auto* e = DownloadManager::instance()->entry(id);
+        if (ok) { m_doneUntil = QDateTime::currentMSecsSinceEpoch() + 1500; m_timer->start(); }
+        else if (e && (e->state == DownloadEntry::Failed || e->state == DownloadEntry::Dangerous)) m_alert = true;
+        update(); });
+}
+void DownloadButtonBadge::paintEvent(QPaintEvent*) {
+    if (parentWidget() && size() != parentWidget()->size()) setGeometry(parentWidget()->rect());
+    const auto& p = pal();
+    QPainter g(this); g.setRenderHint(QPainter::Antialiasing);
+    const double prog = DownloadManager::instance()->aggregateProgress();
+    const QRectF ring = QRectF(rect()).adjusted(4, 4, -4, -4);
+    if (prog >= 0) {
+        QPen track(QColor(p.surfaceHover), 2); g.setPen(track); g.drawEllipse(ring);
+        QPen pen(QColor(p.accent), 2); pen.setCapStyle(Qt::RoundCap); g.setPen(pen);
+        g.drawArc(ring, 90 * 16, -int(qMax(0.02, prog) * 360 * 16));
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now < m_doneUntil) {
+        const double t = 1.0 - double(m_doneUntil - now) / 1500.0;
+        const double pulse = 1.0 + 0.25 * qSin(t * M_PI);
+        const QPointF c(width() - 8, height() - 8); const double r = 6 * pulse;
+        g.setPen(Qt::NoPen); g.setBrush(QColor(p.accent)); g.drawEllipse(c, r, r);
+        QPen ck(QColor(p.onAccent), 1.6); ck.setCapStyle(Qt::RoundCap); ck.setJoinStyle(Qt::RoundJoin); g.setPen(ck);
+        QPainterPath path; path.moveTo(c + QPointF(-2.6, 0.2)); path.lineTo(c + QPointF(-0.6, 2.2)); path.lineTo(c + QPointF(2.8, -1.8));
+        g.drawPath(path);
+    } else if (m_alert) {
+        g.setPen(QPen(QColor(p.toolbar), 1.5)); g.setBrush(QColor(p.danger)); g.drawEllipse(QPointF(width() - 8, 8), 4, 4);
+    }
+}

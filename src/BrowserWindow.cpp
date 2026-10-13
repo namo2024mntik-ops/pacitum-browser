@@ -1,3 +1,5 @@
+#include <QPainter>
+#include <QDateTime>
 #include "BrowserWindow.h"
 #include "BrowserTab.h"
 #include "TabWidget.h"
@@ -57,7 +59,7 @@
 BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_history = new HistoryManager(QStringLiteral("browser_history.db"));
     m_bookmarks = new BookmarkManager(QStringLiteral("bookmarks.json"));
-    m_downloads = new DownloadManager(this);
+    m_downloads = DownloadManager::instance();
     m_theme = new ThemeManager(false);
     m_session = new SessionManager(QStringLiteral("browser_session.json"));
     m_zoom = new ZoomController(1.0, this);
@@ -77,6 +79,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     loadSettings();
     applyTheme();
     restoreOrNewTab();
+    updateDownloadsButton();
     installPopupFactory();
     qApp->installEventFilter(this);
 #ifdef Q_OS_WIN
@@ -208,7 +211,17 @@ void BrowserWindow::createToolbar() {
     connect(m_addressBar, &AddressBar::returnPressed, this, &BrowserWindow::navigateToUrl);
     connect(m_addressBar, &AddressBar::starClicked, this, &BrowserWindow::toggleBookmark);
     connect(m_addressBar, &AddressBar::securityIconClicked, this, &BrowserWindow::showPageInfo);
-    m_downloadsBtn = makeToolBtn(QStringLiteral("Downloads (Ctrl+J)")); connect(m_downloadsBtn, &QToolButton::clicked, this, &BrowserWindow::showDownloads);
+    m_downloadsBtn = makeToolBtn(QStringLiteral("Downloads (Ctrl+J)")); connect(m_downloadsBtn, &QToolButton::clicked, this, [this]{ toggleDownloadsPopup(false); });
+    m_downloadsBadge = new DownloadButtonBadge(m_downloadsBtn);
+    m_downloadsPopup = new DownloadsPopup(this);
+    connect(m_downloadsPopup, &DownloadsPopup::showAllRequested, this, &BrowserWindow::showDownloads);
+    connect(m_downloadsPopup, &DownloadsPopup::openUrlRequested, this, [this](const QString& u){ newTab(u); });
+    connect(m_downloadsPopup, &DownloadsPopup::settingsRequested, this, [this]{
+        showSettings();
+        for (int i = 0; i < m_tabs->count(); ++i) if (auto* sp = qobject_cast<SettingsPage*>(m_tabs->widget(i))) sp->showSection(QStringLiteral("Downloads"));
+    });
+    connect(m_downloads, &DownloadManager::listChanged, this, &BrowserWindow::updateDownloadsButton);
+    connect(m_downloads, &DownloadManager::downloadStarted, this, &BrowserWindow::updateDownloadsButton);
     m_splitBtn = makeToolBtn(QStringLiteral("Split view")); connect(m_splitBtn, &QToolButton::clicked, this, [this]{ toggleSplitView(); });
     m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(32,32); m_privateBadge->setAlignment(Qt::AlignCenter);
     m_privateBadge->setToolTip(QStringLiteral("Private browsing")); m_privateBadge->hide();
@@ -418,6 +431,10 @@ void BrowserWindow::onTabChanged(int index) {
         updateAddressBar(tab->currentUrl());
         if (m_animations) tab->fadeIn();
         setWindowTitle(tab->currentTitle() + QStringLiteral(" — Pacitum Browser"));
+    } else if (qobject_cast<DownloadsPage*>(w)) {
+        m_addressBar->setUrl(QStringLiteral("pacitum://downloads"));
+        m_addressBar->setBookmarked(false);
+        setWindowTitle(QStringLiteral("Downloads — Pacitum Browser"));
     } else if (qobject_cast<SettingsPage*>(w)) {
         m_addressBar->setUrl(QStringLiteral("pacitum://settings"));
         m_addressBar->setBookmarked(false);
@@ -433,6 +450,7 @@ BrowserTab* BrowserWindow::activeTab() const {
 
 void BrowserWindow::navigateToUrl(const QString& url) {
     if (url.startsWith(QStringLiteral("pacitum://settings"))) { showSettings(); return; }
+    if (url.startsWith(QStringLiteral("pacitum://downloads"))) { showDownloads(); return; }
     if (auto* t = activeTab()) { t->loadUrl(url); m_history->addVisit(url, {}, true); }
     else newTab(url);
 }
@@ -477,7 +495,42 @@ void BrowserWindow::toggleBookmark() {
     m_bookmarksBar->refresh();
 }
 
-void BrowserWindow::showDownloads() { m_downloads->show(); }
+void BrowserWindow::showDownloads() {
+    if (m_downloadsPopup) m_downloadsPopup->hide();
+    for (int i = 0; i < m_tabs->count(); ++i)
+        if (qobject_cast<DownloadsPage*>(m_tabs->widget(i))) { m_tabs->setCurrentIndex(i); return; }
+    auto* page = new DownloadsPage(this);
+    connect(page, &DownloadsPage::openUrlRequested, this, [this](const QString& u){ newTab(u); });
+    const int idx = m_tabs->addTab(page, QStringLiteral("Downloads"));
+    m_tabs->setTabIcon(idx, downloadsTabIcon());
+    m_tabs->setCurrentIndex(idx);
+}
+
+QIcon BrowserWindow::downloadsTabIcon() const {
+    // favicon: `download` glyph on an accent tile (design-spec §9)
+    const auto& p = m_theme->palette();
+    QPixmap pm(32, 32); pm.fill(Qt::transparent);
+    QPainter g(&pm); g.setRenderHint(QPainter::Antialiasing); g.setPen(Qt::NoPen); g.setBrush(QColor(p.accent));
+    g.drawRoundedRect(QRectF(0, 0, 32, 32), 8, 8);
+    g.drawPixmap(QRect(5, 5, 22, 22), ThemeManager::icon(QStringLiteral("download"), p.onAccent, 22).pixmap(QSize(44, 44)));
+    g.end();
+    return QIcon(pm);
+}
+
+void BrowserWindow::toggleDownloadsPopup(bool autoClose) {
+    if (!m_downloadsPopup) return;
+    if (m_downloadsPopup->isVisible()) { m_downloadsPopup->hide(); return; }
+    if (QDateTime::currentMSecsSinceEpoch() - m_downloadsPopup->hiddenAt() < 250) return;   // click on the button just closed it
+    if (!m_downloadsBtn->isVisible()) m_downloadsBtn->show();
+    m_downloadsBadge->clearAlert();
+    m_downloadsPopup->showUnder(m_downloadsBtn, autoClose);
+}
+
+void BrowserWindow::updateDownloadsButton() {
+    const bool show = readSettings().value(QStringLiteral("pin_downloads_button")).toBool(false)
+                   || m_downloads->hadDownloadThisSession() || m_downloads->activeCount() > 0;
+    m_downloadsBtn->setVisible(show);
+}
 void BrowserWindow::showSettings() {
     for (int i = 0; i < m_tabs->count(); ++i)
         if (qobject_cast<SettingsPage*>(m_tabs->widget(i))) { m_tabs->setCurrentIndex(i); return; }
@@ -521,6 +574,8 @@ void BrowserWindow::onSettingChanged(const QString& key) {
         forTabs([](BrowserTab* t){ t->applyWebSettings(); });
     } else if (key == QStringLiteral("animations")) {
         loadSettings();
+    } else if (key == QStringLiteral("pin_downloads_button")) {
+        updateDownloadsButton();
     } else if (key == QStringLiteral("show_suggestions")) {
         m_addressBar->setSuggestionsEnabled(s.value(key).toBool(true));
     }
@@ -632,7 +687,10 @@ void BrowserWindow::onDownloadRequested(QWebEngineDownloadRequest* dl){
         dl->setDownloadFileName(QFileInfo(path).fileName());
     }
     m_downloads->addDownload(dl);
-    m_downloads->show();
+    updateDownloadsButton();
+    // auto-open the popup on a new download, unless the downloads page is in front
+    if (isActiveWindow() && !qobject_cast<DownloadsPage*>(m_tabs->currentWidget()))
+        QTimer::singleShot(0, this, [this]{ if (m_downloadsPopup && !m_downloadsPopup->isVisible()) toggleDownloadsPopup(true); });
 }
 
 void BrowserWindow::toggleSplitView(int index) {
@@ -664,6 +722,10 @@ void BrowserWindow::applyTheme(){
     m_addressBar->applyTheme(m_theme);
     applyToolbarTheme();
     refreshIcons();
+    if (m_downloadsPopup) m_downloadsPopup->applyTheme();
+    if (m_downloadsBadge) m_downloadsBadge->update();
+    for (int i = 0; i < m_tabs->count(); ++i)
+        if (auto* dp = qobject_cast<DownloadsPage*>(m_tabs->widget(i))) { dp->applyTheme(); m_tabs->setTabIcon(i, downloadsTabIcon()); }
     for (auto* tw : {m_tabs, m_splitTabs})
         for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) updateTabIcon(t);
 

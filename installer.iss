@@ -1,5 +1,5 @@
 #define AppName "Pacitum Browser"
-#define AppVer "1.3.0"
+#define AppVer "1.4.0"
 #define AppExe "PacitumBrowser.exe"
 [Setup]
 AppId={{FD3A16C9-4CF0-4B0B-BBEC-A5E3334D7CFE}

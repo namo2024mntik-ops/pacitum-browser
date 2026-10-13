@@ -1,4 +1,5 @@
 #pragma once
+#include <QPair>
 #include <QString>
 #include <QVector>
 #include <QMutex>
@@ -18,6 +19,8 @@ public:
     QVector<HistoryEntry> search(const QString& query, int limit = 50) const;
     QVector<HistoryEntry> recent(int limit = 30) const;
     QVector<HistoryEntry> topSites(int limit = 10) const;
+    // Bulk import (one transaction; thread-safe). Pairs are (title, url), oldest first. Returns rows added.
+    int importVisits(const QVector<QPair<QString, QString>>& titleUrl);
     void clear();
     void deleteUrl(const QString& url);
     void cleanupOld(int days = 90);

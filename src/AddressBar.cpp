@@ -1,4 +1,7 @@
 #include "AddressBar.h"
+#include "Widgets.h"
+#include <QPainter>
+#include <QPainterPath>
 #include "HistoryManager.h"
 #include "ThemeManager.h"
 #include <QHBoxLayout>
@@ -47,8 +50,7 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     m_display->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_display->hide();
 
-    m_star = new QToolButton(this);
-    m_star->setFixedSize(30,30); m_star->setIconSize(QSize(17,17)); m_star->setAutoRaise(true);
+    m_star = new StarButton(this);
     m_star->setToolTip(QStringLiteral("Bookmark this tab (Ctrl+D)"));
     connect(m_star, &QToolButton::clicked, this, &AddressBar::starClicked);
     layout->addWidget(m_star);
@@ -62,6 +64,7 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     connect(m_input, &QLineEdit::textEdited, this, &AddressBar::onTextChanged);
     connect(m_completer, QOverload<const QString&>::of(&QCompleter::activated), this, &AddressBar::onSuggestionActivated);
 
+    initProgress();
     m_timer.setSingleShot(true);
     m_timer.setInterval(200);
     connect(&m_timer, &QTimer::timeout, this, &AddressBar::updateSuggestions);
@@ -93,6 +96,7 @@ void AddressBar::showBlurred() {
     QString host, rest;
     if (u.scheme() == QLatin1String("pacitum")) {
         host = u.host(); rest = u.path();                          // pacitum://settings/appearance -> settings/appearance
+        if (rest == QLatin1String("/")) rest.clear();              // pacitum://welcome/ -> welcome
     } else if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) {
         host = u.host(QUrl::FullyDecoded);
         if (host.startsWith(QLatin1String("www."))) host = host.mid(4);
@@ -121,13 +125,13 @@ QString AddressBar::url() const { return m_input->text(); }
 
 void AddressBar::focusUrl() { m_input->setFocus(); m_input->selectAll(); }
 
-void AddressBar::setBookmarked(bool b) { m_bookmarked = b; updateStar(); }
+void AddressBar::setBookmarked(bool b, bool animate) { m_bookmarked = b; updateStar(); m_star->setStarred(b, animate); }
 
 void AddressBar::updateStar() {
     if (!m_theme) return;
     const auto& p = m_theme->palette();
-    m_star->setIcon(m_bookmarked ? ThemeManager::icon(QStringLiteral("star-filled"), p.accent, 17)
-                                 : ThemeManager::icon(QStringLiteral("star"), p.textSecondary, 17));
+    m_star->setIcons(ThemeManager::icon(QStringLiteral("star"), p.textSecondary, 18),
+                     ThemeManager::icon(QStringLiteral("star-filled"), p.accent, 18));
 }
 
 bool AddressBar::eventFilter(QObject* o, QEvent* e) {
@@ -199,4 +203,65 @@ void AddressBar::updateSecurityIcon(const QString& url) {
     m_chip->setProperty("kind", text.isEmpty() ? "icon" : (m_secureHttps ? "secure" : url.startsWith(QStringLiteral("http://")) ? "danger" : "internal"));
     m_chip->style()->unpolish(m_chip); m_chip->style()->polish(m_chip);
     if (text.isEmpty()) m_chip->setFixedWidth(28); else { m_chip->setMinimumWidth(28); m_chip->setMaximumWidth(200); }
+}
+
+// ---------- address-bar progress (animations-spec §7) ----------
+static qreal trickleAt(qreal t) {   // keyframes 0→30 % (300 ms OutCubic) →70 % (1500 OutQuad) →82 % (1900 OutQuad)
+    QEasingCurve oc(QEasingCurve::OutCubic), oq(QEasingCurve::OutQuad);
+    if (t < 300) return 0.30 * oc.valueForProgress(t / 300.0);
+    if (t < 1500) return 0.30 + 0.40 * oq.valueForProgress((t - 300) / 1200.0);
+    if (t < 1900) return 0.70 + 0.12 * oq.valueForProgress((t - 1500) / 400.0);
+    return qMin(0.90, 0.82 + (t - 1900) / 60000.0);   // slow trickle, max 90 % until real progress
+}
+void AddressBar::initProgress() {
+    m_trickle.setDuration(60000); m_trickle.setStartValue(0.0); m_trickle.setEndValue(60000.0);
+    connect(&m_trickle, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){
+        const qreal tv = trickleAt(v.toReal());
+        if (tv > m_prog) { m_prog = tv; repaintProgress(); }
+    });
+    m_progAnim.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&m_progAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_prog = qMax(m_prog, v.toReal()); repaintProgress(); });
+    m_fadeAnim.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&m_fadeAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_progOpacity = v.toReal(); repaintProgress(); });
+    connect(&m_fadeAnim, &QVariantAnimation::finished, this, [this]{ m_prog = 0; m_progOpacity = 0; m_progError = false; repaintProgress(); });
+    m_fadeDelay.setSingleShot(true); m_fadeDelay.setInterval(100);
+    connect(&m_fadeDelay, &QTimer::timeout, this, [this]{ m_fadeAnim.stop(); m_fadeAnim.setDuration(250); m_fadeAnim.setStartValue(m_progOpacity); m_fadeAnim.setEndValue(0.0); m_fadeAnim.start(); });
+}
+void AddressBar::repaintProgress() { update(QRect(0, height() - 4, width(), 4)); }
+void AddressBar::progressStarted() {
+    m_fadeDelay.stop(); m_fadeAnim.stop(); m_progAnim.stop();
+    m_prog = 0; m_progOpacity = 1.0; m_progError = false; m_progLoading = true;   // new navigation: snap opacity 1, width 0
+    if (!Pacitum::reducedMotion()) m_trickle.start(); else m_trickle.stop();
+    repaintProgress();
+}
+void AddressBar::progressChanged(int value) {
+    if (!m_progLoading) return;
+    const qreal target = qBound(0, value, 100) / 100.0;
+    if (target <= m_prog) return;   // never backwards
+    if (Pacitum::reducedMotion()) { m_prog = target; repaintProgress(); return; }
+    m_progAnim.stop(); m_progAnim.setDuration(200); m_progAnim.setStartValue(m_prog); m_progAnim.setEndValue(target); m_progAnim.start();
+}
+void AddressBar::progressFinished(bool ok) {
+    if (!m_progLoading) return;
+    m_progLoading = false; m_trickle.stop();
+    if (Pacitum::reducedMotion()) { m_progAnim.stop(); m_prog = 0; m_progOpacity = 0; m_progError = false; repaintProgress(); return; }
+    m_progError = !ok;
+    if (ok) { m_progAnim.stop(); m_progAnim.setDuration(200); m_progAnim.setStartValue(m_prog); m_progAnim.setEndValue(1.0); m_progAnim.start(); m_fadeDelay.start(); }
+    else { m_fadeDelay.stop(); m_fadeAnim.stop(); m_fadeAnim.setDuration(250); m_fadeAnim.setStartValue(m_progOpacity); m_fadeAnim.setEndValue(0.0); m_fadeAnim.start(); }   // error: danger bar fades
+}
+void AddressBar::syncProgress(bool loading, int value) {
+    m_trickle.stop(); m_progAnim.stop(); m_fadeAnim.stop(); m_fadeDelay.stop();
+    m_progLoading = loading; m_progError = false;
+    m_prog = loading ? qBound(0, value, 100) / 100.0 : 0.0; m_progOpacity = loading ? 1.0 : 0.0;
+    repaintProgress();
+}
+void AddressBar::paintEvent(QPaintEvent* e) {
+    QFrame::paintEvent(e);
+    if (m_progOpacity <= 0.0 || m_prog <= 0.0) return;
+    QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+    QPainterPath clip; clip.addRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);
+    p.setClipPath(clip);
+    QColor c(m_progError ? ThemeManager::current().danger : ThemeManager::current().accent);
+    c.setAlphaF(c.alphaF() * m_progOpacity);
+    p.fillRect(QRectF(0, height() - 2, width() * m_prog, 2), c);
 }

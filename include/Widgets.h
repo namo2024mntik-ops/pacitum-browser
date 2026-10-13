@@ -15,7 +15,22 @@ public:
     // Driven from native non-client messages (e.g. HTMAXBUTTON for Windows 11 snap layouts).
     void setForcedHover(bool on) { if (on != m_forcedHover) { m_forcedHover = on; animateTo(on || underMouse() ? 1.0 : 0.0); } }
     void setForcedDown(bool on) { if (on != m_forcedDown) { m_forcedDown = on; update(); } }
+    // --- 1.5 micro-animations (animations-spec.md) ---
+    // §2 reload spin: +360° in 400 ms OutCubic (extra turns stack when clicked again).
+    void spin();
+    // Cross-fade to a new glyph (120 ms OutCubic, incoming scale 0.8→1); instant with reduced motion.
+    void setIconAnimated(const QIcon& icon, int ms = 120);
+    // Extra glyph transform driven by owners (download completion arrow): scale / opacity.
+    void setGlyphTransform(qreal scale, qreal opacity) { m_extScale = scale; m_extOpacity = opacity; update(); }
+    qreal glyphRotation() const { return m_rotation; }
 protected:
+    void mousePressEvent(QMouseEvent* e) override;
+    void mouseReleaseEvent(QMouseEvent* e) override;
+    // Draws the icon centred with rotation/scale/opacity transforms; subclasses may override.
+    virtual void paintGlyph(QPainter& p);
+    virtual void paintOverlay(QPainter&) {}
+    qreal m_pressScale = 1.0, m_rotation = 0.0, m_extScale = 1.0, m_extOpacity = 1.0, m_fade = 1.0;
+    QIcon m_prevIcon;
     bool m_forcedHover = false;
     bool m_forcedDown = false;
     void enterEvent(QEnterEvent* e) override;
@@ -25,7 +40,8 @@ protected:
     qreal hoverLevel() const { return m_level; }
 private:
     void animateTo(qreal v);
-    QVariantAnimation m_anim;
+    void animatePress(qreal to, int ms, QEasingCurve::Type ease);
+    QVariantAnimation m_anim, m_pressAnim, m_spinAnim, m_fadeAnim;
     qreal m_level = 0.0;
     int m_radius = 8;
     QString m_hoverColor;
@@ -129,3 +145,21 @@ QIcon spinnerIcon(int angle, const QString& color);
 // Fade-in for every QMenu popup (installed once on qApp).
 void installMenuFader();
 }
+
+// Omnibox bookmark star with the 1.5 "pop" (animations-spec §3): 34 px circle, unclipped particles.
+class StarButton : public AnimatedToolButton {
+    Q_OBJECT
+public:
+    explicit StarButton(QWidget* parent = nullptr);
+    void setIcons(const QIcon& outline, const QIcon& filled);
+    void setStarred(bool on, bool animate);
+    bool starred() const { return m_on; }
+protected:
+    void paintOverlay(QPainter& p) override;
+private:
+    void onTick(qreal t);
+    QVariantAnimation m_tl;          // timeline in ms (Linear); per-segment easing computed in onTick
+    QIcon m_outline, m_filled;
+    bool m_on = false, m_pop = false, m_swapped = false;
+    qreal m_t = -1, m_from = 1.0;
+};

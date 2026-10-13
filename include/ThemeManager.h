@@ -21,6 +21,7 @@ namespace Pacitum {
 int motionMs(int ms);
 bool reducedMotion();
 void setReducedMotion(bool on);   // app setting override
+void clearReducedMotionOverride(); // back to the OS setting
 }
 
 class ThemeManager {

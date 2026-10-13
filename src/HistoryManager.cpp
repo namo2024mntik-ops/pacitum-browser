@@ -53,6 +53,35 @@ void HistoryManager::addVisit(const QString& url, const QString& title, bool typ
     db.close(); QSqlDatabase::removeDatabase(db.connectionName());
 }
 
+int HistoryManager::importVisits(const QVector<QPair<QString, QString>>& items) {
+    QMutexLocker lk(&m_mutex);
+    int n = 0;
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName());
+        db.setDatabaseName(m_dbPath);
+        if (db.open()) {
+            db.transaction();
+            const double now = QDateTime::currentSecsSinceEpoch();
+            QSqlQuery sel(db), ins(db);
+            sel.prepare(QStringLiteral("SELECT 1 FROM history WHERE url=?"));
+            ins.prepare(QStringLiteral("INSERT INTO history (url,title,visit_time,last_visit_time) VALUES (?,?,?,?)"));
+            for (const auto& it : items) {
+                if (!it.second.startsWith(QStringLiteral("http"))) continue;
+                sel.addBindValue(it.second); sel.exec();
+                if (sel.next()) continue;
+                ins.addBindValue(it.second); ins.addBindValue(it.first.left(500)); ins.addBindValue(now); ins.addBindValue(now);
+                if (ins.exec()) ++n;
+            }
+            db.commit();
+            db.close();
+        }
+        const QString cn = db.connectionName();
+        db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(cn);
+    }
+    return n;
+}
+
 QVector<HistoryEntry> HistoryManager::search(const QString& query, int limit) const {
     QMutexLocker lk(&m_mutex);
     auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connName());

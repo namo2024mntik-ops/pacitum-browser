@@ -178,13 +178,16 @@ void BrowserTab::checkGoogleSignIn(const QUrl& u) {
 
 void BrowserTab::onUrlChanged(const QUrl& u) { m_url = u.toString(); emit urlChanged(m_url); checkGoogleSignIn(u); }
 void BrowserTab::onTitleChanged(const QString& t) { m_title = t.isEmpty() ? QStringLiteral("New Tab") : t; emit titleChanged(m_title); }
-void BrowserTab::onLoadStarted() { m_loading = true; emit loadingChanged(true); m_progress->setValue(0); m_progress->show(); }
-void BrowserTab::onLoadProgress(int p) { m_progress->setValue(p); emit progressChanged(p); }
-void BrowserTab::onLoadFinished(bool) { checkGoogleSignIn(m_view->url()); m_loading = false; emit loadingChanged(false); m_progress->hide(); m_progress->setValue(100); }
+// Progress is shown in the omnibox (animations-spec §7). The old in-page 3 px QProgressBar was
+// shown/hidden on every load and shifted the page down by 3 px each time; it is no longer shown.
+void BrowserTab::onLoadStarted() { m_loading = true; m_loadValue = 0; emit loadingChanged(true); m_progress->setValue(0); }
+void BrowserTab::onLoadProgress(int p) { m_loadValue = p; m_progress->setValue(p); emit progressChanged(p); }
+void BrowserTab::onLoadFinished(bool ok) { checkGoogleSignIn(m_view->url()); m_loading = false; m_loadValue = 100; emit loadingChanged(false); emit loadDone(ok); m_progress->setValue(100); }
 void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus, int) { emit crashed(); QTimer::singleShot(1000, this, &BrowserTab::reload); }
 
 void BrowserTab::fadeIn() {
-    if (m_anim) { m_anim->stop(); m_anim->deleteLater(); }
+    if (m_anim) { m_anim->stop(); m_anim->deleteLater(); m_anim = nullptr; }
+    if (Pacitum::reducedMotion()) { m_opacity->setEnabled(false); return; }   // no offscreen effect with reduced motion
     m_opacity->setEnabled(true);
     m_anim = new QPropertyAnimation(m_opacity, "opacity", this);
     m_anim->setDuration(200); m_anim->setStartValue(0.0); m_anim->setEndValue(1.0);

@@ -1,4 +1,5 @@
 #pragma once
+#include <QVariantAnimation>
 #include <QObject>
 #include <QWidget>
 #include <QFrame>
@@ -169,13 +170,20 @@ private:
 };
 
 // Overlay for the toolbar button: progress ring, completion check, danger dot.
+// Toolbar download button decoration (animations-spec §4): progress ring tween, indeterminate arc,
+// completion sequence (arrow out → check pop → badge dot), failure tint, badge until the popup opens.
 class DownloadButtonBadge : public QWidget {
     Q_OBJECT
 public:
     explicit DownloadButtonBadge(QWidget* button);
-    void clearAlert() { m_alert = false; update(); }
+    void clearAlert();   // popup opened: badge scales out (120 ms InCubic)
 protected:
     void paintEvent(QPaintEvent*) override;
 private:
-    qint64 m_doneUntil = 0; bool m_alert = false; QTimer* m_timer;
+    void onProgress();
+    void onAllFinished(bool ok);
+    void setGlyph(qreal scale, qreal opacity);
+    QVariantAnimation m_ring, m_spin, m_seq, m_badgeAnim, m_ringFade;
+    qreal m_shown = 0, m_spinAngle = 0, m_t = -1, m_badge = 0, m_ringOpacity = 1;
+    bool m_active = false, m_failed = false, m_badgeDanger = false, m_alert = false;
 };

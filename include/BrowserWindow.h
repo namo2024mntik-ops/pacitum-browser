@@ -1,4 +1,6 @@
 #pragma once
+#include <functional>
+#include <QJsonValue>
 #include <QMainWindow>
 #include <QSplitter>
 #include <QPushButton>
@@ -22,12 +24,15 @@ class BookmarkManager;
 class DownloadManager;
 class SessionManager;
 class ZoomController;
+class FirstRunBridge;
+class QWebChannel;
 class AdBlocker;
 class WindowButton;
 
 class BrowserWindow : public QMainWindow {
     Q_OBJECT
 public:
+    void openUrlInNewTab(const QString& url) { newTab(url); }   // command-line / default-browser launches
     explicit BrowserWindow(QWidget* parent = nullptr);
     ~BrowserWindow() override;
 
@@ -160,6 +165,13 @@ private:
     QTimer* m_spinTimer = nullptr;
     int m_spinAngle = 0;
     bool m_animations = true;
+    // First-run welcome flow (firstrun-spec.md)
+    FirstRunBridge* m_firstRun = nullptr;
+    QWebChannel* m_firstRunChannel = nullptr;
+    void openWelcome();
+    void endWelcome();
+    void writeSetting(const QString& key, const QJsonValue& value);
+    void crossFadeTheme(const std::function<void()>& apply);   // 200 ms snapshot fade (spec "Theme change")
     bool m_edgeCursor = false;
     QSet<QWidget*> m_closing;
     QLabel* m_privateBadge = nullptr;

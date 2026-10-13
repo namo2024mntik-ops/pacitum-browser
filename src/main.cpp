@@ -24,6 +24,7 @@
 #include <QDateTime>
 #include <QMutex>
 #include <QTimer>
+#include <QUrl>
 #include <QTextStream>
 #include <QWindow>
 #include <exception>
@@ -139,6 +140,7 @@ int main(int argc, char *argv[]) {
     installLogging();
     bool smoke = false;
     for (int i = 1; i < argc; ++i) if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
+    const QString launchDir = QDir::currentPath();   // before we switch to the data dir (relative file args)
     setupEnvironment();
     PacitumSchemeHandler::registerScheme();
 
@@ -206,6 +208,12 @@ int main(int argc, char *argv[]) {
     try {
         BrowserWindow w;
         pacitumLog(QStringLiteral("window constructed"));
+        // URLs / files passed on the command line (default-browser handler: "PacitumBrowser.exe" "%1").
+        for (const QString& a : app.arguments().mid(1)) {
+            if (a.startsWith(QLatin1Char('-')) || a.isEmpty()) continue;
+            const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
+            if (u.isValid()) w.openUrlInNewTab(u.toString());
+        }
         w.show();
         pacitumLog(QStringLiteral("window shown: visible=%1 geometry=%2,%3 %4x%5").arg(w.isVisible())
                    .arg(w.geometry().x()).arg(w.geometry().y()).arg(w.width()).arg(w.height()));

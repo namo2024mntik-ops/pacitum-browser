@@ -35,6 +35,7 @@ static PacitumPalette lightPalette() {
 namespace Pacitum {
 static int s_reduceOverride = -1;
 void setReducedMotion(bool on) { s_reduceOverride = on ? 1 : 0; }
+void clearReducedMotionOverride() { s_reduceOverride = -1; }
 bool reducedMotion() {
     if (s_reduceOverride >= 0) return s_reduceOverride == 1;
     static int os = -1;

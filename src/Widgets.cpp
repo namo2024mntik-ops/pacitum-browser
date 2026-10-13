@@ -8,12 +8,14 @@
 #include <QPropertyAnimation>
 #include <QEnterEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QPushButton>
 #include <QHBoxLayout>
 #include <QGuiApplication>
 #include <QLibrary>
 #include <cstdlib>
+#include <QtMath>
 
 static QColor mix(const QColor& a, const QColor& b, qreal t) {
     return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
@@ -25,6 +27,63 @@ AnimatedToolButton::AnimatedToolButton(QWidget* parent) : QToolButton(parent) {
     setAttribute(Qt::WA_Hover, true);
     m_anim.setEasingCurve(QEasingCurve::OutCubic);
     connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_level = v.toReal(); update(); });
+    connect(&m_pressAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_pressScale = v.toReal(); update(); });
+    connect(&m_spinAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_rotation = v.toReal(); update(); });
+    connect(&m_spinAnim, &QVariantAnimation::finished, this, [this]{ m_rotation = 0; update(); });
+    m_spinAnim.setEasingCurve(QEasingCurve::OutCubic);
+    m_fadeAnim.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&m_fadeAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_fade = v.toReal(); update(); });
+    connect(&m_fadeAnim, &QVariantAnimation::finished, this, [this]{ m_prevIcon = QIcon(); m_fade = 1.0; update(); });
+}
+void AnimatedToolButton::animatePress(qreal to, int ms, QEasingCurve::Type ease) {
+    m_pressAnim.stop();
+    if (Pacitum::reducedMotion() || ms <= 0) { m_pressScale = 1.0; update(); return; }   // spec §5: no scale when reduced
+    m_pressAnim.setDuration(ms); m_pressAnim.setEasingCurve(ease);
+    m_pressAnim.setStartValue(m_pressScale); m_pressAnim.setEndValue(to); m_pressAnim.start();
+}
+void AnimatedToolButton::mousePressEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton && isEnabled()) {
+        if (m_anim.state() == QAbstractAnimation::Running) { m_anim.stop(); m_level = 1.0; }   // press during hover-in: bg jumps to 1
+        animatePress(0.92, 60, QEasingCurve::OutCubic);
+    }
+    QToolButton::mousePressEvent(e);
+}
+void AnimatedToolButton::mouseReleaseEvent(QMouseEvent* e) {
+    if (e->button() == Qt::LeftButton) animatePress(1.0, 160, QEasingCurve::OutBack);
+    QToolButton::mouseReleaseEvent(e);
+}
+void AnimatedToolButton::spin() {
+    if (Pacitum::reducedMotion()) return;
+    // Interruption: a second click adds another turn, 400 ms from now, starting at the current angle.
+    const qreal from = m_spinAnim.state() == QAbstractAnimation::Running ? m_rotation : 0.0;
+    const qreal to = m_spinAnim.state() == QAbstractAnimation::Running ? m_spinAnim.endValue().toReal() + 360.0 : 360.0;
+    m_spinAnim.stop(); m_spinAnim.setDuration(400); m_spinAnim.setStartValue(from); m_spinAnim.setEndValue(to); m_spinAnim.start();
+}
+void AnimatedToolButton::setIconAnimated(const QIcon& ic, int ms) {
+    if (ic.cacheKey() == icon().cacheKey()) return;
+    const QIcon old = icon();
+    setIcon(ic);
+    if (Pacitum::reducedMotion() || old.isNull() || !isVisible()) { m_fadeAnim.stop(); m_prevIcon = QIcon(); m_fade = 1.0; update(); return; }
+    m_prevIcon = old;
+    m_fadeAnim.stop(); m_fadeAnim.setDuration(ms); m_fadeAnim.setStartValue(0.0); m_fadeAnim.setEndValue(1.0); m_fadeAnim.start();
+}
+void AnimatedToolButton::paintGlyph(QPainter& p) {
+    const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+    const QSize is = iconSize();
+    const QPointF c(width() / 2.0, height() / 2.0);
+    auto draw = [&](const QIcon& ic, qreal scale, qreal opacity) {
+        if (ic.isNull() || opacity <= 0.001 || scale <= 0.001) return;
+        const QPixmap pm = ic.pixmap(is, devicePixelRatioF(), mode);
+        p.save();
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setOpacity(p.opacity() * opacity);
+        p.translate(c); if (m_rotation != 0.0) p.rotate(m_rotation); p.scale(scale, scale); p.translate(-c);
+        p.drawPixmap(QRectF(c.x() - is.width() / 2.0, c.y() - is.height() / 2.0, is.width(), is.height()), pm, QRectF(pm.rect()));
+        p.restore();
+    };
+    const qreal s = m_pressScale * m_extScale;
+    if (!m_prevIcon.isNull() && m_fade < 1.0) draw(m_prevIcon, s, (1.0 - m_fade) * m_extOpacity);
+    draw(icon(), s * (m_prevIcon.isNull() ? 1.0 : 0.8 + 0.2 * m_fade), (m_prevIcon.isNull() ? 1.0 : m_fade) * m_extOpacity);
 }
 void AnimatedToolButton::animateTo(qreal v) {
     // spec §3/§6: hover in 120 ms, out 160 ms, OutCubic; 0 with reduced motion
@@ -45,8 +104,14 @@ void AnimatedToolButton::paintBackground(QPainter& p) {
     if (bg.alpha() == 0) return;
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen); p.setBrush(bg);
-    if (m_radius > 0) p.drawRoundedRect(QRectF(rect()), m_radius, m_radius);
-    else p.drawRect(rect());
+    QRectF r(rect());
+    const bool down = isDown() || isChecked() || m_forcedDown;
+    if (!down && m_radius > 0 && m_level < 1.0) {   // spec §5: hover bg scales 0.85→1 with its opacity
+        const qreal k = 0.85 + 0.15 * m_level;
+        r = QRectF(r.center().x() - r.width() * k / 2, r.center().y() - r.height() * k / 2, r.width() * k, r.height() * k);
+    }
+    if (m_radius > 0) { const qreal rr = m_radius * r.width() / qMax(1, width()); p.drawRoundedRect(r, rr, rr); }
+    else p.drawRect(r);
 }
 
 void AnimatedToolButton::paintEvent(QPaintEvent*) {
@@ -54,11 +119,8 @@ void AnimatedToolButton::paintEvent(QPaintEvent*) {
     paintBackground(p);
     // icon / text
     QStyleOptionToolButton opt; initStyleOption(&opt);
-    QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
     if (!icon().isNull()) {
-        const QSize is = iconSize();
-        QPixmap pm = icon().pixmap(is, devicePixelRatioF(), mode);
-        p.drawPixmap(QRect(QPoint((width() - is.width()) / 2, (height() - is.height()) / 2), is), pm);
+        paintGlyph(p);
     } else if (!text().isEmpty()) {
         p.setPen(QColor(ThemeManager::current().text));
         p.drawText(rect(), Qt::AlignCenter, text());
@@ -69,6 +131,7 @@ void AnimatedToolButton::paintEvent(QPaintEvent*) {
         p.setPen(QPen(ring, 2)); p.setBrush(Qt::NoBrush);
         p.drawRoundedRect(QRectF(rect()).adjusted(1,1,-1,-1), qMax(0, m_radius - 1), qMax(0, m_radius - 1));
     }
+    paintOverlay(p);
 }
 
 WindowButton::WindowButton(Kind k, QWidget* parent) : AnimatedToolButton(parent), m_kind(k) {
@@ -293,3 +356,60 @@ void InfoBar::animateTo(int h, bool hideAtEnd) {
 }
 void InfoBar::showAnimated() { refresh(); if (isVisible() && maximumHeight() >= 60) return; setMaximumHeight(0); show(); animateTo(60, false); }
 void InfoBar::hideAnimated() { if (!isVisible()) return; animateTo(0, true); }
+
+// ---------- StarButton (animations-spec §3) ----------
+static qreal ease(QEasingCurve::Type t, qreal x, qreal overshoot = -1) {
+    QEasingCurve c(t); if (overshoot > 0) c.setOvershoot(overshoot);
+    return c.valueForProgress(qBound<qreal>(0.0, x, 1.0));
+}
+StarButton::StarButton(QWidget* parent) : AnimatedToolButton(parent) {
+    setFixedSize(34, 34); setIconSize(QSize(18, 18)); setRadius(17);
+    m_tl.setEasingCurve(QEasingCurve::Linear);
+    connect(&m_tl, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ onTick(v.toReal()); });
+    connect(&m_tl, &QVariantAnimation::finished, this, [this]{ m_t = -1; m_pop = false; setGlyphTransform(1.0, 1.0); });
+}
+void StarButton::setIcons(const QIcon& outline, const QIcon& filled) {
+    m_outline = outline; m_filled = filled;
+    if (m_tl.state() != QAbstractAnimation::Running) setIcon(m_on ? m_filled : m_outline);
+    else if (!m_pop || m_swapped) setIcon(m_on ? m_filled : m_outline);
+}
+void StarButton::setStarred(bool on, bool animate) {
+    if (on == m_on && m_tl.state() != QAbstractAnimation::Running) { setIcon(on ? m_filled : m_outline); return; }
+    m_on = on;
+    const qreal cur = m_extScale;
+    m_tl.stop(); m_t = -1; setGlyphTransform(1.0, 1.0);
+    if (!animate || Pacitum::reducedMotion() || !isVisible()) { setIcon(on ? m_filled : m_outline); update(); return; }
+    m_from = cur; m_pop = on; m_swapped = false;
+    if (on) { m_tl.setDuration(380); m_tl.setStartValue(0.0); m_tl.setEndValue(380.0); }
+    else { setIconAnimated(m_outline, 150); m_tl.setDuration(150); m_tl.setStartValue(0.0); m_tl.setEndValue(150.0); }
+    m_tl.start();
+}
+void StarButton::onTick(qreal t) {
+    m_t = t;
+    qreal s = 1.0;
+    if (m_pop) {
+        if (t < 80) s = m_from + (0.8 - m_from) * ease(QEasingCurve::InCubic, t / 80.0);
+        else {
+            if (!m_swapped) { m_swapped = true; setIcon(m_filled); }   // outline → filled accent at 80 ms
+            if (t < 200) s = 0.8 + 0.4 * ease(QEasingCurve::OutBack, (t - 80) / 120.0, 1.2);
+            else if (t < 300) s = 1.2 - 0.2 * ease(QEasingCurve::OutCubic, (t - 200) / 100.0);
+        }
+    } else {   // un-bookmark: scale 1→0.9→1 over 150 ms while the fill cross-fades
+        if (t < 75) s = m_from + (0.9 - m_from) * ease(QEasingCurve::OutCubic, t / 75.0);
+        else s = 0.9 + 0.1 * ease(QEasingCurve::OutCubic, (t - 75) / 75.0);
+    }
+    setGlyphTransform(s, 1.0);
+}
+void StarButton::paintOverlay(QPainter& p) {
+    if (!m_pop || m_t < 80 || m_t > 380) return;
+    const qreal k = ease(QEasingCurve::OutCubic, (m_t - 80) / 300.0);
+    const qreal r = 6 + 9 * k, op = 1.0 - k, d = 3.0 * (1.0 - 0.6 * k);
+    p.save(); p.setRenderHint(QPainter::Antialiasing); p.setPen(Qt::NoPen);
+    QColor c(ThemeManager::current().accent); c.setAlphaF(op); p.setBrush(c);
+    const QPointF ctr(width() / 2.0, height() / 2.0);
+    for (int i = 0; i < 6; ++i) {
+        const qreal a = qDegreesToRadians(i * 60.0 - 90.0);
+        p.drawEllipse(ctr + QPointF(qCos(a) * r, qSin(a) * r), d / 2, d / 2);
+    }
+    p.restore();
+}

@@ -36,6 +36,7 @@ public:
     bool isMuted() const;
     QIcon icon() const { return m_view->icon(); }
     bool isLoading() const { return m_loading; }
+    int loadProgressValue() const { return m_loadValue; }
     void applyWebSettings();
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
@@ -54,8 +55,11 @@ signals:
     void loadingChanged(bool loading);
     void iconChanged();
     void progressChanged(int progress);
+    void loadDone(bool ok);
     void crashed();
 
+private:
+    int m_loadValue = 0;
 private slots:
     void onUrlChanged(const QUrl& url);
     void onTitleChanged(const QString& title);

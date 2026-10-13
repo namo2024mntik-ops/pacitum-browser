@@ -2,6 +2,7 @@
 #include <QString>
 #include <QVector>
 #include <QJsonArray>
+#include <QPair>
 
 struct Bookmark {
     QString title;
@@ -17,6 +18,8 @@ public:
     bool save() const;
 
     bool addBookmark(const QString& title, const QString& url);
+    // Bulk add (import): skips duplicates, saves once. Returns the number added.
+    int addBookmarks(const QVector<QPair<QString, QString>>& titleUrl);
     void removeBookmark(const QString& url);
     bool isBookmarked(const QString& url) const;
     QVector<Bookmark> allBookmarks() const { return m_bookmarks; }

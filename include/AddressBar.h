@@ -6,6 +6,8 @@
 #include <QCompleter>
 #include <QStringListModel>
 #include <QTimer>
+#include <QVariantAnimation>
+class StarButton;
 
 class HistoryManager;
 class ThemeManager;
@@ -20,7 +22,12 @@ public:
     void setUrl(const QString& url);
     QString url() const;
     void focusUrl();
-    void setBookmarked(bool b);
+    void setBookmarked(bool b, bool animate = false);
+    // Omnibox progress bar (animations-spec §7)
+    void progressStarted();
+    void progressChanged(int value);
+    void progressFinished(bool ok);
+    void syncProgress(bool loading, int value);   // tab switch: jump to that tab's state
     void setSuggestionsEnabled(bool e) { m_suggest = e; }
 
 signals:
@@ -29,6 +36,7 @@ signals:
     void securityIconClicked();
 
 protected:
+    void paintEvent(QPaintEvent* e) override;
     bool eventFilter(QObject* o, QEvent* e) override;
 
 private slots:
@@ -50,7 +58,13 @@ private:
     ThemeManager* m_theme = nullptr;
     QLabel* m_securityIcon = nullptr;
     QLineEdit* m_input = nullptr;
-    QToolButton* m_star = nullptr;
+    StarButton* m_star = nullptr;
+    void initProgress();
+    void repaintProgress();
+    QVariantAnimation m_trickle, m_progAnim, m_fadeAnim;
+    QTimer m_fadeDelay;
+    qreal m_prog = 0, m_progOpacity = 0;
+    bool m_progLoading = false, m_progError = false;
     QCompleter* m_completer = nullptr;
     QTimer m_timer;
     QString m_currentUrl;

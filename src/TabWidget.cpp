@@ -104,9 +104,11 @@ void PacitumTabBar::enableFloatingTabs() {
     setFocusPolicy(Qt::TabFocus);
     for (int i = 0; i < count(); ++i) tabInserted(i);
     m_spin = new QVariantAnimation(this);
-    m_spin->setStartValue(0.0); m_spin->setEndValue(360.0); m_spin->setDuration(800); m_spin->setLoopCount(-1);
+    // animations-spec §6: one shared 0→1 loop (1600 ms) for all loading tabs; angle = v·720 (800 ms/turn),
+    // arc span = 90 + 180·sin²(πv) (90→270→90, InOutSine-like halves).
+    m_spin->setStartValue(0.0); m_spin->setEndValue(1.0); m_spin->setDuration(1600); m_spin->setLoopCount(-1);
     connect(m_spin, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
-        m_spinAngle = v.toReal();
+        m_spinV = v.toReal(); m_spinAngle = m_spinV * 720.0;
         for (int i = 0; i < count(); ++i)                          // repaint only the 16 px favicon rects
             if (m_flags.value(idOf(i)).loading) { const QRect r = tabRect(i); update(QRect(r.x() + (isTabPinned(i) ? 10 : 10), r.y() + kTop + 6, 20, 20)); }
     });
@@ -260,10 +262,31 @@ void PacitumTabBar::leaveEvent(QEvent* e) {
 
 void PacitumTabBar::setTabLoading(int index, bool on) {
     if (index < 0 || index >= count()) return;
-    auto& f = m_flags[ensureId(index)];
+    const quint64 id = ensureId(index);
+    auto& f = m_flags[id];
     if (f.loading == on) return;
-    f.loading = on; if (on) f.crashed = false;
+    f.loading = on; if (on) { f.crashed = false; f.waiting = true; m_favIn.remove(id); }
+    else {
+        f.waiting = false;
+        // spec §6: favicon fades in 160 ms OutCubic (scale 0.8→1) when loading finishes
+        if (const int ms = Pacitum::motionMs(160); ms > 0 && animationsEnabled) {
+            m_favIn[id] = 0.0;
+            auto* a = new QVariantAnimation(this);
+            a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+            connect(a, &QVariantAnimation::valueChanged, this, [this, id](const QVariant& v){
+                if (!m_favIn.contains(id)) return;
+                m_favIn[id] = v.toReal(); if (int i = indexOfId(id); i >= 0) update(tabRect(i)); });
+            connect(a, &QVariantAnimation::finished, this, [this, id]{ m_favIn.remove(id); if (int i = indexOfId(id); i >= 0) update(tabRect(i)); });
+            a->start(QAbstractAnimation::DeleteWhenStopped);
+        }
+    }
     updateSpinner(); update(tabRect(index));
+}
+void PacitumTabBar::setTabWaiting(int index, bool on) {
+    if (index < 0 || index >= count()) return;
+    auto& f = m_flags[ensureId(index)];
+    if (!f.loading || f.waiting == on) return;
+    f.waiting = on; update(tabRect(index));
 }
 void PacitumTabBar::setTabAudio(int index, bool audible, bool muted) {
     if (index < 0 || index >= count()) return;
@@ -279,7 +302,7 @@ void PacitumTabBar::updateSpinner() {
     if (!m_spin) return;
     bool any = false;
     for (const auto& f : std::as_const(m_flags)) any |= f.loading;
-    if (any && Pacitum::reducedMotion()) { m_spin->stop(); m_spinAngle = 0; return; }   // static arc
+    if (any && Pacitum::reducedMotion()) { m_spin->stop(); m_spinAngle = 0; m_spinV = 0.5; return; }   // static 270° arc
     if (any && m_spin->state() != QAbstractAnimation::Running) m_spin->start();
     else if (!any) m_spin->stop();
 }
@@ -346,14 +369,23 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
         QPen track(qc(pal.surfaceHover), 2); p->setPen(track); p->setBrush(Qt::NoBrush);
         const QRectF a = iconR.adjusted(1.5, 1.5, -1.5, -1.5);
         p->drawEllipse(a);
-        QPen arc(qc(pal.accent), 2); arc.setCapStyle(Qt::RoundCap); p->setPen(arc);
-        p->drawArc(a, int(-m_spinAngle * 16) + 90 * 16, -90 * 16);
+        QPen arc(qc(fl.waiting ? pal.textTertiary : pal.accent), 2); arc.setCapStyle(Qt::RoundCap); p->setPen(arc);
+        const qreal sn = qSin(3.14159265358979 * m_spinV);
+        const qreal span = 90.0 + 180.0 * sn * sn;
+        // waiting ("connecting"): counter-clockwise, 1000 ms/turn; loading: clockwise, 800 ms/turn
+        const qreal ang = fl.waiting ? -m_spinV * 576.0 : m_spinAngle;
+        p->drawArc(a, int((90.0 - ang) * 16), int(-span * 16));
     } else if (fl.crashed) {
         p->drawPixmap(iconR.toRect(), ThemeManager::icon(QStringLiteral("warning"), pal.danger, 16).pixmap(QSize(16, 16), devicePixelRatioF()));
     } else if (!opt.icon.isNull()) {
         // favicons are clipped to a 4 px radius
         QPainterPath clip; clip.addRoundedRect(iconR, 4, 4);
         p->save(); p->setClipPath(clip, Qt::IntersectClip);
+        if (const qreal fin = m_favIn.value(id, 1.0); fin < 1.0) {   // post-load favicon fade-in
+            const QPointF c = iconR.center(); const qreal k = 0.8 + 0.2 * fin;
+            p->setOpacity(p->opacity() * fin); p->setRenderHint(QPainter::SmoothPixmapTransform);
+            p->translate(c); p->scale(k, k); p->translate(-c);
+        }
         p->drawPixmap(iconR.toRect(), opt.icon.pixmap(QSize(16, 16), devicePixelRatioF()));
         p->restore();
     }
@@ -445,6 +477,7 @@ void PacitumTabBar::mouseDoubleClickEvent(QMouseEvent* e) {
 
 QWidget* PacitumTabWidget::stripNewTabButton() const { return m_stripNewTab; }
 void PacitumTabWidget::setTabLoading(int i, bool on) { if (m_ext) m_ext->setTabLoading(i, on); }
+void PacitumTabWidget::setTabWaiting(int i, bool on) { if (m_ext) m_ext->setTabWaiting(i, on); }
 void PacitumTabWidget::setTabAudio(int i, bool a, bool m) { if (m_ext) m_ext->setTabAudio(i, a, m); }
 void PacitumTabWidget::setTabCrashed(int i, bool on) { if (m_ext) m_ext->setTabCrashed(i, on); }
 

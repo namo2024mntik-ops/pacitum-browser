@@ -36,6 +36,7 @@ public:
     void enableFloatingTabs();
     bool floating() const { return m_floating; }
     void setTabLoading(int index, bool on);
+    void setTabWaiting(int index, bool on);   // before first byte: reversed, tertiary arc (spec §6)
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
     void paintFloatingTab(QPainter* p, const class QStyleOptionTab& opt) const;
@@ -70,7 +71,7 @@ protected:
     void tabLayoutChange() override;
 
 private:
-    struct TabFlags { bool loading = false, audible = false, muted = false, crashed = false; };
+    struct TabFlags { bool loading = false, waiting = false, audible = false, muted = false, crashed = false; };
     quint64 ensureId(int index);
     void setHoverIndex(int i);
     void updateCloseButtons();
@@ -83,6 +84,8 @@ private:
     quint64 m_hoverId = 0;
     QVariantAnimation* m_spin = nullptr;
     qreal m_spinAngle = 0;
+    qreal m_spinV = 0;                        // shared spinner phase 0..1 (1600 ms loop)
+    QHash<quint64, qreal> m_favIn;            // favicon fade-in after load (160 ms)
     bool m_inUpdate = false;
     int m_frozenWidth = 0;                    // keep widths while closing with the mouse (Chrome-like)
     quint64 idOf(int index) const;
@@ -113,6 +116,7 @@ public:
     QWidget* stripLogo() const { return nullptr; }   // 1.5: no standalone logo in the strip
     QWidget* stripNewTabButton() const;
     void setTabLoading(int index, bool on);
+    void setTabWaiting(int index, bool on);
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
     void showTabSearch() { showTabList(); }

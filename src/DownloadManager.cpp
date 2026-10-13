@@ -1,3 +1,4 @@
+#include "Widgets.h"
 #include "DownloadManager.h"
 #include "ThemeManager.h"
 #include "WebProfile.h"
@@ -829,45 +830,115 @@ void DownloadsPopup::showUnder(QWidget* button, bool autoClose) {
 void DownloadsPopup::enterEvent(QEnterEvent* e) { m_hovered = true; m_autoClose->stop(); QWidget::enterEvent(e); }
 void DownloadsPopup::hideEvent(QHideEvent* e) { m_hiddenAt = QDateTime::currentMSecsSinceEpoch(); if (auto* ab = qobject_cast<QAbstractButton*>(m_button.data())) ab->setDown(false); m_autoClose->stop(); QWidget::hideEvent(e); }
 
-// ---------- toolbar badge ----------
+// ---------- toolbar badge (animations-spec §4) ----------
+static qreal ez(QEasingCurve::Type t, qreal x, qreal overshoot = -1) {
+    QEasingCurve c(t); if (overshoot > 0) c.setOvershoot(overshoot);
+    return c.valueForProgress(qBound<qreal>(0.0, x, 1.0));
+}
 DownloadButtonBadge::DownloadButtonBadge(QWidget* button) : QWidget(button) {
     setAttribute(Qt::WA_TransparentForMouseEvents); setAttribute(Qt::WA_NoSystemBackground);
     setGeometry(button->rect());
-    m_timer = new QTimer(this); m_timer->setInterval(50);
-    connect(m_timer, &QTimer::timeout, this, [this]{ update(); if (QDateTime::currentMSecsSinceEpoch() > m_doneUntil && DownloadManager::instance()->activeCount() == 0) m_timer->stop(); });
+    m_ring.setEasingCurve(QEasingCurve::Linear);
+    connect(&m_ring, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_shown = v.toReal(); update(); });
+    m_spin.setStartValue(0.0); m_spin.setEndValue(360.0); m_spin.setDuration(1000); m_spin.setLoopCount(-1);
+    connect(&m_spin, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_spinAngle = v.toReal(); update(); });
+    m_seq.setStartValue(0.0); m_seq.setEndValue(1700.0); m_seq.setDuration(1700);
+    connect(&m_seq, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){
+        m_t = v.toReal();
+        if (m_failed) { update(); return; }
+        // arrow out 0–120 InCubic; back in (cross-fade) 1500–1700 OutCubic
+        if (m_t < 1500) { const qreal k = 1.0 - ez(QEasingCurve::InCubic, m_t / 120.0); setGlyph(k, k); }
+        else { const qreal k = ez(QEasingCurve::OutCubic, (m_t - 1500) / 200.0); setGlyph(1.0, k); }
+        if (m_t >= 200) m_badge = ez(QEasingCurve::OutBack, (m_t - 200) / 160.0);
+        update(); });
+    connect(&m_seq, &QVariantAnimation::finished, this, [this]{ m_t = -1; setGlyph(1, 1); m_active = false; m_failed = false; update(); });
+    m_badgeAnim.setEasingCurve(QEasingCurve::InCubic);
+    connect(&m_badgeAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_badge = v.toReal(); update(); });
+    m_ringFade.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&m_ringFade, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_ringOpacity = v.toReal(); update(); });
     auto* dm = DownloadManager::instance();
-    connect(dm, &DownloadManager::entryChanged, this, [this]{ update(); });
+    connect(dm, &DownloadManager::entryChanged, this, [this]{ onProgress(); });
     connect(dm, &DownloadManager::listChanged, this, [this]{
-        m_alert = false; for (const auto& e : DownloadManager::instance()->entries()) if (e.started.date() == QDate::currentDate() && (e.state == DownloadEntry::Dangerous)) m_alert = true;
-        update(); });
-    connect(dm, &DownloadManager::downloadStarted, this, [this]{ m_timer->start(); update(); });
-    connect(dm, &DownloadManager::downloadFinished, this, [this](qint64 id, bool ok){
-        const auto* e = DownloadManager::instance()->entry(id);
-        if (ok) { m_doneUntil = QDateTime::currentMSecsSinceEpoch() + 1500; m_timer->start(); }
-        else if (e && (e->state == DownloadEntry::Failed || e->state == DownloadEntry::Dangerous)) m_alert = true;
-        update(); });
+        bool alert = false;
+        for (const auto& e : DownloadManager::instance()->entries())
+            if (e.started.date() == QDate::currentDate() && e.state == DownloadEntry::Dangerous) alert = true;
+        if (alert && !m_alert) { m_alert = true; m_badgeDanger = true; m_badge = 1; }
+        onProgress(); });
+    connect(dm, &DownloadManager::downloadStarted, this, [this]{
+        // a new download during the completion sequence: arrow back, ring fades in (150 ms)
+        if (m_seq.state() == QAbstractAnimation::Running) { m_seq.stop(); m_t = -1; setGlyph(1, 1); }
+        m_failed = false; m_active = true;
+        if (Pacitum::reducedMotion()) m_ringOpacity = 1;
+        else { m_ringFade.stop(); m_ringFade.setDuration(150); m_ringFade.setStartValue(0.0); m_ringFade.setEndValue(1.0); m_ringFade.start(); }
+        m_shown = 0; onProgress(); });
+    connect(dm, &DownloadManager::downloadFinished, this, [this](qint64, bool ok){
+        if (DownloadManager::instance()->activeCount() == 0) onAllFinished(ok); else onProgress(); });
+}
+void DownloadButtonBadge::setGlyph(qreal scale, qreal opacity) {
+    if (auto* b = qobject_cast<AnimatedToolButton*>(parentWidget())) b->setGlyphTransform(scale, opacity);
+}
+void DownloadButtonBadge::onProgress() {
+    const double prog = DownloadManager::instance()->aggregateProgress();   // -1 = nothing active
+    if (prog < 0) { m_spin.stop(); update(); return; }
+    m_active = true;
+    const bool indet = prog == 0.0 && DownloadManager::instance()->activeCount() > 0;
+    bool unknown = indet;
+    if (indet) for (const auto& e : DownloadManager::instance()->entries()) if (e.active() && e.total > 0) unknown = false;
+    if (unknown) { if (m_spin.state() != QAbstractAnimation::Running && !Pacitum::reducedMotion()) m_spin.start(); update(); return; }
+    m_spin.stop();
+    if (prog <= m_shown) return;   // never backwards
+    if (Pacitum::reducedMotion()) { m_shown = prog; update(); return; }
+    m_ring.stop(); m_ring.setDuration(200); m_ring.setStartValue(m_shown); m_ring.setEndValue(prog); m_ring.start();
+}
+void DownloadButtonBadge::onAllFinished(bool ok) {
+    m_spin.stop(); m_ring.stop();
+    m_failed = !ok; m_badgeDanger = !ok;
+    if (ok) m_shown = 1.0;
+    if (Pacitum::reducedMotion()) { m_active = false; m_badge = 1; m_t = -1; update(); return; }   // swap to badge instantly
+    m_seq.stop(); m_seq.setStartValue(0.0); m_seq.setEndValue(ok ? 1700.0 : 600.0); m_seq.setDuration(ok ? 1700 : 600);
+    if (!ok) m_badge = 1;
+    m_seq.start();
+}
+void DownloadButtonBadge::clearAlert() {
+    m_alert = false;
+    if (m_badge <= 0) { update(); return; }
+    if (Pacitum::reducedMotion()) { m_badge = 0; update(); return; }
+    m_badgeAnim.stop(); m_badgeAnim.setDuration(120); m_badgeAnim.setStartValue(m_badge); m_badgeAnim.setEndValue(0.0); m_badgeAnim.start();
 }
 void DownloadButtonBadge::paintEvent(QPaintEvent*) {
     if (parentWidget() && size() != parentWidget()->size()) setGeometry(parentWidget()->rect());
     const auto& p = pal();
     QPainter g(this); g.setRenderHint(QPainter::Antialiasing);
-    const double prog = DownloadManager::instance()->aggregateProgress();
-    const QRectF ring = QRectF(rect()).adjusted(4, 4, -4, -4);
-    if (prog >= 0) {
-        QPen track(QColor(p.surfaceHover), 2); g.setPen(track); g.drawEllipse(ring);
-        QPen pen(QColor(p.accent), 2); pen.setCapStyle(Qt::RoundCap); g.setPen(pen);
-        g.drawArc(ring, 90 * 16, -int(qMax(0.02, prog) * 360 * 16));
+    const QPointF c(width() / 2.0, height() / 2.0);
+    const QRectF ring(c.x() - 14, c.y() - 14, 28, 28);   // 2 px stroke, inset 3 px in the 34 px circle
+    // ring: visible while active; fades 200 ms OutCubic at completion (failed: danger 400 ms then fade)
+    qreal ringOp = m_ringOpacity;
+    if (m_t >= 0) ringOp *= m_failed ? (m_t < 400 ? 1.0 : 1.0 - ez(QEasingCurve::OutCubic, (m_t - 400) / 200.0))
+                                     : 1.0 - ez(QEasingCurve::OutCubic, m_t / 200.0);
+    const bool showRing = (m_active || m_t >= 0) && ringOp > 0.01;
+    if (showRing) {
+        g.setOpacity(ringOp);
+        g.setPen(QPen(QColor(p.surface), 2)); g.setBrush(Qt::NoBrush); g.drawEllipse(ring);
+        QPen pen(QColor(m_failed ? p.danger : p.accent), 2); pen.setCapStyle(Qt::RoundCap); g.setPen(pen);
+        if (m_spin.state() == QAbstractAnimation::Running) g.drawArc(ring, int((90 - m_spinAngle) * 16), -90 * 16);
+        else if (m_failed) g.drawEllipse(ring);
+        else g.drawArc(ring, 90 * 16, -int(qMax(0.02, m_shown) * 360 * 16));
+        g.setOpacity(1);
     }
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now < m_doneUntil) {
-        const double t = 1.0 - double(m_doneUntil - now) / 1500.0;
-        const double pulse = 1.0 + 0.25 * qSin(t * M_PI);
-        const QPointF c(width() - 8, height() - 8); const double r = 6 * pulse;
-        g.setPen(Qt::NoPen); g.setBrush(QColor(p.accent)); g.drawEllipse(c, r, r);
-        QPen ck(QColor(p.onAccent), 1.6); ck.setCapStyle(Qt::RoundCap); ck.setJoinStyle(Qt::RoundJoin); g.setPen(ck);
-        QPainterPath path; path.moveTo(c + QPointF(-2.6, 0.2)); path.lineTo(c + QPointF(-0.6, 2.2)); path.lineTo(c + QPointF(2.8, -1.8));
-        g.drawPath(path);
-    } else if (m_alert) {
-        g.setPen(QPen(QColor(p.toolbar), 1.5)); g.setBrush(QColor(p.danger)); g.drawEllipse(QPointF(width() - 8, 8), 4, 4);
+    // check glyph pops in at 120 ms (200 ms OutBack), cross-fades back to the arrow at 1500 ms
+    if (m_t >= 120 && !m_failed) {
+        const qreal k = ez(QEasingCurve::OutBack, (m_t - 120) / 200.0);
+        const qreal op = qMin<qreal>(1.0, (m_t - 120) / 200.0) * (m_t < 1500 ? 1.0 : 1.0 - ez(QEasingCurve::OutCubic, (m_t - 1500) / 200.0));
+        const QPixmap pm = cachedIcon(QStringLiteral("check"), p.accent, 18).pixmap(QSize(18, 18), devicePixelRatioF());
+        g.save(); g.setOpacity(op); g.setRenderHint(QPainter::SmoothPixmapTransform);
+        g.translate(c); g.scale(k, k); g.translate(-c);
+        g.drawPixmap(QRectF(c.x() - 9, c.y() - 9, 18, 18), pm, QRectF(pm.rect()));
+        g.restore();
+    }
+    // badge dot: 8 px accent (danger when failed/dangerous), 2 px chrome ring, top-right
+    if (m_badge > 0.001) {
+        const QPointF bc(c.x() + 9, c.y() - 9); const qreal r = 4 * m_badge;
+        g.setPen(QPen(QColor(p.chrome()), 2 * m_badge)); g.setBrush(QColor(m_badgeDanger ? p.danger : p.accent));
+        g.drawEllipse(bc, r, r);
     }
 }

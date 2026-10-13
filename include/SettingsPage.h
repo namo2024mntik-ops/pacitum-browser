@@ -26,6 +26,7 @@ private:
     QWidget* card(QVBoxLayout* parentLayout, const QString& heading);
     void addRow(QWidget* card, const QString& title, const QString& sub, QWidget* control);
     QWidget* makeSwitch(const QString& key, bool def);
+    void animateSection(QWidget* page);
 
     QWidget* appearancePage();
     QWidget* searchPage();

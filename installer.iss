@@ -1,6 +1,6 @@
 ; Pacitum Browser installer - Inno Setup 6.6+ (CI pins 6.7.1). Design: design-1.5-extra/installer-spec.md
 #define AppName "Pacitum Browser"
-#define AppVer "1.5.1"
+#define AppVer "1.5.2"
 #define AppExe "PacitumBrowser.exe"
 [Setup]
 ; Same AppId as 1.0-1.4: Setup finds the existing install and upgrades it in place.
@@ -97,12 +97,20 @@ Root: HKA; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueNa
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "Launch Pacitum Browser"; Flags: nowait postinstall skipifsilent
+; Built-in updater (1.5.2): the browser runs Setup with /VERYSILENT ... /RELAUNCH=1 and has already
+; exited; start the new version when the silent upgrade is done.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [Code]
 var
   DiskLabel: TNewStaticText;
   DiskBar: TNewProgressBar;
   DesktopCheck: TNewCheckBox;
+
+function RelaunchRequested: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
 
 function WantDesktopIcon: Boolean;
 begin

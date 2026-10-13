@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.5.1 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.5.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +34,9 @@ set(SOURCES
     src/ThemeManager.cpp
     src/PacitumScheme.cpp
     src/FirstRun.cpp
+    src/AppSettings.cpp
+    src/Updater.cpp
+    src/StressTest.cpp
 )
 
 set(HEADERS
@@ -55,6 +58,8 @@ set(HEADERS
     include/ThemeManager.h
     include/PacitumScheme.h
     include/FirstRun.h
+    include/AppSettings.h
+    include/Updater.h
 )
 
 # Resources

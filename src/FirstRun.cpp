@@ -1,6 +1,7 @@
 #include "FirstRun.h"
 #include "BookmarkManager.h"
 #include "HistoryManager.h"
+#include "AppSettings.h"
 #include "ThemeManager.h"
 #include <QDir>
 #include <QFile>
@@ -184,8 +185,12 @@ void FirstRunBridge::startImport(const QString& source, const QStringList& types
         emit importFinished(res);
     });
     HistoryManager* hm = m_hm;
-    w->setFuture(QtConcurrent::run([src, wantBm, wantHv, hm]{ return readSource(src, wantBm, wantHv, hm); }));
+    auto fut = QtConcurrent::run([src, wantBm, wantHv, hm]{ return readSource(src, wantBm, wantHv, hm); });
+    m_future = QFuture<void>(fut);
+    w->setFuture(fut);
 }
+
+void FirstRunBridge::waitForImport() { if (m_future.isValid() && !m_future.isFinished()) m_future.waitForFinished(); }
 
 bool FirstRunBridge::isDefaultBrowser() const {
 #ifdef Q_OS_WIN
@@ -218,19 +223,5 @@ QVariantMap FirstRunBridge::palette() const { return m_hooks.palette ? m_hooks.p
 bool FirstRunBridge::reducedMotion() const { return Pacitum::reducedMotion(); }
 void FirstRunBridge::finish() { markFirstRunDone(); if (m_hooks.finish) m_hooks.finish(); }
 
-bool FirstRunBridge::isFirstRunDone() {
-    QFile f(QStringLiteral("browser_settings.json"));
-    if (!f.open(QIODevice::ReadOnly)) return false;
-    return QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("first_run_done")).toBool(false);
-}
-void FirstRunBridge::markFirstRunDone() {
-    QJsonObject o;
-    {
-        QFile f(QStringLiteral("browser_settings.json"));
-        if (f.open(QIODevice::ReadOnly)) o = QJsonDocument::fromJson(f.readAll()).object();
-    }
-    if (o.value(QStringLiteral("first_run_done")).toBool(false)) return;
-    o[QStringLiteral("first_run_done")] = true;
-    QFile f(QStringLiteral("browser_settings.json"));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(o).toJson(QJsonDocument::Indented));
-}
+bool FirstRunBridge::isFirstRunDone() { return AppSettings::get(QStringLiteral("first_run_done")).toBool(false); }
+void FirstRunBridge::markFirstRunDone() { AppSettings::set(QStringLiteral("first_run_done"), true); }

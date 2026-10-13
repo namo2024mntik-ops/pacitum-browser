@@ -21,22 +21,16 @@
 #include <QWebEngineProfile>
 #include <QtWebEngineCore/qtwebenginecoreglobal.h>
 #include "WebProfile.h"
+#include "Updater.h"
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
+#include <QPointer>
+#include <algorithm>
 
-static const char* kFile = "browser_settings.json";
+#include "AppSettings.h"
 
-QJsonObject SettingsPage::read() {
-    QFile f(QString::fromLatin1(kFile));
-    if (!f.open(QIODevice::ReadOnly)) return {};
-    const auto d = QJsonDocument::fromJson(f.readAll());
-    return d.isObject() ? d.object() : QJsonObject{};
-}
-
-void SettingsPage::write(const QString& key, const QJsonValue& v) {
-    QJsonObject s = read();
-    s[key] = v;
-    QFile f(QString::fromLatin1(kFile));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented));
-}
+QJsonObject SettingsPage::read() { return AppSettings::read(); }
+void SettingsPage::write(const QString& key, const QJsonValue& v) { AppSettings::set(key, v); }
 
 SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
     setObjectName(QStringLiteral("SettingsPage"));
@@ -73,8 +67,30 @@ SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
         it->setSizeHint(QSize(0, 38));
         m_stack->addWidget((this->*sct.fn)());
     }
-    connect(m_nav, &QListWidget::currentRowChanged, m_stack, &QStackedWidget::setCurrentIndex);
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row){ m_stack->setCurrentIndex(row); animateSection(m_stack->currentWidget()); });
     m_nav->setCurrentRow(0);
+}
+
+// Settings items: the section title and each card fade in with a 35 ms stagger (and rise 6 px via
+// a top margin tween). Effects are removed when done, so idle pages cost nothing.
+void SettingsPage::animateSection(QWidget* page) {
+    if (!page || Pacitum::reducedMotion() || Pacitum::motionMs(200) <= 0) return;
+    QList<QWidget*> items;
+    for (auto* w : page->findChildren<QWidget*>()) {
+        const QString n = w->objectName();
+        if (n == QLatin1String("Card") || n == QLatin1String("SettingsH1") || n == QLatin1String("SettingsH2")) items << w;
+    }
+    std::sort(items.begin(), items.end(), [](QWidget* a, QWidget* b){ return a->mapToGlobal(QPoint()).y() < b->mapToGlobal(QPoint()).y(); });
+    int i = 0;
+    for (auto* w : items) {
+        if (w->graphicsEffect()) continue;
+        auto* eff = new QGraphicsOpacityEffect(w); eff->setOpacity(0.0); w->setGraphicsEffect(eff);
+        auto* a = new QPropertyAnimation(eff, "opacity", w);
+        a->setDuration(Pacitum::motionMs(200)); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+        QPointer<QWidget> guard(w);
+        connect(a, &QPropertyAnimation::finished, w, [guard]{ if (guard) guard->setGraphicsEffect(nullptr); });
+        QTimer::singleShot(qMin(i++, 10) * 35, a, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });
+    }
 }
 
 void SettingsPage::showSection(const QString& name) {
@@ -275,5 +291,32 @@ QWidget* SettingsPage::aboutPage() {
     auto* dir = new QLabel(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)); dir->setObjectName(QStringLiteral("RowSub"));
     dir->setTextInteractionFlags(Qt::TextSelectableByMouse);
     addRow(c, QStringLiteral("Profile folder"), QString(), dir);
+
+    // Updates (1.5.2 built-in updater)
+    auto* uc = card(l, QStringLiteral("Updates"));
+    auto* w = new QWidget(); auto* wl = new QHBoxLayout(w); wl->setContentsMargins(0,0,0,0); wl->setSpacing(10);
+    auto* status = new QLabel(Updater::instance()->lastStatus().isEmpty() ? QStringLiteral("You have version %1.").arg(QCoreApplication::applicationVersion())
+                                                                       : Updater::instance()->lastStatus(), w);
+    status->setObjectName(QStringLiteral("RowSub")); status->setWordWrap(true);
+    auto* checkBtn = new QPushButton(QStringLiteral("Check for updates"), w); checkBtn->setCursor(Qt::PointingHandCursor);
+    wl->addWidget(status, 1); wl->addWidget(checkBtn);
+    addRow(uc, QStringLiteral("Pacitum updates"), QString(), w);
+    auto* up = Updater::instance();
+    connect(up, &Updater::statusChanged, status, &QLabel::setText);
+    connect(up, &Updater::checking, checkBtn, [checkBtn]{ checkBtn->setEnabled(false); });
+    connect(up, &Updater::upToDate, checkBtn, [checkBtn](bool){ checkBtn->setEnabled(true); });
+    connect(up, &Updater::checkFailed, checkBtn, [checkBtn](const QString&, bool){ checkBtn->setEnabled(true); });
+    connect(up, &Updater::updateAvailable, checkBtn, [checkBtn](const UpdateInfo&, bool){ checkBtn->setEnabled(true); });
+    connect(checkBtn, &QPushButton::clicked, this, [this]{ emit settingChanged(QStringLiteral("check_updates_now")); });
+    addRow(uc, QStringLiteral("Check for updates automatically"), QStringLiteral("Looks for a new version in the background a few times a day and asks before installing"),
+           makeSwitch(QStringLiteral("auto_check_updates"), true));
+    auto* feed = new QLineEdit(m_s.value(QStringLiteral("update_feed_url")).toString());
+    feed->setPlaceholderText(Updater::feedUrl().toString()); feed->setMinimumWidth(320);
+    connect(feed, &QLineEdit::editingFinished, this, [this, feed]{ write(QStringLiteral("update_feed_url"), feed->text().trimmed()); });
+    addRow(uc, QStringLiteral("Update feed"), QStringLiteral("Advanced: a URL returning a GitHub-style release JSON. Leave empty for the default."), feed);
+
+    auto* pc = card(l, QStringLiteral("Performance"));
+    addRow(pc, QStringLiteral("Freeze background tabs"), QStringLiteral("Pauses pages you haven't looked at for 10 minutes (never tabs playing audio). They resume instantly when you return."),
+           makeSwitch(QStringLiteral("freeze_background_tabs"), true));
     return page;
 }

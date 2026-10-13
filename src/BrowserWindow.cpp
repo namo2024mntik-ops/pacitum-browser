@@ -11,6 +11,11 @@
 #include "BookmarksBar.h"
 #include "BookmarkManager.h"
 #include "HistoryManager.h"
+#include "AppSettings.h"
+#include "Updater.h"
+#include <QShowEvent>
+#include <QScreen>
+#include <QWindow>
 #include "DownloadManager.h"
 #include "ThemeManager.h"
 #include "SessionManager.h"
@@ -97,11 +102,66 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     updateDownloadsButton();
     installPopupFactory();
     qApp->installEventFilter(this);
+    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test"));
+    setupUpdater();
 #ifdef Q_OS_WIN
     // Do NOT force native window creation from the constructor; apply the frame
     // once Qt has created the HWND during show().
     QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });
 #endif
+}
+
+void BrowserWindow::showEvent(QShowEvent* e) {
+#ifdef Q_OS_WIN
+    // Runs before the first ShowWindow: with WS_CAPTION etc. already set, DWM plays the native
+    // open animation, and minimize/maximize/restore animate from the very first time.
+    if (!e->spontaneous()) applyNativeFrame();
+#endif
+    QMainWindow::showEvent(e);
+    if (!m_shownOnce && !e->spontaneous()) {
+        m_shownOnce = true;
+        fadeInContent();
+    }
+}
+
+// Window fade-in on open: a theme-coloured veil over the content fades out (220 ms). Window-level
+// opacity (WS_EX_LAYERED) is deliberately not used: it is incompatible with the GPU swap chain
+// that hosts the web view and would turn the page black.
+void BrowserWindow::fadeInContent() {
+    const int ms = Pacitum::motionMs(220);
+    if (Pacitum::reducedMotion() || ms <= 0 || !centralWidget()) return;
+    auto* veil = new QWidget(this);
+    veil->setAttribute(Qt::WA_TransparentForMouseEvents);
+    veil->setAutoFillBackground(true);
+    QPalette pal = veil->palette(); pal.setColor(QPalette::Window, QColor(m_theme->palette().page)); veil->setPalette(pal);
+    veil->setGeometry(rect()); veil->show(); veil->raise();
+    auto* eff = new QGraphicsOpacityEffect(veil); eff->setOpacity(1.0); veil->setGraphicsEffect(eff);
+    auto* a = new QPropertyAnimation(eff, "opacity", veil);
+    a->setDuration(ms); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    connect(a, &QPropertyAnimation::finished, veil, &QObject::deleteLater);
+    QTimer::singleShot(30, veil, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });   // after the first frame
+}
+
+void BrowserWindow::setupUpdater() {
+    m_updater = Updater::instance();
+    connect(m_updater, &Updater::updateAvailable, this, [this](const UpdateInfo& info, bool user){
+        if (!user && AppSettings::get(QStringLiteral("update_skipped_version")).toString() == info.version) return;
+        if (!user && (m_chromeHidden || !isActiveWindow())) {   // don't interrupt fullscreen video or another app
+            m_pendingUpdatePrompt = true; return;
+        }
+        showUpdatePrompt(info);
+    });
+    connect(m_updater, &Updater::upToDate, this, [this](bool user){ if (user) statusBar()->showMessage(m_updater->lastStatus(), 4000); });
+    connect(m_updater, &Updater::checkFailed, this, [this](const QString& err, bool user){ if (user) statusBar()->showMessage(tr("Update check failed: %1").arg(err), 6000); });
+    if (!m_noBackgroundUpdates) m_updater->setAutoCheck(AppSettings::get(QStringLiteral("auto_check_updates")).toBool(true));
+    if (qApp->arguments().contains(QStringLiteral("--check-updates"))) QTimer::singleShot(1500, m_updater, [this]{ m_updater->check(true); });
+}
+
+void BrowserWindow::showUpdatePrompt(const UpdateInfo& info) {
+    m_pendingUpdatePrompt = false;
+    if (m_updateDialog) { m_updateDialog->raise(); m_updateDialog->activateWindow(); return; }
+    m_updateDialog = new UpdateDialog(info, this);
+    m_updateDialog->show();
 }
 
 void BrowserWindow::installPopupFactory() {
@@ -115,6 +175,8 @@ void BrowserWindow::installPopupFactory() {
 
 BrowserWindow::~BrowserWindow() {
     qApp->removeEventFilter(this);
+    if (m_firstRun) m_firstRun->waitForImport();   // the import worker writes into m_history
+    if (m_updater) m_updater->disconnect(this);
     delete m_history; delete m_bookmarks; delete m_theme; delete m_session;
 }
 
@@ -472,13 +534,17 @@ void BrowserWindow::newTab(const QString& url) {
     connect(tab, &BrowserTab::urlChanged, this, [this, tab]{ updateTabIcon(tab); });
     connect(tab, &BrowserTab::fullScreenRequested, this, [this, tab](QWebEngineFullScreenRequest req){
         if (req.toggleOn()) {
+            // Only the tab the user is looking at may take the screen: requests from background
+            // tabs, closing tabs or a minimized window used to hide the chrome for the wrong tab.
+            if (tab != activeTab() || m_closing.contains(tab) || isMinimized() || !isVisible()) { req.reject(); return; }
             req.accept();
             m_fullscreenTab = tab;
             m_pageFullscreen = true;
+            tab->setNoFreeze(true);
             enterContentFullscreen(true);
         } else {
             req.accept();
-            if (m_pageFullscreen && m_fullscreenTab == tab) { m_pageFullscreen = false; m_fullscreenTab.clear(); exitContentFullscreen(); }
+            if (m_pageFullscreen && m_fullscreenTab == tab) finishExitFullscreen();
         }
     });
     connect(tab, &BrowserTab::crashed, this, [this, tab]{ const int i = m_tabs->indexOf(tab); if (i >= 0) m_tabs->setTabCrashed(i, true); });
@@ -511,6 +577,7 @@ void BrowserWindow::closeTab(int index) {
     if (m_closing.contains(w)) return;
     if (m_tabs->count() == 1 && !m_splitActive) { close(); return; }
     m_closing.insert(w);
+    if (m_chromeHidden && m_pageFullscreen && m_fullscreenTab == w) finishExitFullscreen();   // closing the fullscreen tab
     if (auto* bt = qobject_cast<BrowserTab*>(w); bt && bt->currentUrl().startsWith(QStringLiteral("pacitum://welcome")))
         endWelcome();   // closing the welcome tab = "Skip all" (defaults kept, flag set)
     QPointer<QWidget> guard(w);
@@ -540,6 +607,9 @@ void BrowserWindow::onTabChanged(int index) {
     if (!sender || index < 0) return;
     m_activeWidget = sender;
     QWidget* w = sender->widget(index);
+    // Switching tabs while a page is fullscreen (Ctrl+Tab, a popup opening a tab): leave fullscreen
+    // so the new tab is never shown without chrome.
+    if (m_pageFullscreen && m_fullscreenTab && w != m_fullscreenTab && sender == m_tabs) finishExitFullscreen();
     if (auto* tab = qobject_cast<BrowserTab*>(w)) {
         updateAddressBar(tab->currentUrl());
         m_addressBar->syncProgress(tab->isLoading(), tab->loadProgressValue());
@@ -701,6 +771,13 @@ void BrowserWindow::onSettingChanged(const QString& key) {
         loadSettings();
     } else if (key == QStringLiteral("pin_downloads_button")) {
         updateDownloadsButton();
+    } else if (key == QStringLiteral("auto_check_updates")) {
+        if (m_updater && !m_noBackgroundUpdates) m_updater->setAutoCheck(s.value(key).toBool(true));
+    } else if (key == QStringLiteral("check_updates_now")) {
+        if (m_updater) m_updater->check(true);
+    } else if (key == QStringLiteral("freeze_background_tabs")) {
+        BrowserTab::s_freezeEnabled = s.value(key).toBool(true);
+        if (!BrowserTab::s_freezeEnabled) forTabs([](BrowserTab* t){ t->ensureActive(); });
     } else if (key == QStringLiteral("show_suggestions")) {
         m_addressBar->setSuggestionsEnabled(s.value(key).toBool(true));
     }
@@ -844,11 +921,8 @@ void BrowserWindow::toggleVerticalTabs() { m_verticalTabs = !m_verticalTabs; m_t
 // remember the window state, hide tab strip / toolbar / bookmarks bar (the window is frameless, so
 // no frame remains), go truly fullscreen; on exit put the chrome back and restore the old state.
 void BrowserWindow::toggleFullscreen() {
-    if (m_chromeHidden) {
-        if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view())
-            m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);   // page's exit callback restores
-        else exitContentFullscreen();
-    } else enterContentFullscreen(false);
+    if (m_chromeHidden) exitContentFullscreen();
+    else enterContentFullscreen(false);
 }
 
 void BrowserWindow::enterContentFullscreen(bool) {
@@ -856,20 +930,45 @@ void BrowserWindow::enterContentFullscreen(bool) {
         m_preFullscreenState = windowState() & ~(Qt::WindowFullScreen | Qt::WindowMinimized);
         setChromeHidden(true);
     }
-    if (!isFullScreen()) showFullScreen();
+    // Transition guard: while Windows moves from maximized to fullscreen it can report an
+    // intermediate "restored" state; 1.5.1 took that as "the user left fullscreen" and undid it,
+    // which is why website fullscreen from a maximized window sometimes failed.
+    m_fsTransition = true;
+    QTimer::singleShot(600, this, [this]{ m_fsTransition = false; });
+    if (!isFullScreen()) setWindowState((windowState() & ~Qt::WindowMinimized) | Qt::WindowFullScreen);
+    if (!isVisible()) show();
+#ifdef Q_OS_WIN
+    QTimer::singleShot(60, this, [this]{ ensureFullscreenCoversMonitor(); });
+#endif
     if (m_fullscreenTab && m_fullscreenTab->view()) m_fullscreenTab->view()->setFocus();
 }
 
+// Esc / F11 / menu: during website fullscreen ask the page to leave (its toggleOn=false request
+// calls finishExitFullscreen). If the page never answers (crashed renderer, page navigated away,
+// state already out of sync) a fallback restores the window anyway, so it can't get stuck.
 void BrowserWindow::exitContentFullscreen() {
     if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view()) {
-        // Esc / F11 during website fullscreen: ask the page to leave; its toggleOn=false request lands here again.
+        QPointer<BrowserTab> t = m_fullscreenTab;
         m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);
+        QTimer::singleShot(500, this, [this, t]{ if (m_chromeHidden && m_pageFullscreen && m_fullscreenTab == t) finishExitFullscreen(); });
         return;
     }
+    finishExitFullscreen();
+}
+
+void BrowserWindow::finishExitFullscreen() {
+    if (m_fullscreenTab) m_fullscreenTab->setNoFreeze(false);
+    const bool wasPage = m_pageFullscreen;
+    QPointer<BrowserTab> t = m_fullscreenTab;
     m_pageFullscreen = false; m_fullscreenTab.clear();
+    m_fsTransition = false;
+    if (wasPage && t && t->view()) t->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);   // keep the page's own state in sync (no-op if already out)
     if (!m_chromeHidden) return;
     setChromeHidden(false);
-    if (m_preFullscreenState & Qt::WindowMaximized) showMaximized(); else showNormal();
+    if (isFullScreen()) setWindowState(m_preFullscreenState & ~Qt::WindowFullScreen);
+#ifdef Q_OS_WIN
+    QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });   // Qt's fullscreen code swaps window styles
+#endif
 }
 
 void BrowserWindow::setChromeHidden(bool hidden) {
@@ -992,27 +1091,10 @@ void BrowserWindow::applyToolbarTheme(){
     m_toolbar->setStyleSheet(QString());
 }
 
-// Settings are read from many UI paths (menus, toolbar updates, tab changes). Re-parsing the JSON
-// file each time was synchronous disk I/O on the UI thread; cache it and only re-read when the
-// file's size/mtime changed (other components such as the settings page write it directly).
-QJsonObject BrowserWindow::readSettings() const {
-    const QFileInfo fi(QStringLiteral("browser_settings.json"));
-    if (!fi.exists()) { m_settingsCache = {}; m_settingsStamp = {}; m_settingsSize = -1; return {}; }
-    const QDateTime stamp = fi.lastModified();
-    if (m_settingsSize == fi.size() && m_settingsStamp == stamp) return m_settingsCache;
-    QFile f(fi.filePath()); if(!f.open(QIODevice::ReadOnly)) return {};
-    auto doc=QJsonDocument::fromJson(f.readAll());
-    m_settingsCache = doc.isObject()?doc.object():QJsonObject{};
-    m_settingsStamp = stamp; m_settingsSize = fi.size();
-    return m_settingsCache;
-}
-
-void BrowserWindow::writeSettingsFile(const QJsonObject& s) {
-    if (s == readSettings()) return;   // unchanged: skip the write entirely
-    QSaveFile f(QStringLiteral("browser_settings.json"));   // atomic: no half-written file on crash
-    if (f.open(QIODevice::WriteOnly) && f.write(QJsonDocument(s).toJson(QJsonDocument::Indented)) >= 0) f.commit();
-    m_settingsSize = -1;   // force re-stat on next read
-}
+// Settings: one shared owner (AppSettings) so this window, the settings page and the welcome flow
+// never overwrite each other's changes with stale copies.
+QJsonObject BrowserWindow::readSettings() const { return AppSettings::read(); }
+void BrowserWindow::writeSettingsFile(const QJsonObject& s) { AppSettings::write(s); }
 
 void BrowserWindow::loadSettings(){
     auto s=readSettings();
@@ -1032,6 +1114,7 @@ void BrowserWindow::loadSettings(){
     m_adblock->setEnabled(s.value(QStringLiteral("adblock_enabled")).toBool(true));
     m_adblock->setDoNotTrack(s.value(QStringLiteral("do_not_track")).toBool(false));
     m_animations = s.value(QStringLiteral("animations")).toBool(true);
+    BrowserTab::s_freezeEnabled = s.value(QStringLiteral("freeze_background_tabs")).toBool(true);
     // "reduce_motion" (or animations off) -> every spec duration becomes 0 (spec §6)
     // (was: only ever switched *on*, so turning the setting off again needed a restart)
     if (!m_animations || s.value(QStringLiteral("reduce_motion")).toBool(false)) Pacitum::setReducedMotion(true);
@@ -1113,15 +1196,21 @@ void BrowserWindow::changeEvent(QEvent* e) {
         if (minimized) m_spinTimer->stop();
         else if (m_tabs) for (int i = 0; i < m_tabs->count(); ++i)
             if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->isLoading()) { updateTabIcon(t); }
-        // The OS/user left fullscreen some other way (e.g. Win+Down): bring the chrome back.
-        if (m_chromeHidden && !isFullScreen() && !minimized) {
-            if (m_pageFullscreen && m_fullscreenTab && m_fullscreenTab->view())
-                m_fullscreenTab->view()->triggerPageAction(QWebEnginePage::ExitFullScreen);
-            m_pageFullscreen = false; m_fullscreenTab.clear();
-            setChromeHidden(false);
+        // The OS/user left fullscreen some other way (Win+Down, Win+Shift+arrows, display change):
+        // bring the chrome back. Checked a moment later and never during our own transition, because
+        // Windows reports intermediate states while it changes maximized <-> fullscreen.
+        if (m_chromeHidden && !minimized && !m_fsTransition) {
+            QTimer::singleShot(150, this, [this]{
+                if (m_chromeHidden && !m_fsTransition && !isFullScreen() && !isMinimized()) finishExitFullscreen();
+            });
         }
+
     }
-    if (e->type() == QEvent::ActivationChange && isActiveWindow()) installPopupFactory();
+    if (e->type() == QEvent::ActivationChange && isActiveWindow()) {
+        installPopupFactory();
+        if (m_pendingUpdatePrompt && !m_chromeHidden && m_updater && m_updater->latest().valid())
+            QTimer::singleShot(800, this, [this]{ if (m_pendingUpdatePrompt && isActiveWindow() && !m_chromeHidden) showUpdatePrompt(m_updater->latest()); });
+    }
     QMainWindow::changeEvent(e);
 }
 
@@ -1138,7 +1227,7 @@ bool BrowserWindow::isCaptionArea(const QPoint& local) const {
 }
 
 Qt::Edges BrowserWindow::edgesAt(const QPoint& global) const {
-    if (isMaximized() || isFullScreen()) return {};
+    if (isMaximized() || isFullScreen() || m_chromeHidden) return {};
     const int b = 6;
     const QRect r = frameGeometry();
     Qt::Edges e;
@@ -1159,6 +1248,20 @@ bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
         }
     }
     if (o == m_toolbar && e->type() == QEvent::Resize) updateToolbarOverflow();
+#ifdef Q_OS_WIN
+    // Maximized: the caption is client area (see WM_NCHITTEST), so double-click -> restore and
+    // right-click -> system menu are done here. Nothing in this path can start a move.
+    if ((e->type() == QEvent::MouseButtonDblClick || e->type() == QEvent::MouseButtonRelease) && isMaximized() && !m_chromeHidden) {
+        auto* w = qobject_cast<QWidget*>(o);
+        auto* me = static_cast<QMouseEvent*>(e);
+        if (w && w->window() == this && isCaptionArea(mapFromGlobal(me->globalPosition().toPoint()))) {
+            if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton) { showNormal(); return true; }
+            if (e->type() == QEvent::MouseButtonRelease && me->button() == Qt::RightButton) {
+                POINT pt; GetCursorPos(&pt); showSystemMenu(pt.x, pt.y); return true;
+            }
+        }
+    }
+#endif
 #ifndef Q_OS_WIN
     // Frameless resize/move for non-Windows platforms via the compositor (startSystemResize/Move).
     if (e->type() == QEvent::MouseMove || e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick) {
@@ -1179,8 +1282,8 @@ bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
             } else if (e->type() == QEvent::MouseButtonPress && me->button() == Qt::LeftButton) {
                 if (edges) { windowHandle()->startSystemResize(edges); return true; }
                 // Locked while maximized/fullscreen: a caption drag must not move or un-maximize the window.
-                if (isCaptionArea(mapFromGlobal(g))) { if (!isMaximized() && !isFullScreen()) windowHandle()->startSystemMove(); return true; }
-            } else if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton && !isFullScreen() && isCaptionArea(mapFromGlobal(g))) {
+                if (isCaptionArea(mapFromGlobal(g))) { if (!isMaximized() && !isFullScreen() && !m_chromeHidden) windowHandle()->startSystemMove(); return true; }
+            } else if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton && !isFullScreen() && !m_chromeHidden && isCaptionArea(mapFromGlobal(g))) {
                 isMaximized() ? showNormal() : showMaximized(); return true;
             }
         }
@@ -1246,6 +1349,7 @@ static int autoHideTaskbarEdge(HMONITOR mon) {
 void BrowserWindow::applyNativeFrame() {
     HWND hwnd = reinterpret_cast<HWND>(internalWinId());
     if (!hwnd) return;   // not created yet; never create from here
+    if (isFullScreen() || m_chromeHidden) return;   // fullscreen uses Qt's popup style (taskbar must hide)
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
     // 1px of DWM frame keeps the native drop shadow (and Win11 snap highlight) on the frameless window.
@@ -1255,6 +1359,25 @@ void BrowserWindow::applyNativeFrame() {
     const int pref = DWMWCP_ROUND;
     DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+}
+
+bool BrowserWindow::moveLocked() const {
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    return isMaximized() || isFullScreen() || m_chromeHidden || m_fsTransition || (hwnd && IsZoomed(hwnd));
+}
+
+// Fullscreen entered from maximized sometimes kept the work-area size (taskbar still visible):
+// make sure the window really covers its monitor.
+void BrowserWindow::ensureFullscreenCoversMonitor() {
+    if (!isFullScreen()) return;
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    if (!hwnd) return;
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi)) return;
+    RECT wr; GetWindowRect(hwnd, &wr);
+    if (!EqualRect(&wr, &mi.rcMonitor))
+        SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
 }
 
 QPoint BrowserWindow::nativeToLocal(void* h, long x, long y) const {
@@ -1305,7 +1428,7 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
     case WM_NCCALCSIZE:
         if (msg->wParam == TRUE) {
             auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-            if (IsZoomed(hwnd) && !isFullScreen()) {
+            if (IsZoomed(hwnd) && !isFullScreen() && !m_chromeHidden) {
                 // A maximized window is placed with its resize border off-screen: clamp the client
                 // area to the monitor work area (correct per-monitor, respects docked taskbars).
                 HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -1330,7 +1453,7 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         }
         break;
     case WM_NCHITTEST: {
-        if (isFullScreen()) { *result = HTCLIENT; return true; }
+        if (isFullScreen() || m_chromeHidden || m_fsTransition) { *result = HTCLIENT; return true; }
         const LONG x = GET_X_LPARAM(msg->lParam), y = GET_Y_LPARAM(msg->lParam);
         if (!IsZoomed(hwnd)) {
             // All 8 resize zones, DPI-scaled for the current monitor. Corners get a larger grab area
@@ -1352,7 +1475,10 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         const QPoint local = nativeToLocal(hwnd, x, y);
         // HTMAXBUTTON makes Windows 11 show the snap-layouts flyout when hovering maximize.
         if (overMaxButton(local)) { *result = HTMAXBUTTON; return true; }
-        if (isCaptionArea(local)) { *result = HTCAPTION; return true; }   // drag, double-click, snap, shake
+        // Maximized: the empty caption is reported as client area, so Windows has nothing to drag --
+        // for every input path (mouse, touch, pen, drag-to-restore, Aero shake). Double-click
+        // (restore) and right-click (system menu) are handled in eventFilter instead.
+        if (isCaptionArea(local)) { *result = IsZoomed(hwnd) ? HTCLIENT : HTCAPTION; return true; }
         *result = HTCLIENT;
         return true;
     }
@@ -1377,7 +1503,7 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         // Window is locked while maximized: swallow the caption press so DefWindowProc never starts
         // a move loop (which would drag the window out of maximized / snap it). Double-click
         // (WM_NCLBUTTONDBLCLK) still restores, and the window stays draggable when restored.
-        if (msg->wParam == HTCAPTION && (IsZoomed(hwnd) || isFullScreen())) {
+        if (msg->wParam == HTCAPTION && moveLocked()) {
             SetForegroundWindow(hwnd);
             *result = 0; return true;
         }
@@ -1410,7 +1536,8 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         break;
     case WM_SYSCOMMAND:
         // No keyboard/system-menu "Move" or "Size" while maximized or fullscreen.
-        if (((msg->wParam & 0xFFF0) == SC_MOVE || (msg->wParam & 0xFFF0) == SC_SIZE) && (IsZoomed(hwnd) || isFullScreen())) { *result = 0; return true; }
+        if (((msg->wParam & 0xFFF0) == SC_MOVE || (msg->wParam & 0xFFF0) == SC_SIZE) && moveLocked()) { *result = 0; return true; }
+        // Entering fullscreen from a minimized/maximized window via the system menu etc. is ours.
         // Alt+Space: show the system menu under the top-left of our caption.
         if ((msg->wParam & 0xFFF0) == SC_KEYMENU && msg->lParam == VK_SPACE) {
             RECT wr; GetWindowRect(hwnd, &wr);
@@ -1418,6 +1545,24 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
             const qreal dpr = windowHandle() ? windowHandle()->devicePixelRatio() : 1.0;
             showSystemMenu(wr.left + off, wr.top + off + qRound(40 * dpr));
             *result = 0; return true;
+        }
+        break;
+    case WM_ENTERSIZEMOVE: m_inSizeMove = true; break;
+    case WM_EXITSIZEMOVE:  m_inSizeMove = false; break;
+    case WM_WINDOWPOSCHANGING:
+        // Last line of defence: if a move loop was started anyway while locked, pin the window.
+        if (m_inSizeMove && moveLocked()) {
+            auto* wp = reinterpret_cast<WINDOWPOS*>(msg->lParam);
+            wp->flags |= SWP_NOMOVE | SWP_NOSIZE;
+        }
+        break;
+    case WM_STYLECHANGING:
+        // Keep WS_CAPTION / WS_THICKFRAME / WS_MINIMIZEBOX / WS_MAXIMIZEBOX whenever we are not
+        // fullscreen: they are what makes DWM play the native minimize / maximize / restore
+        // animations (and Snap) on this frameless window. WM_NCCALCSIZE hides the caption itself.
+        if (msg->wParam == WPARAM(GWL_STYLE) && !isFullScreen() && !m_chromeHidden && !m_fsTransition) {
+            auto* ss = reinterpret_cast<STYLESTRUCT*>(msg->lParam);
+            ss->styleNew |= WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
         }
         break;
     case WM_DWMCOMPOSITIONCHANGED:

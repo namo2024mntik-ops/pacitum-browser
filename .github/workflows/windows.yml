@@ -1,5 +1,7 @@
 name: Build Windows EXE
 on: [push, workflow_dispatch]
+permissions:
+  contents: write   # tag builds attach the installer + .sha256 to an existing release (updater feed)
 jobs:
   build:
     runs-on: windows-latest
@@ -59,7 +61,27 @@ jobs:
           Get-Content smoke\crash.log -ErrorAction SilentlyContinue
           Get-ChildItem dist -Name | Out-File smoke\dist-files.txt
           Get-ChildItem dist -Recurse -Name | Out-File -Append smoke\dist-files.txt
+          $tl = Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-String 'window exposed \(time-to-window\)' | Select-Object -First 1
+          "time-to-window: $tl" | Tee-Object smoke\timing.txt
           if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+      - name: Stress test (tabs, switching, fullscreen, loads)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--stress-test' -PassThru
+          if (-not $p.WaitForExit(180000)) { Write-Host "stress test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          New-Item -ItemType Directory -Force stress | Out-Null
+          Copy-Item "$log\startup.log" stress\startup.log -ErrorAction SilentlyContinue
+          Copy-Item "$log\crash.log" stress\crash.log -ErrorAction SilentlyContinue
+          Get-Content stress\startup.log -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch 'user gesture' } | Select-Object -Last 25
+          Get-Content stress\crash.log -ErrorAction SilentlyContinue
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path stress\startup.log -Pattern 'STRESS OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path stress\crash.log)) { Write-Error "STRESS TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: stress-test, path: stress/, if-no-files-found: ignore }
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }
@@ -70,9 +92,25 @@ jobs:
           choco install innosetup --version 6.7.1 -y --no-progress
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # SHA256 next to the installer ("<hash>  <file>", sha256sum format): the built-in updater
+          # verifies the download against the "<installer>.exe.sha256" release asset.
+          Get-ChildItem installer -Filter *.exe | ForEach-Object {
+            $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$h  $($_.Name)" | Set-Content -NoNewline -Encoding ascii "$($_.FullName).sha256"
+            Write-Host "$h  $($_.Name)  $($_.Length) bytes"
+          }
+      - name: Attach installer + SHA256 to the release (tag builds)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" *> $null
+          if ($LASTEXITCODE -ne 0) { Write-Host "no release for ${{ github.ref_name }} yet; skipping upload"; exit 0 }
+          gh release upload "${{ github.ref_name }}" (Get-ChildItem installer -File).FullName --clobber --repo "${{ github.repository }}"
       - name: Installer pages + in-place upgrade check
         shell: pwsh
         continue-on-error: true
+        timeout-minutes: 12
         run: |
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
           New-Item -ItemType Directory -Force installer-shots | Out-Null
@@ -84,12 +122,26 @@ jobs:
           }
           $setup = (Get-ChildItem installer -Filter *.exe | Select-Object -First 1).FullName
           $ws = New-Object -ComObject WScript.Shell
-          function Key($k) { [void]$ws.AppActivate('Setup - Pacitum Browser'); Start-Sleep -Milliseconds 300; $ws.SendKeys($k) }
+          # AppActivate can fail while the runner console holds the foreground; SendKeys then goes
+          # to the console and the wizard stalls (seen on the location page in 1.5.1). Retry until
+          # the wizard is in front, and confirm each page change below.
+          function Key($k) {
+            for ($t = 0; $t -lt 10 -and -not $ws.AppActivate('Setup - Pacitum Browser'); $t++) { Start-Sleep -Milliseconds 300 }
+            Start-Sleep -Milliseconds 300; $ws.SendKeys($k)
+          }
+          $appDir = "$env:LOCALAPPDATA\Programs\Pacitum Browser"
           # 1) interactive per-user install, screenshot every page
           $p = Start-Process $setup -ArgumentList '/CURRENTUSER' -PassThru
           Start-Sleep 5; Shot '1-welcome'
           Key '{ENTER}'; Start-Sleep 3; Shot '2-location'
-          Key '{ENTER}'; Start-Sleep -Milliseconds 700; Shot '3-progress'
+          # location page -> Install: press Enter until Setup has started writing files (max 5 tries)
+          for ($t = 0; $t -lt 5; $t++) {
+            Key '{ENTER}'
+            for ($w = 0; $w -lt 8 -and -not (Test-Path $appDir); $w++) { Start-Sleep -Milliseconds 250 }
+            if (Test-Path $appDir) { break }
+            Write-Host "location page: Enter #$($t+1) didn't start the install; retrying"
+          }
+          Start-Sleep -Milliseconds 300; Shot '3-progress'
           for ($i = 0; $i -lt 90 -and -not (Test-Path "$env:LOCALAPPDATA\Programs\Pacitum Browser\unins000.exe"); $i++) { Start-Sleep 1 }
           Start-Sleep 4; Shot '4-finish'
           Key ' '; Start-Sleep 1; Key '{ENTER}'     # untick "Launch", Finish
@@ -104,6 +156,15 @@ jobs:
           "uninstall entries after re-install: $(@($keys).Count)" | Tee-Object -Append installer-shots\upgrade-check.txt
           Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue | Out-String | Tee-Object -Append installer-shots\upgrade-check.txt
           if (@($keys).Count -ne 1) { Write-Error "expected exactly one uninstall entry"; exit 1 }
+          # 3) what the built-in updater does: silent upgrade with /RELAUNCH=1 must start the browser again
+          # (not Start-Process -Wait: that also waits for the relaunched browser, i.e. forever)
+          $u = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS','/RELAUNCH=1' -PassThru
+          if (-not $u.WaitForExit(180000)) { Write-Host "silent upgrade did not finish in 180 s" }
+          $relaunched = $false
+          for ($i = 0; $i -lt 40 -and -not $relaunched; $i++) { Start-Sleep -Milliseconds 500; $relaunched = [bool](Get-Process PacitumBrowser -ErrorAction SilentlyContinue) }
+          "updater-style silent upgrade relaunched the browser: $relaunched" | Tee-Object -Append installer-shots\upgrade-check.txt
+          Start-Sleep 3; Shot '5-relaunched'
+          Get-Process PacitumBrowser -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: installer-screens, path: installer-shots/, if-no-files-found: ignore }

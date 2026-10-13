@@ -24,6 +24,8 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <windowsx.h>
+#include <dwmapi.h>
+#include <shellapi.h>
 #endif
 #include "PacitumScheme.h"
 #include <QWidgetAction>
@@ -52,6 +54,7 @@
 #include <QKeyEvent>
 #include <QStyle>
 #include <QTimer>
+#include <QtMath>
 #include <QUrl>
 #include <QDir>
 #include <QWebEngineView>
@@ -83,11 +86,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     installPopupFactory();
     qApp->installEventFilter(this);
 #ifdef Q_OS_WIN
-    // Keep native resize border, Aero Snap, min/max animations while drawing our own caption.
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
-    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+    applyNativeFrame();
 #endif
 }
 
@@ -879,43 +878,229 @@ bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
 }
 
 #ifdef Q_OS_WIN
+// ---------------------------------------------------------------------------------------------
+// Windows frameless caption. The window keeps WS_THICKFRAME|WS_CAPTION so Windows provides Aero
+// Snap, Win+arrows, min/max animations, the DWM shadow and snap layouts; WM_NCCALCSIZE makes the
+// whole window client area and WM_NCHITTEST tells Windows which parts are border/caption/buttons.
+// ---------------------------------------------------------------------------------------------
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+#ifndef DWMWCP_ROUND
+#define DWMWCP_ROUND 2
+#endif
+#ifndef WM_NCMOUSELEAVE
+#define WM_NCMOUSELEAVE 0x02A2
+#endif
+
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+#ifndef ABM_GETAUTOHIDEBAREX
+#define ABM_GETAUTOHIDEBAREX 0x0000000b
+#endif
+
+// Per-monitor DPI helpers, resolved at runtime (Windows 10 1607+) with a system-DPI fallback.
+using GetDpiForWindowFn = UINT (WINAPI*)(HWND);
+using GetSystemMetricsForDpiFn = int (WINAPI*)(int, UINT);
+static UINT windowDpi(HWND hwnd) {
+    static auto fn = reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+    UINT dpi = fn ? fn(hwnd) : 0;
+    if (!dpi) { HDC dc = GetDC(nullptr); dpi = UINT(GetDeviceCaps(dc, LOGPIXELSX)); ReleaseDC(nullptr, dc); }
+    return dpi ? dpi : 96;
+}
+static int metricForDpi(int index, UINT dpi) {
+    static auto fn = reinterpret_cast<GetSystemMetricsForDpiFn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetSystemMetricsForDpi"));
+    if (fn) return fn(index, dpi);
+    return MulDiv(GetSystemMetrics(index), int(dpi), 96);
+}
+// Resize border thickness in physical pixels for the monitor the window is on.
+static int resizeBorder(HWND hwnd, bool horizontal) {
+    const UINT dpi = windowDpi(hwnd);
+    return metricForDpi(horizontal ? SM_CXSIZEFRAME : SM_CYSIZEFRAME, dpi) + metricForDpi(SM_CXPADDEDBORDER, dpi);
+}
+// Edge of the monitor that holds an auto-hide taskbar (ABE_*), or -1.
+static int autoHideTaskbarEdge(HMONITOR mon) {
+    APPBARDATA abd{}; abd.cbSize = sizeof(abd);
+    if (!(SHAppBarMessage(ABM_GETSTATE, &abd) & ABS_AUTOHIDE)) return -1;
+    MONITORINFO mi{}; mi.cbSize = sizeof(mi); GetMonitorInfoW(mon, &mi);
+    for (UINT edge : {ABE_BOTTOM, ABE_TOP, ABE_LEFT, ABE_RIGHT}) {
+        APPBARDATA q{}; q.cbSize = sizeof(q); q.uEdge = edge; q.rc = mi.rcMonitor;
+        if (SHAppBarMessage(ABM_GETAUTOHIDEBAREX, &q)) return int(edge);
+    }
+    return -1;
+}
+
+void BrowserWindow::applyNativeFrame() {
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+    // 1px of DWM frame keeps the native drop shadow (and Win11 snap highlight) on the frameless window.
+    const MARGINS m{1, 1, 1, 1};
+    DwmExtendFrameIntoClientArea(hwnd, &m);
+    // Windows 11 rounded corners (ignored on Windows 10).
+    const int pref = DWMWCP_ROUND;
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &pref, sizeof(pref));
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER);
+}
+
+QPoint BrowserWindow::nativeToLocal(void* h, long x, long y) const {
+    POINT pt{x, y};
+    ScreenToClient(static_cast<HWND>(h), &pt);         // physical client coords (client == our widget area)
+    const qreal dpr = windowHandle() ? windowHandle()->devicePixelRatio() : devicePixelRatioF();
+    return QPoint(qFloor(pt.x / dpr), qFloor(pt.y / dpr));
+}
+
+bool BrowserWindow::overMaxButton(const QPoint& local) const {
+    if (!m_maxBtn || !m_maxBtn->isVisible()) return false;
+    return QRect(m_maxBtn->mapTo(this, QPoint(0, 0)), m_maxBtn->size()).contains(local);
+}
+
+void BrowserWindow::setNcMaxHover(bool on) {
+    if (m_ncMaxHover == on) return;
+    m_ncMaxHover = on;
+    if (m_maxBtn) m_maxBtn->setForcedHover(on);
+    if (!on && m_ncMaxPressed) { m_ncMaxPressed = false; if (m_maxBtn) m_maxBtn->setForcedDown(false); }
+}
+
+void BrowserWindow::showSystemMenu(int physX, int physY) {
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HMENU menu = GetSystemMenu(hwnd, FALSE);
+    if (!menu) return;
+    const bool zoomed = IsZoomed(hwnd), iconic = IsIconic(hwnd);
+    auto enable = [&](UINT cmd, bool on) { EnableMenuItem(menu, cmd, MF_BYCOMMAND | (on ? MF_ENABLED : MF_GRAYED)); };
+    enable(SC_RESTORE, zoomed || iconic);
+    enable(SC_MOVE, !zoomed);
+    enable(SC_SIZE, !zoomed && !iconic);
+    enable(SC_MINIMIZE, !iconic);
+    enable(SC_MAXIMIZE, !zoomed);
+    enable(SC_CLOSE, true);
+    SetMenuDefaultItem(menu, zoomed ? SC_RESTORE : SC_MAXIMIZE, FALSE);
+    const UINT flags = TPM_RETURNCMD | TPM_RIGHTBUTTON | (GetSystemMetrics(SM_MENUDROPALIGNMENT) ? TPM_RIGHTALIGN : TPM_LEFTALIGN);
+    const int cmd = TrackPopupMenu(menu, flags, physX, physY, 0, hwnd, nullptr);
+    if (cmd) PostMessageW(hwnd, WM_SYSCOMMAND, WPARAM(cmd), 0);
+}
+
 bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
     MSG* msg = static_cast<MSG*>(message);
-    if (!msg || isFullScreen()) return QMainWindow::nativeEvent(eventType, message, result);
+    if (!msg || msg->hwnd != reinterpret_cast<HWND>(winId())) return QMainWindow::nativeEvent(eventType, message, result);
+    HWND hwnd = msg->hwnd;
     switch (msg->message) {
     case WM_NCCALCSIZE:
         if (msg->wParam == TRUE) {
-            // Whole window is client area; when maximized, trim the off-screen resize border.
-            if (IsZoomed(msg->hwnd)) {
-                auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
-                const int fx = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-                const int fy = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
-                p->rgrc[0].left += fx; p->rgrc[0].right -= fx; p->rgrc[0].top += fy; p->rgrc[0].bottom -= fy;
+            auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+            if (IsZoomed(hwnd) && !isFullScreen()) {
+                // A maximized window is placed with its resize border off-screen: clamp the client
+                // area to the monitor work area (correct per-monitor, respects docked taskbars).
+                HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+                if (GetMonitorInfoW(mon, &mi)) {
+                    p->rgrc[0] = mi.rcWork;
+                    // Leave 1px for an auto-hide taskbar so it can still be revealed.
+                    switch (autoHideTaskbarEdge(mon)) {
+                    case ABE_BOTTOM: p->rgrc[0].bottom -= 1; break;
+                    case ABE_TOP:    p->rgrc[0].top += 1; break;
+                    case ABE_LEFT:   p->rgrc[0].left += 1; break;
+                    case ABE_RIGHT:  p->rgrc[0].right -= 1; break;
+                    default: break;
+                    }
+                } else {
+                    const int fx = resizeBorder(hwnd, true), fy = resizeBorder(hwnd, false);
+                    p->rgrc[0].left += fx; p->rgrc[0].right -= fx; p->rgrc[0].top += fy; p->rgrc[0].bottom -= fy;
+                }
             }
-            *result = 0;
+            *result = 0;          // whole window is client area (no native caption / borders drawn)
             return true;
         }
         break;
     case WM_NCHITTEST: {
+        if (isFullScreen()) { *result = HTCLIENT; return true; }
         const LONG x = GET_X_LPARAM(msg->lParam), y = GET_Y_LPARAM(msg->lParam);
-        RECT wr; GetWindowRect(msg->hwnd, &wr);
-        if (!IsZoomed(msg->hwnd)) {
-            const int b = qRound(6 * devicePixelRatioF());
-            const bool l = x < wr.left + b, r = x >= wr.right - b, t = y < wr.top + b, bt = y >= wr.bottom - b;
-            if (t && l) { *result = HTTOPLEFT; return true; }
-            if (t && r) { *result = HTTOPRIGHT; return true; }
-            if (bt && l) { *result = HTBOTTOMLEFT; return true; }
-            if (bt && r) { *result = HTBOTTOMRIGHT; return true; }
+        if (!IsZoomed(hwnd)) {
+            // All 8 resize zones, DPI-scaled for the current monitor. Corners get a larger grab area
+            // along each edge so there are no dead pixels at the rounded Win11 corners.
+            RECT wr; GetWindowRect(hwnd, &wr);
+            const int bx = resizeBorder(hwnd, true), by = resizeBorder(hwnd, false);
+            const int cx = bx * 2, cy = by * 2;
+            const bool l = x < wr.left + bx, r = x >= wr.right - bx, t = y < wr.top + by, b = y >= wr.bottom - by;
+            const bool lc = x < wr.left + cx, rc = x >= wr.right - cx, tc = y < wr.top + cy, bc = y >= wr.bottom - cy;
+            if ((t && lc) || (l && tc)) { *result = HTTOPLEFT; return true; }
+            if ((t && rc) || (r && tc)) { *result = HTTOPRIGHT; return true; }
+            if ((b && lc) || (l && bc)) { *result = HTBOTTOMLEFT; return true; }
+            if ((b && rc) || (r && bc)) { *result = HTBOTTOMRIGHT; return true; }
             if (l) { *result = HTLEFT; return true; }
             if (r) { *result = HTRIGHT; return true; }
             if (t) { *result = HTTOP; return true; }
-            if (bt) { *result = HTBOTTOM; return true; }
+            if (b) { *result = HTBOTTOM; return true; }
         }
-        if (isCaptionArea(mapFromGlobal(QCursor::pos()))) { *result = HTCAPTION; return true; }
+        const QPoint local = nativeToLocal(hwnd, x, y);
+        // HTMAXBUTTON makes Windows 11 show the snap-layouts flyout when hovering maximize.
+        if (overMaxButton(local)) { *result = HTMAXBUTTON; return true; }
+        if (isCaptionArea(local)) { *result = HTCAPTION; return true; }   // drag, double-click, snap, shake
         *result = HTCLIENT;
         return true;
     }
-    case WM_GETMINMAXINFO:
+    // The maximize button is non-client (HTMAXBUTTON), so drive its hover/pressed/click ourselves.
+    case WM_NCMOUSEMOVE:
+    case WM_NCMOUSEHOVER:
+        if (msg->wParam == HTMAXBUTTON) {
+            if (!m_ncMaxHover) {
+                TRACKMOUSEEVENT tme{}; tme.cbSize = sizeof(tme); tme.dwFlags = TME_LEAVE | TME_NONCLIENT; tme.hwndTrack = hwnd;
+                TrackMouseEvent(&tme);
+            }
+            setNcMaxHover(true);
+            *result = 0; return true;
+        }
+        setNcMaxHover(false);
+        break;
+    case WM_NCMOUSELEAVE:
+    case WM_MOUSEMOVE:
+        setNcMaxHover(false);
+        break;
+    case WM_NCLBUTTONDOWN:
+    case WM_NCLBUTTONDBLCLK:
+        if (msg->wParam == HTMAXBUTTON) {
+            m_ncMaxPressed = true;
+            if (m_maxBtn) m_maxBtn->setForcedDown(true);
+            *result = 0; return true;            // don't let DefWindowProc draw a classic button
+        }
+        break;
+    case WM_NCLBUTTONUP:
+        if (msg->wParam == HTMAXBUTTON) {
+            const bool click = m_ncMaxPressed;
+            m_ncMaxPressed = false;
+            if (m_maxBtn) m_maxBtn->setForcedDown(false);
+            if (click) { isMaximized() ? showNormal() : showMaximized(); }
+            *result = 0; return true;
+        }
+        if (m_ncMaxPressed) { m_ncMaxPressed = false; if (m_maxBtn) m_maxBtn->setForcedDown(false); }
+        break;
+    case WM_NCRBUTTONDOWN:
+        if (msg->wParam == HTCAPTION || msg->wParam == HTMAXBUTTON) { *result = 0; return true; }
+        break;
+    case WM_NCRBUTTONUP:
+        if (msg->wParam == HTCAPTION || msg->wParam == HTMAXBUTTON) {
+            showSystemMenu(GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+            *result = 0; return true;
+        }
+        break;
+    case WM_SYSCOMMAND:
+        // Alt+Space: show the system menu under the top-left of our caption.
+        if ((msg->wParam & 0xFFF0) == SC_KEYMENU && msg->lParam == VK_SPACE) {
+            RECT wr; GetWindowRect(hwnd, &wr);
+            const int off = IsZoomed(hwnd) ? 0 : resizeBorder(hwnd, true);
+            const qreal dpr = windowHandle() ? windowHandle()->devicePixelRatio() : 1.0;
+            showSystemMenu(wr.left + off, wr.top + off + qRound(40 * dpr));
+            *result = 0; return true;
+        }
+        break;
+    case WM_DWMCOMPOSITIONCHANGED:
+    case WM_DPICHANGED:
+    case WM_THEMECHANGED:
+        QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });
+        break;
+    case WM_ACTIVATE:
+        if (m_minBtn) { m_minBtn->update(); m_maxBtn->update(); m_closeBtn->update(); }
         break;
     default: break;
     }

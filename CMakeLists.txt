@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.4.0 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.4.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,7 +77,7 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Network
 )
 if(WIN32)
-    target_link_libraries(PacitumBrowser PRIVATE user32)
+    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32)
 endif()
 
 # Platform specific

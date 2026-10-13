@@ -37,6 +37,15 @@ protected:
     bool eventFilter(QObject* o, QEvent* e) override;
 #ifdef Q_OS_WIN
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+private:
+    void applyNativeFrame();                       // styles, DWM shadow, Win11 rounded corners
+    void showSystemMenu(int physX, int physY);     // right-click on caption / Alt+Space
+    QPoint nativeToLocal(void* hwnd, long x, long y) const;
+    bool overMaxButton(const QPoint& local) const;
+    void setNcMaxHover(bool on);
+    bool m_ncMaxHover = false;
+    bool m_ncMaxPressed = false;
+protected:
 #endif
     void keyPressEvent(QKeyEvent* e) override;
 

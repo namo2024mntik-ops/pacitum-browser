@@ -20,5 +20,5 @@ cmake -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.9.1/msvc2022_64"
 if ($LASTEXITCODE -ne 0) { Write-Error "Configure failed"; exit 1 }
 cmake --build build --config Release
 if ($LASTEXITCODE -ne 0) { Write-Error "Build failed"; exit 1 }
-Write-Host "Build succeeded: .\build\SafariBrowser.exe" -ForegroundColor Green
-& .\build\SafariBrowser.exe
+Write-Host "Build succeeded: .\build\PacitumBrowser.exe" -ForegroundColor Green
+& .\build\PacitumBrowser.exe

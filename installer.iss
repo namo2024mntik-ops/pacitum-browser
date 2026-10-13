@@ -1,15 +1,19 @@
-#define AppName "Safari Browser"
-#define AppVer "1.0.0"
+#define AppName "Pacitum Browser"
+#define AppVer "1.1.0"
+#define AppExe "PacitumBrowser.exe"
 [Setup]
-AppId={{8C3F2A51-6B1E-4D7A-9E2F-5A1C0B7D3E91}
+AppId={{FD3A16C9-4CF0-4B0B-BBEC-A5E3334D7CFE}
 AppName={#AppName}
 AppVersion={#AppVer}
-AppPublisher=Patch
-DefaultDirName={autopf}\Safari Browser
-DefaultGroupName=Safari Browser
-UninstallDisplayIcon={app}\SafariBrowser.exe
+AppVerName={#AppName} {#AppVer}
+AppPublisher=Pacitum
+DefaultDirName={autopf}\Pacitum Browser
+DefaultGroupName=Pacitum Browser
+UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayName={#AppName}
+SetupIconFile=resources\pacitum.ico
 OutputDir=installer
-OutputBaseFilename=SafariBrowser-Setup-{#AppVer}
+OutputBaseFilename=PacitumBrowser-Setup-{#AppVer}
 Compression=lzma2/ultra64
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
@@ -21,8 +25,8 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
-Name: "{group}\Safari Browser"; Filename: "{app}\SafariBrowser.exe"
-Name: "{group}\Uninstall Safari Browser"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Safari Browser"; Filename: "{app}\SafariBrowser.exe"; Tasks: desktopicon
+Name: "{group}\Pacitum Browser"; Filename: "{app}\{#AppExe}"
+Name: "{group}\Uninstall Pacitum Browser"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Pacitum Browser"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 [Run]
-Filename: "{app}\SafariBrowser.exe"; Description: "Launch Safari Browser"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExe}"; Description: "Launch Pacitum Browser"; Flags: nowait postinstall skipifsilent

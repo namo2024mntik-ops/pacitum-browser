@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(SafariBrowser VERSION 1.0.0 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Find Qt6
-find_package(Qt6 REQUIRED COMPONENTS Widgets WebEngineWidgets WebChannel Sql Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network)
 
 # Include dirs
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -30,6 +30,7 @@ set(SOURCES
     src/ZoomController.cpp
     src/SettingsDialog.cpp
     src/ThemeManager.cpp
+    src/PacitumScheme.cpp
 )
 
 set(HEADERS
@@ -47,16 +48,25 @@ set(HEADERS
     include/ZoomController.h
     include/SettingsDialog.h
     include/ThemeManager.h
+    include/PacitumScheme.h
 )
 
 # Resources
 qt_add_resources(RESOURCES resources/resources.qrc)
 
 # Executable
-add_executable(SafariBrowser ${SOURCES} ${HEADERS} ${RESOURCES})
+set(APP_RC "")
+if(WIN32)
+    # Embeds resources/pacitum.ico as the executable icon
+    set(APP_RC ${CMAKE_SOURCE_DIR}/resources/app.rc)
+endif()
 
-target_link_libraries(SafariBrowser PRIVATE
+add_executable(PacitumBrowser ${SOURCES} ${HEADERS} ${RESOURCES} ${APP_RC})
+target_compile_definitions(PacitumBrowser PRIVATE PACITUM_VERSION="${PROJECT_VERSION}")
+
+target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Widgets
+    Qt6::Svg
     Qt6::WebEngineWidgets
     Qt6::WebChannel
     Qt6::Sql
@@ -65,9 +75,9 @@ target_link_libraries(SafariBrowser PRIVATE
 
 # Platform specific
 if(WIN32)
-    set_target_properties(SafariBrowser PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(PacitumBrowser PROPERTIES WIN32_EXECUTABLE TRUE)
     # Enable High DPI
-    target_compile_definitions(SafariBrowser PRIVATE QT_ENABLE_HIGHDPI_SCALING)
+    target_compile_definitions(PacitumBrowser PRIVATE QT_ENABLE_HIGHDPI_SCALING)
 endif()
 
 # Copy resources
@@ -76,4 +86,4 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
 endif()
 
 # Install
-install(TARGETS SafariBrowser DESTINATION bin)
+install(TARGETS PacitumBrowser DESTINATION bin)

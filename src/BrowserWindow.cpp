@@ -11,6 +11,10 @@
 #include "ZoomController.h"
 #include "AdBlocker.h"
 #include "SettingsDialog.h"
+#include "PacitumScheme.h"
+#include <QWidgetAction>
+#include <QStyleHints>
+#include <QGuiApplication>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -35,6 +39,8 @@
 #include <QStyle>
 #include <QTimer>
 #include <QUrl>
+#include <QDir>
+#include <QWebEngineView>
 
 BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_history = new HistoryManager(QStringLiteral("browser_history.db"));
@@ -44,7 +50,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_session = new SessionManager(QStringLiteral("browser_session.json"));
     m_zoom = new ZoomController(1.0, this);
 
-    setWindowIcon(QIcon(QStringLiteral(":/icons/safari.png")));
+    setWindowIcon(QIcon(QStringLiteral(":/icons/pacitum-icon-256.png")));
     setupAdBlocker();
     setupDownloadHandler();
     setupUI();
@@ -66,73 +72,135 @@ void BrowserWindow::setupDownloadHandler() {
 }
 
 void BrowserWindow::setupUI() {
-    setWindowTitle(QStringLiteral("Safari Browser"));
-    setMinimumSize(1000,700); resize(1280,850);
+    setWindowTitle(QStringLiteral("Pacitum Browser"));
+    setMinimumSize(900,600); resize(1440,900);
 
     auto* central = new QWidget(this); setCentralWidget(central);
     auto* mainLay = new QVBoxLayout(central); mainLay->setContentsMargins(0,0,0,0); mainLay->setSpacing(0);
 
     createToolbar();
-    mainLay->addWidget(m_toolbar);
 
     m_bookmarksBar = new BookmarksBar(m_bookmarks, this);
     connect(m_bookmarksBar, &BookmarksBar::urlActivated, this, &BrowserWindow::navigateToUrl);
-    m_bookmarksBar->hide();
     mainLay->addWidget(m_bookmarksBar);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(1);
     mainLay->addWidget(m_splitter, 1);
 
-    m_tabs = new SafariTabWidget(m_verticalTabs, this);
-    connect(m_tabs, &SafariTabWidget::tabCloseRequested, this, &BrowserWindow::closeTab);
+    m_tabs = new PacitumTabWidget(m_verticalTabs, this);
+    connect(m_tabs, &PacitumTabWidget::tabCloseRequested, this, &BrowserWindow::closeTab);
     connect(m_tabs, &QTabWidget::currentChanged, this, &BrowserWindow::onTabChanged);
-    connect(m_tabs, &SafariTabWidget::newTabRequested, this, [this]{ newTab(); });
-    connect(m_tabs, &SafariTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
-    connect(m_tabs, &SafariTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
-    connect(m_tabs, &SafariTabWidget::tabReopenRequested, this, &BrowserWindow::reopenClosedTab);
-    connect(m_tabs, &SafariTabWidget::tabMuteRequested, this, &BrowserWindow::muteTab);
-    connect(m_tabs, &SafariTabWidget::tabPinRequested, this, &BrowserWindow::pinTab);
+    connect(m_tabs, &PacitumTabWidget::newTabRequested, this, [this]{ newTab(); });
+    connect(m_tabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
+    connect(m_tabs, &PacitumTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
+    connect(m_tabs, &PacitumTabWidget::tabReopenRequested, this, &BrowserWindow::reopenClosedTab);
+    connect(m_tabs, &PacitumTabWidget::tabMuteRequested, this, &BrowserWindow::muteTab);
+    connect(m_tabs, &PacitumTabWidget::tabPinRequested, this, &BrowserWindow::pinTab);
     m_splitter->addWidget(m_tabs);
     m_activeWidget = m_tabs;
 
-    m_splitTabs = new SafariTabWidget(m_verticalTabs, this);
+    // Vertical stack per design: TabStrip 40 -> Toolbar 44 -> BookmarksBar 32 -> content
+    m_tabStrip = m_tabs->createTabStrip(central);
+    mainLay->insertWidget(0, m_tabStrip);
+    mainLay->insertWidget(1, m_toolbar);
+
+    m_splitTabs = new PacitumTabWidget(m_verticalTabs, this);
     m_splitTabs->hide();
-    connect(m_splitTabs, &SafariTabWidget::tabCloseRequested, this, &BrowserWindow::closeSplitTab);
+    connect(m_splitTabs, &PacitumTabWidget::tabCloseRequested, this, &BrowserWindow::closeSplitTab);
     connect(m_splitTabs, &QTabWidget::currentChanged, this, &BrowserWindow::onTabChanged);
-    connect(m_splitTabs, &SafariTabWidget::newTabRequested, this, [this]{ newTab(QString{}); /* in split */ });
-    connect(m_splitTabs, &SafariTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
-    connect(m_splitTabs, &SafariTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
+    connect(m_splitTabs, &PacitumTabWidget::newTabRequested, this, [this]{ newTab(QString{}); /* in split */ });
+    connect(m_splitTabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
+    connect(m_splitTabs, &PacitumTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
     m_splitter->addWidget(m_splitTabs);
 
     setupShortcuts();
     createMenuBar();
     createStatusBar();
+    menuBar()->hide();          // design uses the ⋮ main menu instead of a menu bar
+    statusBar()->hide();
+    if (auto* sh = QGuiApplication::styleHints())
+        connect(sh, &QStyleHints::colorSchemeChanged, this, [this]{ if (m_themeSetting == QStringLiteral("System")) applyTheme(); });
     applyTheme();
 }
 
-void BrowserWindow::createToolbar() {
-    m_toolbar = new QWidget(this); m_toolbar->setFixedHeight(64);
-    auto* lay = new QHBoxLayout(m_toolbar); lay->setContentsMargins(16,8,16,8); lay->setSpacing(6);
+QToolButton* BrowserWindow::makeToolBtn(const QString& tip) {
+    auto* b = new QToolButton(m_toolbar);
+    b->setFixedSize(32,32); b->setIconSize(QSize(18,18)); b->setAutoRaise(true);
+    b->setToolTip(tip); b->setFocusPolicy(Qt::TabFocus);
+    return b;
+}
 
-    m_backBtn = new QPushButton(this); m_backBtn->setFixedSize(38,38); m_backBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowBack)); m_backBtn->setIconSize(QSize(18,18)); m_backBtn->setToolTip(QStringLiteral("Back (Alt+Left)")); connect(m_backBtn, &QPushButton::clicked, this, &BrowserWindow::goBack);
-    m_forwardBtn = new QPushButton(this); m_forwardBtn->setFixedSize(38,38); m_forwardBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowForward)); m_forwardBtn->setIconSize(QSize(18,18)); m_forwardBtn->setToolTip(QStringLiteral("Forward (Alt+Right)")); connect(m_forwardBtn, &QPushButton::clicked, this, &BrowserWindow::goForward);
-    m_reloadBtn = new QPushButton(this); m_reloadBtn->setFixedSize(38,38); m_reloadBtn->setIcon(style()->standardIcon(QStyle::SP_BrowserReload)); m_reloadBtn->setIconSize(QSize(18,18)); m_reloadBtn->setToolTip(QStringLiteral("Reload (F5)")); connect(m_reloadBtn, &QPushButton::clicked, this, &BrowserWindow::reloadPage);
-    m_homeBtn = new QPushButton(this); m_homeBtn->setFixedSize(38,38); m_homeBtn->setIcon(style()->standardIcon(QStyle::SP_DirHomeIcon)); m_homeBtn->setIconSize(QSize(18,18)); m_homeBtn->setToolTip(QStringLiteral("Home")); connect(m_homeBtn, &QPushButton::clicked, this, &BrowserWindow::goHome);
-    m_addressBar = new AddressBar(m_history, this); connect(m_addressBar, &AddressBar::returnPressed, this, &BrowserWindow::navigateToUrl);
-    m_splitBtn = new QPushButton(this); m_splitBtn->setFixedSize(38,38); m_splitBtn->setIcon(style()->standardIcon(QStyle::SP_TitleBarShadeButton)); m_splitBtn->setToolTip(QStringLiteral("Split View")); connect(m_splitBtn, &QPushButton::clicked, this, [this]{ toggleSplitView(); });
-    m_bookmarkBtn = new QPushButton(QStringLiteral("☆"), this); m_bookmarkBtn->setFixedSize(38,38); m_bookmarkBtn->setToolTip(QStringLiteral("Bookmark (Ctrl+B)")); connect(m_bookmarkBtn, &QPushButton::clicked, this, &BrowserWindow::toggleBookmark);
-    m_downloadsBtn = new QPushButton(this); m_downloadsBtn->setFixedSize(38,38); m_downloadsBtn->setIcon(style()->standardIcon(QStyle::SP_ArrowDown)); m_downloadsBtn->setToolTip(QStringLiteral("Downloads (Ctrl+J)")); connect(m_downloadsBtn, &QPushButton::clicked, this, &BrowserWindow::showDownloads);
-    m_menuBtn = new QPushButton(this); m_menuBtn->setFixedSize(38,38); m_menuBtn->setIcon(style()->standardIcon(QStyle::SP_TitleBarMenuButton)); m_menuBtn->setToolTip(QStringLiteral("Menu")); connect(m_menuBtn, &QPushButton::clicked, this, &BrowserWindow::showMenu);
+void BrowserWindow::createToolbar() {
+    m_toolbar = new QWidget(this); m_toolbar->setObjectName(QStringLiteral("NavToolbar"));
+    m_toolbar->setAttribute(Qt::WA_StyledBackground, true);
+    m_toolbar->setFixedHeight(44);
+    auto* lay = new QHBoxLayout(m_toolbar); lay->setContentsMargins(8,0,8,0); lay->setSpacing(4);
+
+    m_backBtn = makeToolBtn(QStringLiteral("Back (Alt+Left)")); connect(m_backBtn, &QToolButton::clicked, this, &BrowserWindow::goBack);
+    m_forwardBtn = makeToolBtn(QStringLiteral("Forward (Alt+Right)")); connect(m_forwardBtn, &QToolButton::clicked, this, &BrowserWindow::goForward);
+    m_reloadBtn = makeToolBtn(QStringLiteral("Reload (F5)"));
+    connect(m_reloadBtn, &QToolButton::clicked, this, [this]{
+        auto* t = activeTab(); if (!t) return;
+        if (t->isLoading()) t->stop(); else t->reload();
+    });
+    m_homeBtn = makeToolBtn(QStringLiteral("Home")); connect(m_homeBtn, &QToolButton::clicked, this, &BrowserWindow::goHome);
+    m_addressBar = new AddressBar(m_history, this);
+    connect(m_addressBar, &AddressBar::returnPressed, this, &BrowserWindow::navigateToUrl);
+    connect(m_addressBar, &AddressBar::starClicked, this, &BrowserWindow::toggleBookmark);
+    connect(m_addressBar, &AddressBar::securityIconClicked, this, &BrowserWindow::showPageInfo);
+    m_downloadsBtn = makeToolBtn(QStringLiteral("Downloads (Ctrl+J)")); connect(m_downloadsBtn, &QToolButton::clicked, this, &BrowserWindow::showDownloads);
+    m_splitBtn = makeToolBtn(QStringLiteral("Split view")); connect(m_splitBtn, &QToolButton::clicked, this, [this]{ toggleSplitView(); });
+    m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(32,32); m_privateBadge->setAlignment(Qt::AlignCenter);
+    m_privateBadge->setToolTip(QStringLiteral("Private browsing")); m_privateBadge->hide();
+    m_profileBtn = makeToolBtn(QStringLiteral("Profile"));
+    auto* avatar = new QLabel(QStringLiteral("P"), m_profileBtn); avatar->setObjectName(QStringLiteral("Avatar"));
+    avatar->setAlignment(Qt::AlignCenter); avatar->setFixedSize(24,24); avatar->move(4,4);
+    avatar->setAttribute(Qt::WA_TransparentForMouseEvents);
+    connect(m_profileBtn, &QToolButton::clicked, this, &BrowserWindow::showSettings);
+    m_menuBtn = makeToolBtn(QStringLiteral("Customize and control Pacitum (Alt+F)")); connect(m_menuBtn, &QToolButton::clicked, this, &BrowserWindow::showMenu);
 
     lay->addWidget(m_backBtn); lay->addWidget(m_forwardBtn); lay->addWidget(m_reloadBtn); lay->addWidget(m_homeBtn);
+    lay->addSpacing(8);
     lay->addWidget(m_addressBar, 1);
-    lay->addWidget(m_splitBtn); lay->addWidget(m_bookmarkBtn); lay->addWidget(m_downloadsBtn); lay->addWidget(m_menuBtn);
+    lay->addSpacing(8);
+    lay->addWidget(m_downloadsBtn); lay->addWidget(m_splitBtn); lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
+}
 
-    m_toolbarOpacity = new QGraphicsOpacityEffect(m_toolbar); m_toolbar->setGraphicsEffect(m_toolbarOpacity); m_toolbarOpacity->setOpacity(0.0);
-    m_toolbarAnim = new QPropertyAnimation(m_toolbarOpacity, "opacity", this);
-    m_toolbarAnim->setDuration(380); m_toolbarAnim->setStartValue(0.0); m_toolbarAnim->setEndValue(1.0); m_toolbarAnim->setEasingCurve(QEasingCurve::OutCubic);
-    QTimer::singleShot(0, m_toolbarAnim, [this]{ m_toolbarAnim->start(); });
+void BrowserWindow::refreshIcons() {
+    auto* tm = m_theme;
+    m_backBtn->setIcon(tm->icon(QStringLiteral("back")));
+    m_forwardBtn->setIcon(tm->icon(QStringLiteral("forward")));
+    auto* t = activeTab();
+    m_reloadBtn->setIcon(tm->icon(t && t->isLoading() ? QStringLiteral("stop") : QStringLiteral("reload")));
+    m_reloadBtn->setToolTip(t && t->isLoading() ? QStringLiteral("Stop loading") : QStringLiteral("Reload (F5)"));
+    m_homeBtn->setIcon(tm->icon(QStringLiteral("home")));
+    m_downloadsBtn->setIcon(tm->icon(QStringLiteral("download")));
+    m_splitBtn->setIcon(tm->icon(QStringLiteral("window")));
+    m_menuBtn->setIcon(tm->icon(QStringLiteral("menu")));
+    m_privateBadge->setPixmap(tm->icon(QStringLiteral("private")).pixmap(QSize(18,18), devicePixelRatioF()));
+}
+
+void BrowserWindow::updateNavState() {
+    auto* t = activeTab();
+    m_backBtn->setEnabled(t && t->canGoBack());
+    m_forwardBtn->setEnabled(t && t->canGoForward());
+    refreshIcons();
+}
+
+void BrowserWindow::updateTabIcon(BrowserTab* tab) {
+    for (auto* tw : {m_tabs, m_splitTabs}) {
+        int idx = tw->indexOf(tab);
+        if (idx < 0) continue;
+        QIcon ic = tab->icon();
+        if (ic.isNull()) {
+            const QString u = tab->currentUrl();
+            ic = u.startsWith(QStringLiteral("pacitum:")) || u.isEmpty()
+                 ? QIcon(QStringLiteral(":/icons/pacitum-icon-32.png"))
+                 : m_theme->secondaryIcon(QStringLiteral("globe"), 16);
+        }
+        tw->setTabIcon(idx, ic);
+    }
 }
 
 void BrowserWindow::setupShortcuts() {
@@ -147,6 +215,24 @@ void BrowserWindow::setupShortcuts() {
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")), this, SLOT(toggleBookmarksBar()));
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+E")), this, SLOT(toggleVerticalTabs()));
     new QShortcut(QKeySequence(Qt::Key_Escape), this, SLOT(handleEscape()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+T")), this, [this]{ newTab(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+W")), this, [this]{ closeTab(m_tabs->currentIndex()); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this, SLOT(toggleBookmark()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+B")), this, SLOT(toggleBookmarksBar()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+N")), this, SLOT(newPrivateTab()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+T")), this, SLOT(reopenClosedTab()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+=")), this, SLOT(zoomIn()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+-")), this, SLOT(zoomOut()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+0")), this, SLOT(zoomReset()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+,")), this, SLOT(showSettings()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+P")), this, [this]{ if (auto* t = activeTab()) t->findChild<QWebEngineView*>()->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); });
+    new QShortcut(QKeySequence(QStringLiteral("F11")), this, SLOT(toggleFullscreen()));
+    new QShortcut(QKeySequence(QStringLiteral("Alt+F")), this, SLOT(showMenu()));
+    new QShortcut(QKeySequence(QStringLiteral("Alt+Left")), this, SLOT(goBack()));
+    new QShortcut(QKeySequence(QStringLiteral("Alt+Right")), this, SLOT(goForward()));
+    for (int i = 1; i <= 9; ++i)
+        new QShortcut(QKeySequence(QStringLiteral("Ctrl+%1").arg(i)), this, [this, i]{
+            if (i == 9) lastTab(); else if (i - 1 < m_tabs->count()) m_tabs->setCurrentIndex(i - 1); });
 }
 
 void BrowserWindow::createMenuBar() {
@@ -168,7 +254,7 @@ void BrowserWindow::createMenuBar() {
     edit->addAction(QStringLiteral("Zoom Reset"), QKeySequence(QStringLiteral("Ctrl+0")), this, &BrowserWindow::zoomReset);
 
     auto* view = mb->addMenu(QStringLiteral("View"));
-    view->addAction(QStringLiteral("Toggle Dark Mode"), QKeySequence(QStringLiteral("Ctrl+D")), this, &BrowserWindow::toggleDarkMode);
+    view->addAction(QStringLiteral("Toggle Dark Mode"), this, &BrowserWindow::toggleDarkMode);
     view->addAction(QStringLiteral("Toggle Bookmarks Bar"), QKeySequence(QStringLiteral("Ctrl+Shift+O")), this, &BrowserWindow::toggleBookmarksBar);
     view->addAction(QStringLiteral("Toggle Vertical Tabs"), QKeySequence(QStringLiteral("Ctrl+Shift+E")), this, &BrowserWindow::toggleVerticalTabs);
     view->addSeparator();
@@ -198,25 +284,30 @@ void BrowserWindow::createStatusBar() {
 
 // ---- Tab management ----
 void BrowserWindow::newTab(const QString& url) {
-    QString u = url.isEmpty() ? readSettings().value(QStringLiteral("homepage")).toString(QStringLiteral("https://www.google.com")) : url;
+    QString u = url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
     auto* tab = new BrowserTab(u, m_privateMode, m_searchEngine, this);
     tab->setZoomFactor(m_zoom->zoom());
     connect(tab, &BrowserTab::urlChanged, this, &BrowserWindow::updateAddressBar);
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);
+    connect(tab, &BrowserTab::iconChanged, this, [this, tab]{ updateTabIcon(tab); });
+    connect(tab, &BrowserTab::urlChanged, this, [this, tab]{ updateTabIcon(tab); });
     // choose target
-    SafariTabWidget* target = m_splitActive && m_splitTabs->isVisible() && m_splitTabs->count()==0 ? m_splitTabs : m_tabs;
+    PacitumTabWidget* target = m_splitActive && m_splitTabs->isVisible() && m_splitTabs->count()==0 ? m_splitTabs : m_tabs;
     // if split active and caller wants split, use split; otherwise default to main
     // For regular newTab, use main tabs
     target = m_tabs;
     int idx = target->addTab(tab, QStringLiteral("New Tab"));
     target->setCurrentIndex(idx);
+    updateTabIcon(tab);
+    if (url.isEmpty()) QTimer::singleShot(0, this, [this]{ m_addressBar->focusUrl(); });
 }
 
 void BrowserWindow::newPrivateTab() {
     m_privateMode = true; newTab(); m_privateMode = false;
     int idx = m_tabs->currentIndex();
-    m_tabs->setTabText(idx, QStringLiteral("🔒 ") + m_tabs->tabText(idx));
+    m_tabs->setTabText(idx, QStringLiteral("Private — ") + m_tabs->tabText(idx));
+    m_privateBadge->show();
 }
 
 void BrowserWindow::closeTab(int index) {
@@ -239,13 +330,12 @@ void BrowserWindow::closeSplitTab(int index) {
 }
 
 void BrowserWindow::onTabChanged(int index) {
-    auto* sender = qobject_cast<SafariTabWidget*>(QObject::sender());
+    auto* sender = qobject_cast<PacitumTabWidget*>(QObject::sender());
     if (!sender || index < 0) return;
     m_activeWidget = sender;
     if (auto* tab = qobject_cast<BrowserTab*>(sender->widget(index))) {
         updateAddressBar(tab->currentUrl());
-        m_backBtn->setEnabled(tab->canGoBack());
-        m_forwardBtn->setEnabled(tab->canGoForward());
+        updateNavState();
     }
 }
 
@@ -260,11 +350,11 @@ void BrowserWindow::navigateToUrl(const QString& url) {
 
 void BrowserWindow::updateAddressBar(const QString& url) {
     m_addressBar->setUrl(url);
-    if (!url.isEmpty() && !url.startsWith(QStringLiteral("about:"))) {
+    if (!url.isEmpty() && !url.startsWith(QStringLiteral("about:")) && !url.startsWith(QStringLiteral("pacitum:"))) {
         auto* t = activeTab(); m_history->addVisit(url, t ? t->currentTitle() : QString{});
     }
     // bookmark indicator
-    m_bookmarkBtn->setText(m_bookmarks->isBookmarked(url) ? QStringLiteral("★") : QStringLiteral("☆"));
+    m_addressBar->setBookmarked(m_bookmarks->isBookmarked(url));
 }
 
 void BrowserWindow::updateTabTitle(const QString& title) {
@@ -276,51 +366,79 @@ void BrowserWindow::updateTabTitle(const QString& title) {
     }
 }
 
-void BrowserWindow::onTabLoading(bool loading) {
+void BrowserWindow::onTabLoading(bool) {
     auto* tab = qobject_cast<BrowserTab*>(sender());
-    if (!tab) return;
-    m_backBtn->setEnabled(tab->canGoBack());
-    m_forwardBtn->setEnabled(tab->canGoForward());
-    m_reloadBtn->setIcon(style()->standardIcon(loading ? QStyle::SP_BrowserStop : QStyle::SP_BrowserReload));
-    // reconnect reload btn
-    m_reloadBtn->disconnect();
-    if (loading) connect(m_reloadBtn, &QPushButton::clicked, tab, &BrowserTab::stop);
-    else connect(m_reloadBtn, &QPushButton::clicked, this, &BrowserWindow::reloadPage);
+    if (!tab || tab != activeTab()) return;
+    updateNavState();
 }
 
 void BrowserWindow::goBack() { if (auto* t=activeTab()) { t->goBack(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_backBtn->setEnabled(tt->canGoBack()); }}); } }
 void BrowserWindow::goForward() { if (auto* t=activeTab()) { t->goForward(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_forwardBtn->setEnabled(tt->canGoForward()); }}); } }
 void BrowserWindow::reloadPage() { if (auto* t=activeTab()) t->reload(); }
-void BrowserWindow::goHome() { navigateToUrl(readSettings().value(QStringLiteral("homepage")).toString(QStringLiteral("https://www.google.com"))); }
+void BrowserWindow::goHome() { navigateToUrl(readSettings().value(QStringLiteral("homepage")).toString(PacitumSchemeHandler::newTabUrl())); }
 
 void BrowserWindow::toggleBookmark() {
     auto* t = activeTab(); if (!t) return;
     QString url = t->currentUrl(), title = t->currentTitle();
     if (url.isEmpty()) return;
-    if (m_bookmarks->isBookmarked(url)) { m_bookmarks->removeBookmark(url); m_bookmarkBtn->setText(QStringLiteral("☆")); statusBar()->showMessage(QStringLiteral("Bookmark removed"), 2000); }
-    else { m_bookmarks->addBookmark(title, url); m_bookmarkBtn->setText(QStringLiteral("★")); statusBar()->showMessage(QStringLiteral("Bookmark added"), 2000); }
+    if (m_bookmarks->isBookmarked(url)) { m_bookmarks->removeBookmark(url); m_addressBar->setBookmarked(false); statusBar()->showMessage(QStringLiteral("Bookmark removed"), 2000); }
+    else { m_bookmarks->addBookmark(title, url); m_addressBar->setBookmarked(true); statusBar()->showMessage(QStringLiteral("Bookmark added"), 2000); }
     m_bookmarksBar->refresh();
 }
 
 void BrowserWindow::showDownloads() { m_downloads->show(); }
 void BrowserWindow::showSettings() { SettingsDialog dlg(this); if (dlg.exec()) { loadSettings(); applyTheme(); } }
 void BrowserWindow::showMenu() {
+    // Main menu popup (design-spec §4 "Main menu"): 300 wide, rows 32, icons 18 secondary.
     QMenu m(this);
-    m.addAction(QStringLiteral("New Tab (Ctrl+T)"), this, [this]{ newTab(); });
-    m.addAction(QStringLiteral("New Private Tab (Ctrl+Shift+N)"), this, &BrowserWindow::newPrivateTab);
+    m.setMinimumWidth(300);
+    m.setWindowFlags(m.windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
+    m.setAttribute(Qt::WA_TranslucentBackground);
+    auto add = [&](const QString& icon, const QString& text, const QString& keys, auto&& fn) {
+        auto* a = m.addAction(m_theme->secondaryIcon(icon, 18), text);
+        if (!keys.isEmpty()) a->setShortcut(QKeySequence(keys));
+        a->setShortcutVisibleInContextMenu(true);
+        connect(a, &QAction::triggered, this, fn);
+        return a;
+    };
+    add(QStringLiteral("add"), QStringLiteral("New tab"), QStringLiteral("Ctrl+T"), [this]{ newTab(); });
+    add(QStringLiteral("window"), QStringLiteral("New window"), QStringLiteral("Ctrl+N"), [this]{ auto* w = new BrowserWindow(); w->setAttribute(Qt::WA_DeleteOnClose); w->show(); });
+    add(QStringLiteral("private"), QStringLiteral("New private tab"), QStringLiteral("Ctrl+Shift+N"), [this]{ newPrivateTab(); });
     m.addSeparator();
-    m.addAction(QStringLiteral("Copy Page Address"), this, &BrowserWindow::copyCurrentUrl);
-    m.addAction(QStringLiteral("Page Information"), this, &BrowserWindow::showPageInfo);
+    add(QStringLiteral("history"), QStringLiteral("History"), QStringLiteral("Ctrl+H"), [this]{ showHistory(); });
+    add(QStringLiteral("download"), QStringLiteral("Downloads"), QStringLiteral("Ctrl+J"), [this]{ showDownloads(); });
+    add(QStringLiteral("bookmarks"), QStringLiteral("Bookmarks"), QStringLiteral("Ctrl+Shift+O"), [this]{ showBookmarksDialog(); });
+    add(QStringLiteral("extensions"), QStringLiteral("Split view"), QString(), [this]{ toggleSplitView(); });
     m.addSeparator();
-    m.addAction(QStringLiteral("Find in Page (Ctrl+F)"), this, &BrowserWindow::showFind);
-    m.addAction(QStringLiteral("Downloads (Ctrl+J)"), this, &BrowserWindow::showDownloads);
+
+    // Zoom row: [icon] Zoom ........ [−] 100% [+]
+    auto* zoomRow = new QWidget(&m);
+    auto* zl = new QHBoxLayout(zoomRow); zl->setContentsMargins(10,2,6,2); zl->setSpacing(4);
+    auto* zi = new QLabel(zoomRow); zi->setPixmap(m_theme->secondaryIcon(QStringLiteral("zoom-in"), 18).pixmap(QSize(18,18), devicePixelRatioF()));
+    auto* zt = new QLabel(QStringLiteral("Zoom"), zoomRow);
+    auto* zminus = new QToolButton(zoomRow); zminus->setFixedSize(28,28); zminus->setIcon(m_theme->icon(QStringLiteral("zoom-out"), 16)); zminus->setAutoRaise(true);
+    auto* zpct = new QLabel(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%"), zoomRow); zpct->setFixedWidth(44); zpct->setAlignment(Qt::AlignCenter);
+    auto* zplus = new QToolButton(zoomRow); zplus->setFixedSize(28,28); zplus->setIcon(m_theme->icon(QStringLiteral("zoom-in"), 16)); zplus->setAutoRaise(true);
+    connect(zminus, &QToolButton::clicked, this, [this, zpct]{ zoomOut(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
+    connect(zplus, &QToolButton::clicked, this, [this, zpct]{ zoomIn(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
+    zl->addWidget(zi); zl->addSpacing(8); zl->addWidget(zt); zl->addStretch(1); zl->addWidget(zminus); zl->addWidget(zpct); zl->addWidget(zplus);
+    zoomRow->setFixedHeight(32);
+    auto* za = new QWidgetAction(&m); za->setDefaultWidget(zoomRow); m.addAction(za);
     m.addSeparator();
-    m.addAction(QStringLiteral("Toggle Dark Mode (Ctrl+D)"), this, &BrowserWindow::toggleDarkMode);
-    m.addAction(QStringLiteral("Toggle Bookmarks Bar"), this, &BrowserWindow::toggleBookmarksBar);
-    m.addAction(QStringLiteral("Toggle Vertical Tabs"), this, &BrowserWindow::toggleVerticalTabs);
+    add(QStringLiteral("print"), QStringLiteral("Print to PDF…"), QStringLiteral("Ctrl+P"), [this]{ if (auto* t = activeTab()) if (auto* v = t->findChild<QWebEngineView*>()) { v->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); } });
+    add(QStringLiteral("find"), QStringLiteral("Find in page"), QStringLiteral("Ctrl+F"), [this]{ showFind(); });
     m.addSeparator();
-    m.addAction(QStringLiteral("Preferences (Ctrl+,)"), this, &BrowserWindow::showSettings);
-    m.exec(m_menuBtn->mapToGlobal(m_menuBtn->rect().bottomLeft()));
+    add(QStringLiteral("settings"), QStringLiteral("Settings"), QStringLiteral("Ctrl+,"), [this]{ showSettings(); });
+    add(QStringLiteral("palette"), m_darkMode ? QStringLiteral("Light theme") : QStringLiteral("Dark theme"), QString(), [this]{ toggleDarkMode(); });
+    add(QStringLiteral("info"), QStringLiteral("About Pacitum"), QString(), [this]{
+        QMessageBox::about(this, QStringLiteral("About Pacitum Browser"),
+            QStringLiteral("<b>Pacitum Browser</b> %1<br>A calm, fast web browser built on Qt %2 WebEngine.")
+                .arg(QCoreApplication::applicationVersion(), QString::fromLatin1(qVersion()))); });
+    add(QStringLiteral("exit"), QStringLiteral("Exit"), QStringLiteral("Ctrl+Q"), [this]{ close(); });
+
+    const QSize sz = m.sizeHint();
+    QPoint anchor = m_menuBtn->mapToGlobal(QPoint(m_menuBtn->width(), m_menuBtn->height() + 4));
+    m.exec(QPoint(anchor.x() - sz.width(), anchor.y()));
 }
 
 void BrowserWindow::copyCurrentUrl() { if (auto* t=activeTab()) { QApplication::clipboard()->setText(t->currentUrl()); statusBar()->showMessage(QStringLiteral("Page address copied"), 1800);} }
@@ -344,7 +462,7 @@ void BrowserWindow::showBookmarksDialog() {
     QStringList lines; for (auto &b: bms) lines << b.title + QStringLiteral(" — ") + b.url;
     QMessageBox::information(this, QStringLiteral("Bookmarks (%1)").arg(bms.size()), lines.join(QStringLiteral("\n")));
 }
-void BrowserWindow::toggleBookmarksBar() { m_bookmarksBar->setVisible(!m_bookmarksBar->isVisible()); }
+void BrowserWindow::toggleBookmarksBar() { m_bookmarksBar->setVisible(!m_bookmarksBar->isVisible()); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = m_bookmarksBar->isVisible(); QFile f(QStringLiteral("browser_settings.json")); if (f.open(QIODevice::WriteOnly|QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented)); }
 void BrowserWindow::toggleVerticalTabs() { m_verticalTabs = !m_verticalTabs; m_tabs->setVertical(m_verticalTabs); m_splitTabs->setVertical(m_verticalTabs); }
 void BrowserWindow::toggleFullscreen() { isFullScreen() ? showNormal() : showFullScreen(); }
 void BrowserWindow::focusAddressBar() { m_addressBar->focusUrl(); }
@@ -380,25 +498,40 @@ void BrowserWindow::toggleSplitView(int index) {
     }
 }
 
-void BrowserWindow::toggleDarkMode(){ m_darkMode=!m_darkMode; applyTheme(); saveSettings(); }
+void BrowserWindow::toggleDarkMode(){ m_darkMode=!m_darkMode; m_themeSetting = m_darkMode ? QStringLiteral("Dark") : QStringLiteral("Light"); applyTheme(); saveSettings(); }
 
 void BrowserWindow::applyTheme(){
+    if (m_themeSetting == QStringLiteral("System")) {
+        auto* sh = QGuiApplication::styleHints();
+        m_darkMode = sh ? sh->colorScheme() != Qt::ColorScheme::Light : true;
+    }
+    m_theme->setAccent(m_accent.compare(QStringLiteral("#2DD4BF"), Qt::CaseInsensitive) == 0 ? QString() : m_accent);
     m_theme->setDarkMode(m_darkMode);
-    setStyleSheet(m_theme->mainWindowStyle());
+    const auto& p = m_theme->palette();
+    qApp->setStyleSheet(m_theme->mainWindowStyle());
     m_tabs->applyTheme(m_theme);
     m_splitTabs->applyTheme(m_theme);
     m_addressBar->applyTheme(m_theme);
     applyToolbarTheme();
+    refreshIcons();
+    for (auto* tw : {m_tabs, m_splitTabs})
+        for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) updateTabIcon(t);
+
+    auto* h = PacitumSchemeHandler::instance();
+    h->setThemeVars({{QStringLiteral("TOOL"), p.toolbar}, {QStringLiteral("PAGE"), p.page}, {QStringLiteral("SURF"), p.surface},
+                     {QStringLiteral("BORD"), p.border}, {QStringLiteral("TXT"), p.text}, {QStringLiteral("SEC"), p.textSecondary},
+                     {QStringLiteral("ACC"), p.accent}, {QStringLiteral("ACCS"), p.accentSoft}});
+    for (auto* tw : {m_tabs, m_splitTabs})
+        for (int i = 0; i < tw->count(); ++i)
+            if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i)))
+                if (t->currentUrl().startsWith(QStringLiteral("pacitum:"))) t->reload();
 }
 
 void BrowserWindow::applyToolbarTheme(){
-    if(m_darkMode){
-        m_toolbar->setStyleSheet(R"(QWidget{background:#17191f;border-bottom:1px solid #30343f;} QPushButton{background:transparent;border:none;border-radius:11px;font-size:15px;color:#e8edf5;} QPushButton:hover{background:#2a2f3a;} QPushButton:pressed{background:#3b4352;} QPushButton:disabled{color:#565d6b;})");
-        m_bookmarksBar->setStyleSheet(R"(QWidget{background-color:#252525;border-bottom:1px solid #333;} QPushButton{background:transparent;border:none;padding:4px 10px;font-size:12px;color:#aaa;} QPushButton:hover{background:#333;color:#fff;border-radius:4px;})");
-    } else {
-        m_toolbar->setStyleSheet(R"(QWidget{background:#f7f8fb;border-bottom:1px solid #dfe3ea;} QPushButton{background:transparent;border:none;border-radius:11px;font-size:15px;color:#202938;} QPushButton:hover{background:#e8edf5;} QPushButton:pressed{background:#d9e1ee;} QPushButton:disabled{color:#b4bcc9;})");
-        m_bookmarksBar->setStyleSheet(R"(QWidget{background-color:#fafafa;border-bottom:1px solid #e0e0e0;} QPushButton{background:transparent;border:none;padding:4px 10px;font-size:12px;color:#666;} QPushButton:hover{background:#e8e8ed;color:#1d1d1f;border-radius:4px;})");
-    }
+    // Styling for TabStrip / NavToolbar / BookmarksBar lives in the app-wide QSS (ThemeManager).
+    m_bookmarksBar->setStyleSheet(QString());
+    m_bookmarksBar->applyTheme(m_theme);
+    m_toolbar->setStyleSheet(QString());
 }
 
 QJsonObject BrowserWindow::readSettings() const {
@@ -408,10 +541,21 @@ QJsonObject BrowserWindow::readSettings() const {
 
 void BrowserWindow::loadSettings(){
     auto s=readSettings();
-    m_darkMode = s.value(QStringLiteral("dark_mode")).toBool(false) || s.value(QStringLiteral("theme")).toString()==QStringLiteral("Dark");
+    m_themeSetting = s.value(QStringLiteral("theme")).toString(s.contains(QStringLiteral("dark_mode")) ? (s.value(QStringLiteral("dark_mode")).toBool() ? QStringLiteral("Dark") : QStringLiteral("Light")) : QStringLiteral("System"));
+    m_darkMode = m_themeSetting == QStringLiteral("Dark");
+    m_accent = s.value(QStringLiteral("accent")).toString(QStringLiteral("#2DD4BF"));
     m_searchEngine = s.value(QStringLiteral("search_engine")).toString(QStringLiteral("Google"));
+    {
+        static const QMap<QString,QString> engines{
+            {QStringLiteral("Google"), QStringLiteral("https://www.google.com/search?q=")},
+            {QStringLiteral("Bing"), QStringLiteral("https://www.bing.com/search?q=")},
+            {QStringLiteral("DuckDuckGo"), QStringLiteral("https://duckduckgo.com/?q=")},
+            {QStringLiteral("Yahoo"), QStringLiteral("https://search.yahoo.com/search?p=")},
+            {QStringLiteral("Brave"), QStringLiteral("https://search.brave.com/search?q=")}};
+        PacitumSchemeHandler::instance()->setSearchBase(engines.value(m_searchEngine, engines.value(QStringLiteral("Google"))));
+    }
     m_adblock->setEnabled(s.value(QStringLiteral("adblock_enabled")).toBool(true));
-    m_bookmarksBar->setVisible(s.value(QStringLiteral("show_bookmarks_bar")).toBool(false));
+    m_bookmarksBar->setVisible(s.value(QStringLiteral("show_bookmarks_bar")).toBool(true));
     if(s.value(QStringLiteral("vertical_tabs")).toBool(false)){ m_verticalTabs=true; m_tabs->setVertical(true); m_splitTabs->setVertical(true); }
     int zoomPct=s.value(QStringLiteral("default_zoom")).toInt(100); m_zoom->setZoom(zoomPct/100.0);
 }

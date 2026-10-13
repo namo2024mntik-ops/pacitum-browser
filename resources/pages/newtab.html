@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8"><title>New Tab</title><style>
+:root{--tool:%TOOL%;--page:%PAGE%;--surf:%SURF%;--bord:%BORD%;--txt:%TXT%;--sec:%SEC%;--acc:%ACC%;--accs:%ACCS%}
+*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
+body{font:13px/1.35 "Inter","Segoe UI",system-ui,sans-serif;color:var(--txt);background:var(--page);overflow:hidden;position:relative}
+.ntp{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;background:radial-gradient(900px 420px at 50% 0,var(--accs),transparent 70%)}
+.logo{width:72px;height:72px;margin-top:118px}.wm{font-size:28px;font-weight:600;letter-spacing:-.4px;margin:14px 0 26px}
+form.sb{width:600px;max-width:90vw;height:48px;border-radius:24px;background:var(--tool);border:1px solid var(--bord);box-shadow:0 2px 10px rgba(0,0,0,.08);display:flex;align-items:center;padding:0 18px;gap:12px;color:var(--sec)}
+form.sb:focus-within{border:2px solid var(--acc);padding:0 17px}
+.sb input{flex:1;border:0;outline:0;background:transparent;color:var(--txt);font:15px "Inter","Segoe UI",system-ui,sans-serif}
+.sb input::placeholder{color:var(--sec)}
+.tiles{display:grid;grid-template-columns:repeat(6,96px);gap:16px;margin-top:40px}
+.tile{width:96px;height:96px;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;font-size:12px;color:var(--txt);text-decoration:none;transition:background .12s ease-out}
+.tile:hover{background:var(--surf)}.fav{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;font-size:20px;font-weight:700;color:#fff}
+.add{background:var(--surf);color:var(--sec);font-weight:400;font-size:26px}
+.foot{position:absolute;bottom:20px;right:24px;color:var(--sec);font-size:12px}
+</style></head><body><div class="ntp">
+<img class="logo" src="qrc:/pages/logo.png" alt="">
+<div class="wm">Pacitum</div>
+<form class="sb" onsubmit="go();return false"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="q" placeholder="Search the web or type a URL" autofocus></form>
+<div class="tiles" id="tiles"></div>
+<div class="foot">Pacitum Browser</div></div>
+<script>
+var T=[["Mail","https://mail.google.com","#EA4335"],["GitHub","https://github.com","#24292F"],["Qt Docs","https://doc.qt.io","#41CD52"],["YouTube","https://youtube.com","#FF0000"],["Weather","https://weather.com","#0EA5E9"],["Figma","https://figma.com","#8B5CF6"],["Hacker News","https://news.ycombinator.com","#F97316"],["LinkedIn","https://linkedin.com","#0A66C2"],["Spotify","https://open.spotify.com","#1DB954"],["Docs","https://docs.google.com","#64748B"],["Calendar","https://calendar.google.com","#E11D48"]];
+var h="";T.forEach(function(t){h+='<a class="tile" href="'+t[1]+'"><span class="fav" style="background:'+t[2]+'">'+t[0][0]+'</span>'+t[0]+'</a>'});
+h+='<a class="tile" href="#"><span class="fav add">+</span>Add shortcut</a>';document.getElementById("tiles").innerHTML=h;
+function go(){var v=document.getElementById("q").value.trim();if(!v)return;
+location.href=(/^[a-z]+:\/\//i.test(v)?v:(v.indexOf(".")>0&&v.indexOf(" ")<0?"https://"+v:"%SEARCH%"+encodeURIComponent(v)));}
+</script></body></html>

@@ -8,8 +8,9 @@
 #include <QJsonObject>
 #include <QWebEngineDownloadRequest>
 #include <QStyle>
+#include <QToolButton>
 
-class SafariTabWidget;
+class PacitumTabWidget;
 class BrowserTab;
 class AddressBar;
 class BookmarksBar;
@@ -90,10 +91,14 @@ private:
     void restoreOrNewTab();
     BrowserTab* activeTab() const;
     QJsonObject readSettings() const;
-    QPushButton* makeToolBtn(const QString& text, const char* slot, const QString& tip);
-    QPushButton* makeIconBtn(QStyle::StandardPixmap icon, const char* slot, const QString& tip);
+    QToolButton* makeToolBtn(const QString& tip);
+    void refreshIcons();
+    void updateTabIcon(BrowserTab* tab);
+    void updateNavState();
 
     bool m_darkMode = false;
+    QString m_themeSetting = QStringLiteral("System");
+    QString m_accent;
     bool m_privateMode = false;
     bool m_splitActive = false;
     bool m_verticalTabs = false;
@@ -108,21 +113,23 @@ private:
     AdBlocker* m_adblock = nullptr;
 
     QWidget* m_toolbar = nullptr;
-    QPushButton* m_backBtn = nullptr;
-    QPushButton* m_forwardBtn = nullptr;
-    QPushButton* m_reloadBtn = nullptr;
-    QPushButton* m_homeBtn = nullptr;
+    QToolButton* m_backBtn = nullptr;
+    QToolButton* m_forwardBtn = nullptr;
+    QToolButton* m_reloadBtn = nullptr;
+    QToolButton* m_homeBtn = nullptr;
     AddressBar* m_addressBar = nullptr;
-    QPushButton* m_splitBtn = nullptr;
-    QPushButton* m_bookmarkBtn = nullptr;
-    QPushButton* m_downloadsBtn = nullptr;
-    QPushButton* m_menuBtn = nullptr;
+    QToolButton* m_splitBtn = nullptr;
+    QToolButton* m_profileBtn = nullptr;
+    QWidget* m_tabStrip = nullptr;
+    QLabel* m_privateBadge = nullptr;
+    QToolButton* m_downloadsBtn = nullptr;
+    QToolButton* m_menuBtn = nullptr;
 
     BookmarksBar* m_bookmarksBar = nullptr;
     QSplitter* m_splitter = nullptr;
-    SafariTabWidget* m_tabs = nullptr;
-    SafariTabWidget* m_splitTabs = nullptr;
-    SafariTabWidget* m_activeWidget = nullptr;
+    PacitumTabWidget* m_tabs = nullptr;
+    PacitumTabWidget* m_splitTabs = nullptr;
+    PacitumTabWidget* m_activeWidget = nullptr;
 
     QLabel* m_zoomIndicator = nullptr;
     QGraphicsOpacityEffect* m_toolbarOpacity = nullptr;

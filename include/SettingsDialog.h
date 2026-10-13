@@ -46,6 +46,7 @@ private:
 
     // Appearance
     QComboBox* m_theme = nullptr;
+    QComboBox* m_accent = nullptr;
     QCheckBox* m_showBookmarksBar = nullptr;
     QCheckBox* m_verticalTabs = nullptr;
     QSlider* m_zoomSlider = nullptr;

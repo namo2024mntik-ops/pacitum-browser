@@ -1,5 +1,5 @@
 /*
- * Safari Browser — C++ Qt6 Port
+ * Pacitum Browser — Qt6 WebEngine browser
  * Entry point with GPU detection and Chromium flags (mirrors main.py:31)
  */
 
@@ -7,11 +7,14 @@
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
 #include <QIcon>
+#include <QFont>
+#include <QFile>
 #include <QDir>
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QtGlobal>
 #include "BrowserWindow.h"
+#include "PacitumScheme.h"
 
 #include <iostream>
 
@@ -53,17 +56,20 @@ int main(int argc, char *argv[]) {
     QDir::setCurrent(QCoreApplication::applicationDirPath());
 
     setupEnvironment();
+    PacitumSchemeHandler::registerScheme();
 
     QApplication app(argc, argv);
-    app.setApplicationName(QStringLiteral("Safari Browser"));
-    app.setOrganizationName(QStringLiteral("SafariBrowser"));
-    app.setApplicationDisplayName(QStringLiteral("Safari Browser"));
-
-    QString iconPath = QCoreApplication::applicationDirPath() + QStringLiteral("/resources/icons/safari.png");
-    if (QFile::exists(iconPath)) app.setWindowIcon(QIcon(iconPath));
-    else {
-        QString alt = QDir::currentPath() + QStringLiteral("/resources/icons/safari.png");
-        if (QFile::exists(alt)) app.setWindowIcon(QIcon(alt));
+    app.setApplicationName(QStringLiteral("Pacitum Browser"));
+    app.setOrganizationName(QStringLiteral("Pacitum"));
+    app.setApplicationDisplayName(QStringLiteral("Pacitum Browser"));
+    app.setApplicationVersion(QStringLiteral(PACITUM_VERSION));
+    app.setDesktopFileName(QStringLiteral("pacitum-browser"));
+    app.setWindowIcon(QIcon(QStringLiteral(":/icons/pacitum-icon-256.png")));
+    {
+        QFont f = app.font();
+        f.setFamilies({QStringLiteral("Inter"), QStringLiteral("Segoe UI"), QStringLiteral("Cantarell"), f.family()});
+        f.setPixelSize(13);
+        app.setFont(f);
     }
 
     // Persistent profile storage (mirrors main.py:82)
@@ -74,6 +80,8 @@ int main(int argc, char *argv[]) {
     profile->setPersistentStoragePath(storagePath + QStringLiteral("/storage"));
     profile->setCachePath(storagePath + QStringLiteral("/cache"));
     profile->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
+
+    PacitumSchemeHandler::install(profile);
 
     auto* settings = profile->settings();
     settings->setAttribute(QWebEngineSettings::PluginsEnabled, true);

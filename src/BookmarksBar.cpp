@@ -1,14 +1,17 @@
 #include "BookmarksBar.h"
 #include "BookmarkManager.h"
+#include "ThemeManager.h"
+#include <QFontMetrics>
 #include <QPushButton>
 #include <QMenu>
 #include <QScrollArea>
 #include <QAction>
 
 BookmarksBar::BookmarksBar(BookmarkManager* mgr, QWidget* parent) : QWidget(parent), m_mgr(mgr) {
-    setFixedHeight(36);
+    setFixedHeight(33);
+    setAttribute(Qt::WA_StyledBackground, true);
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(8,2,8,2); layout->setSpacing(4);
+    layout->setContentsMargins(10,0,10,1); layout->setSpacing(2);
 
     auto* scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -16,11 +19,21 @@ BookmarksBar::BookmarksBar(BookmarkManager* mgr, QWidget* parent) : QWidget(pare
     scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_inner = new QWidget(scroll);
     m_innerLayout = new QHBoxLayout(m_inner);
-    m_innerLayout->setContentsMargins(0,0,0,0); m_innerLayout->setSpacing(4);
+    m_innerLayout->setContentsMargins(0,0,0,0); m_innerLayout->setSpacing(2);
     m_innerLayout->addStretch();
     m_inner->setLayout(m_innerLayout);
     scroll->setWidget(m_inner);
-    layout->addWidget(scroll);
+    scroll->setFrameShape(QFrame::NoFrame);
+    layout->addWidget(scroll, 1);
+    m_other = new QPushButton(QStringLiteral("Other bookmarks"), this);
+    m_other->setFixedHeight(26); m_other->setIconSize(QSize(14,14));
+    connect(m_other, &QPushButton::clicked, this, [this]{
+        QMenu m(this);
+        for (auto& bm : m_mgr->allBookmarks()) { QString u = bm.url; m.addAction(bm.title.isEmpty() ? bm.url : bm.title, this, [this, u]{ emit urlActivated(u); }); }
+        if (m.isEmpty()) m.addAction(QStringLiteral("No bookmarks yet"))->setEnabled(false);
+        m.exec(m_other->mapToGlobal(QPoint(0, m_other->height())));
+    });
+    layout->addWidget(m_other);
     refresh();
 }
 
@@ -33,7 +46,11 @@ void BookmarksBar::refresh() {
     }
     for (auto &bm : m_mgr->allBookmarks()) {
         if (m_innerLayout->count() > 31) break;
-        auto* btn = new QPushButton(bm.title.isEmpty() ? bm.url : bm.title, m_inner);
+        const QString label = bm.title.isEmpty() ? bm.url : bm.title;
+        auto* btn = new QPushButton(m_inner);
+        btn->setText(QFontMetrics(btn->font()).elidedText(label, Qt::ElideRight, 130));
+        btn->setFixedHeight(26); btn->setIconSize(QSize(14,14));
+        if (m_theme) btn->setIcon(m_theme->secondaryIcon(QStringLiteral("globe"), 14));
         btn->setToolTip(bm.url); btn->setFlat(true);
         QString url = bm.url;
         connect(btn, &QPushButton::clicked, this, [this, url]{ emit urlActivated(url); });
@@ -48,4 +65,10 @@ void BookmarksBar::showContextMenu(const QPoint& pos, const QString& url, QWidge
     m.addAction(QStringLiteral("Open"), this, [this, url]{ emit urlActivated(url); });
     m.addAction(QStringLiteral("Remove"), this, [this, url]{ m_mgr->removeBookmark(url); refresh(); });
     m.exec(btn->mapToGlobal(pos));
+}
+
+void BookmarksBar::applyTheme(ThemeManager* tm) {
+    m_theme = tm;
+    if (m_other) m_other->setIcon(tm->secondaryIcon(QStringLiteral("folder"), 14));
+    refresh();
 }

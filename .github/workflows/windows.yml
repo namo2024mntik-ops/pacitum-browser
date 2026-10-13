@@ -20,9 +20,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory dist | Out-Null
-          $exe = Get-ChildItem build -Recurse -Filter SafariBrowser.exe | Select-Object -First 1
+          $exe = Get-ChildItem build -Recurse -Filter PacitumBrowser.exe | Select-Object -First 1
           Copy-Item $exe.FullName dist/
-          windeployqt --release --no-translations dist/SafariBrowser.exe
+          windeployqt --release --no-translations dist/PacitumBrowser.exe
           if (Test-Path "$env:VCToolsRedistDir\x64") { Get-ChildItem "$env:VCToolsRedistDir\x64" -Recurse -Filter *.dll | Where-Object { $_.FullName -match 'CRT' } | Copy-Item -Destination dist }
       - name: Installer
         shell: pwsh
@@ -31,5 +31,5 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
       - uses: actions/upload-artifact@v4
         with:
-          name: SafariBrowser-Setup
+          name: PacitumBrowser-Setup
           path: installer/*.exe

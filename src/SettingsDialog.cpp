@@ -11,14 +11,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QFile>
+#include <QPainter>
+#include <QPixmap>
 #include <QWebEngineProfile>
 #include <QWebEngineCookieStore>
 
 SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle(QStringLiteral("Settings")); setMinimumSize(620,520); resize(620,560);
+    setWindowTitle(QStringLiteral("Settings — Pacitum Browser")); setMinimumSize(620,520); resize(620,560);
     loadSettings();
     auto* mainLay = new QVBoxLayout(this); mainLay->setContentsMargins(0,0,0,0);
-    auto* tabs = new QTabWidget(this);
+    auto* tabs = new QTabWidget(this); tabs->setObjectName(QStringLiteral("SettingsTabs")); tabs->setDocumentMode(true);
     tabs->addTab(generalTab(), QStringLiteral("General"));
     tabs->addTab(privacyTab(), QStringLiteral("Privacy & Security"));
     tabs->addTab(appearanceTab(), QStringLiteral("Appearance"));
@@ -26,17 +28,16 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent) {
     mainLay->addWidget(tabs, 1);
     auto* btnLay = new QHBoxLayout(); btnLay->setContentsMargins(16,8,16,12); btnLay->addStretch();
     auto* cancel = new QPushButton(QStringLiteral("Cancel"), this); cancel->setFixedSize(100,34);
-    auto* save = new QPushButton(QStringLiteral("Save Changes"), this); save->setFixedSize(120,34);
+    auto* save = new QPushButton(QStringLiteral("Save Changes"), this); save->setFixedSize(130,34); save->setDefault(true);
     connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
     connect(save, &QPushButton::clicked, this, &SettingsDialog::saveAndClose);
     btnLay->addWidget(cancel); btnLay->addWidget(save); mainLay->addLayout(btnLay);
-    setStyleSheet(R"(QDialog{background:#f5f5f7;} QGroupBox{font-weight:bold;border:1px solid #d2d2d7;border-radius:8px;margin-top:12px;padding-top:16px;} QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;} QLineEdit,QComboBox,QSpinBox{padding:8px;border:1px solid #d2d2d7;border-radius:6px;background:white;})");
 }
 
 QWidget* SettingsDialog::generalTab() {
     auto* tab = new QWidget(this); auto* lay = new QVBoxLayout(tab); lay->setContentsMargins(20,20,20,20); lay->setSpacing(12);
     auto* g1 = new QGroupBox(QStringLiteral("Startup"), tab); auto* f1 = new QFormLayout(g1);
-    m_homepage = new QLineEdit(m_settings.value(QStringLiteral("homepage")).toString(QStringLiteral("https://www.google.com")), g1);
+    m_homepage = new QLineEdit(m_settings.value(QStringLiteral("homepage")).toString(QStringLiteral("pacitum://newtab")), g1);
     f1->addRow(QStringLiteral("Homepage:"), m_homepage);
     m_restoreSession = new QCheckBox(QStringLiteral("Restore last session on startup"), g1);
     m_restoreSession->setChecked(m_settings.value(QStringLiteral("restore_session")).toBool(true)); f1->addRow(QStringLiteral(""), m_restoreSession);
@@ -76,7 +77,14 @@ QWidget* SettingsDialog::privacyTab() {
 QWidget* SettingsDialog::appearanceTab() {
     auto* tab = new QWidget(this); auto* lay = new QVBoxLayout(tab); lay->setContentsMargins(20,20,20,20); lay->setSpacing(12);
     auto* g1 = new QGroupBox(QStringLiteral("Theme"), tab); auto* f1 = new QFormLayout(g1);
-    m_theme = new QComboBox(g1); m_theme->addItems({QStringLiteral("Light"),QStringLiteral("Dark"),QStringLiteral("System")}); m_theme->setCurrentText(m_settings.value(QStringLiteral("theme")).toString(QStringLiteral("Light"))); f1->addRow(QStringLiteral("Theme:"), m_theme); g1->setLayout(f1); lay->addWidget(g1);
+    m_theme = new QComboBox(g1); m_theme->addItems({QStringLiteral("Light"),QStringLiteral("Dark"),QStringLiteral("System")}); m_theme->setCurrentText(m_settings.value(QStringLiteral("theme")).toString(QStringLiteral("System"))); f1->addRow(QStringLiteral("Theme:"), m_theme);
+    m_accent = new QComboBox(g1);
+    for (auto& a : QList<QPair<QString,QString>>{{QStringLiteral("Teal"),QStringLiteral("#2DD4BF")},{QStringLiteral("Indigo"),QStringLiteral("#6366F1")},{QStringLiteral("Rose"),QStringLiteral("#F43F5E")},{QStringLiteral("Amber"),QStringLiteral("#F59E0B")},{QStringLiteral("Green"),QStringLiteral("#22C55E")},{QStringLiteral("Slate"),QStringLiteral("#64748B")}}) {
+        QPixmap pm(16,16); pm.fill(Qt::transparent); { QPainter pt(&pm); pt.setRenderHint(QPainter::Antialiasing); pt.setBrush(QColor(a.second)); pt.setPen(Qt::NoPen); pt.drawEllipse(1,1,14,14); }
+        m_accent->addItem(QIcon(pm), a.first, a.second);
+    }
+    { int ai = m_accent->findData(m_settings.value(QStringLiteral("accent")).toString(QStringLiteral("#2DD4BF"))); m_accent->setCurrentIndex(ai < 0 ? 0 : ai); }
+    f1->addRow(QStringLiteral("Accent color:"), m_accent); g1->setLayout(f1); lay->addWidget(g1);
     auto* g2 = new QGroupBox(QStringLiteral("Toolbar"), tab); auto* f2 = new QFormLayout(g2);
     m_showBookmarksBar = new QCheckBox(QStringLiteral("Show Bookmarks Bar"), g2); m_showBookmarksBar->setChecked(m_settings.value(QStringLiteral("show_bookmarks_bar")).toBool(false)); f2->addRow(QStringLiteral(""), m_showBookmarksBar);
     m_verticalTabs = new QCheckBox(QStringLiteral("Use Vertical Tabs"), g2); m_verticalTabs->setChecked(m_settings.value(QStringLiteral("vertical_tabs")).toBool(false)); f2->addRow(QStringLiteral(""), m_verticalTabs); g2->setLayout(f2); lay->addWidget(g2);
@@ -118,6 +126,7 @@ void SettingsDialog::saveSettings() {
     s[QStringLiteral("do_not_track")] = m_doNotTrack->isChecked();
     s[QStringLiteral("theme")] = m_theme->currentText();
     s[QStringLiteral("dark_mode")] = m_theme->currentText()==QStringLiteral("Dark");
+    s[QStringLiteral("accent")] = m_accent->currentData().toString();
     s[QStringLiteral("restore_session")] = m_restoreSession->isChecked();
     s[QStringLiteral("show_suggestions")] = m_suggestions->isChecked();
     s[QStringLiteral("download_path")] = m_downloadPath->text();

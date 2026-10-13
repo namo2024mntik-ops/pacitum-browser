@@ -11,7 +11,7 @@ class FindBar;
 class BrowserTab : public QWidget {
     Q_OBJECT
 public:
-    explicit BrowserTab(const QString& url = QStringLiteral("https://www.google.com"),
+    explicit BrowserTab(const QString& url = QString(),
                         bool privateMode = false,
                         const QString& searchEngine = QStringLiteral("Google"),
                         QWidget* parent = nullptr);
@@ -29,6 +29,8 @@ public:
     double zoomFactor() const { return m_zoom; }
     void setMuted(bool muted);
     bool isMuted() const;
+    QIcon icon() const { return m_view->icon(); }
+    bool isLoading() const { return m_loading; }
     void showFindBar();
     void hideFindBar();
 
@@ -57,6 +59,7 @@ private:
     QString m_url;
     QString m_title = QStringLiteral("New Tab");
     double m_zoom = 1.0;
+    bool m_loading = false;
 
     QWebEngineView* m_view = nullptr;
     QWebEngineProfile* m_profile = nullptr;

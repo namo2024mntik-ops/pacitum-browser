@@ -1,5 +1,5 @@
 @echo off
-REM Build Safari Browser C++ with MSVC (requires BuildTools with VCTools)
+REM Build Pacitum Browser C++ with MSVC (requires BuildTools with VCTools)
 REM Run this from x64 Native Tools Command Prompt or it will auto-call vcvars
 
 if not defined VSCMD_VER (
@@ -22,6 +22,6 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Build succeeded: build\SafariBrowser.exe
+echo Build succeeded: build\PacitumBrowser.exe
 pause
-build\SafariBrowser.exe
+build\PacitumBrowser.exe

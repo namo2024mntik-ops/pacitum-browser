@@ -1,5 +1,6 @@
 #include "BrowserTab.h"
 #include "FindBar.h"
+#include "PacitumScheme.h"
 #include <QVBoxLayout>
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
@@ -29,6 +30,7 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     if (m_private) {
         m_profile = new QWebEngineProfile(this);
         m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
+        PacitumSchemeHandler::install(m_profile);
         m_page = new QWebEnginePage(m_profile, m_view);
         m_view->setPage(m_page);
     }
@@ -65,9 +67,10 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
 
 void BrowserTab::loadUrl(const QString& raw) {
     QString url = raw.trimmed();
-    if (url.isEmpty()) url = QStringLiteral("https://www.google.com");
+    if (url.isEmpty()) url = PacitumSchemeHandler::newTabUrl();
     if (!url.startsWith(QStringLiteral("http://")) && !url.startsWith(QStringLiteral("https://"))
-        && !url.startsWith(QStringLiteral("file://")) && !url.startsWith(QStringLiteral("about:"))) {
+        && !url.startsWith(QStringLiteral("file://")) && !url.startsWith(QStringLiteral("about:")) && !url.startsWith(QStringLiteral("pacitum:"))
+        && !url.startsWith(QStringLiteral("data:"))) {
         if (url.contains('.') && !url.contains(' ')) url = QStringLiteral("https://") + url;
         else {
             QMap<QString,QString> engines{
@@ -104,9 +107,9 @@ void BrowserTab::hideFindBar() { m_findBar->hide(); }
 
 void BrowserTab::onUrlChanged(const QUrl& u) { m_url = u.toString(); emit urlChanged(m_url); }
 void BrowserTab::onTitleChanged(const QString& t) { m_title = t.isEmpty() ? QStringLiteral("New Tab") : t; emit titleChanged(m_title); }
-void BrowserTab::onLoadStarted() { emit loadingChanged(true); m_progress->setValue(0); m_progress->show(); }
+void BrowserTab::onLoadStarted() { m_loading = true; emit loadingChanged(true); m_progress->setValue(0); m_progress->show(); }
 void BrowserTab::onLoadProgress(int p) { m_progress->setValue(p); emit progressChanged(p); }
-void BrowserTab::onLoadFinished(bool) { emit loadingChanged(false); m_progress->hide(); m_progress->setValue(100); }
+void BrowserTab::onLoadFinished(bool) { m_loading = false; emit loadingChanged(false); m_progress->hide(); m_progress->setValue(100); }
 void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus, int) { QTimer::singleShot(1000, this, &BrowserTab::reload); }
 
 void BrowserTab::fadeIn() {

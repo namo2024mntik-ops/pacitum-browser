@@ -3,11 +3,25 @@
 #include <QColor>
 #include <QIcon>
 
-// Pacitum design tokens (design-spec.md §2)
+// Pacitum design tokens (design-spec-1.5.md §1).
+// Legacy names kept for existing callers: frame = chrome, tab = elevated, toolbar = card.
 struct PacitumPalette {
     QString frame, tab, tabHover, toolbar, page, surface, surfaceHover, border,
             text, textSecondary, disabled, accent, onAccent, accentSoft, secure, danger;
+    // 1.5 additions
+    QString omnibox, omniboxHover, pressed, borderStrong, textTertiary,
+            accentHover, accentPressed, focusRing, warning;
+    const QString& chrome() const { return frame; }
+    const QString& elevated() const { return tab; }
+    const QString& card() const { return toolbar; }
 };
+
+namespace Pacitum {
+// Animation duration scaled for the OS / app "reduce motion" preference (0 when reduced).
+int motionMs(int ms);
+bool reducedMotion();
+void setReducedMotion(bool on);   // app setting override
+}
 
 class ThemeManager {
 public:

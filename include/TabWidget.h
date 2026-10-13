@@ -8,14 +8,39 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <functional>
+#include <QAbstractButton>
+#include <QVariantAnimation>
 
 class AnimatedToolButton;
 
 class ThemeManager;
 
+class PacitumTabBar;
+
+// 22 px circular close button used by floating tabs (spec §5.1).
+class TabCloseButton : public QAbstractButton {
+    Q_OBJECT
+public:
+    explicit TabCloseButton(QWidget* parent = nullptr);
+    QSize sizeHint() const override { return {22, 22}; }
+protected:
+    void paintEvent(QPaintEvent*) override;
+    void enterEvent(QEnterEvent* e) override { update(); QAbstractButton::enterEvent(e); }
+    void leaveEvent(QEvent* e) override { update(); QAbstractButton::leaveEvent(e); }
+};
+
 class PacitumTabBar : public QTabBar {
     Q_OBJECT
 public:
+    // Pacitum 1.5 floating-tab look (custom painted; used for the window's tab strip).
+    void enableFloatingTabs();
+    bool floating() const { return m_floating; }
+    void setTabLoading(int index, bool on);
+    void setTabAudio(int index, bool audible, bool muted);
+    void setTabCrashed(int index, bool on);
+    void paintFloatingTab(QPainter* p, const class QStyleOptionTab& opt) const;
+    QRect closeButtonRect(const QRect& tabRect) const;
+    int normalTabWidth() const;
     explicit PacitumTabBar(bool vertical = false, QWidget* parent = nullptr);
     void setVerticalMode(bool v);
     bool isTabPinned(int index) const { return m_pinned.contains(index); }
@@ -32,13 +57,33 @@ protected:
 
 signals:
     void tabRightClicked(int index, const QPoint& globalPos);
+    void tabMuteToggled(int index, bool muted);
     void emptySpaceRightClicked(const QPoint& globalPos);
 
 protected:
     void mousePressEvent(QMouseEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    void mouseMoveEvent(QMouseEvent* e) override;
+    void leaveEvent(QEvent* e) override;
+    void tabInserted(int index) override;
+    void tabRemoved(int index) override;
+    void tabLayoutChange() override;
 
 private:
+    struct TabFlags { bool loading = false, audible = false, muted = false, crashed = false; };
+    quint64 ensureId(int index);
+    void setHoverIndex(int i);
+    void updateCloseButtons();
+    void updateSpinner();
+    QRect audioRect(int index) const;
+    bool m_floating = false;
+    QHash<quint64, TabFlags> m_flags;
+    QHash<quint64, qreal> m_hover;            // per-tab hover level 0..1 (120/160 ms fades)
+    QHash<quint64, QVariantAnimation*> m_hoverAnim;
+    quint64 m_hoverId = 0;
+    QVariantAnimation* m_spin = nullptr;
+    qreal m_spinAngle = 0;
+    int m_frozenWidth = 0;                    // keep widths while closing with the mouse (Chrome-like)
     quint64 idOf(int index) const;
     int indexOfId(quint64 id) const;
     void relayout();
@@ -64,7 +109,13 @@ public:
     QWidget* createTabStrip(QWidget* parent);
     QHBoxLayout* stripLayout() const { return m_stripLayout; }
     QTabBar* stripBar() const { return m_ext; }
-    QWidget* stripLogo() const { return m_logo; }
+    QWidget* stripLogo() const { return nullptr; }   // 1.5: no standalone logo in the strip
+    QWidget* stripNewTabButton() const;
+    void setTabLoading(int index, bool on);
+    void setTabAudio(int index, bool audible, bool muted);
+    void setTabCrashed(int index, bool on);
+    void showTabSearch() { showTabList(); }
+    bool hasFloatingStrip() const { return m_ext && !m_vertical; }
     // Animate the tab closed (if it lives in the strip), then call done().
     void animateRemove(int index, std::function<void()> done);
 

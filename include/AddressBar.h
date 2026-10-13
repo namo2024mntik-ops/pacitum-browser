@@ -40,6 +40,11 @@ private slots:
 private:
     void updateSecurityIcon(const QString& url);
     void updateStar();
+    void showBlurred();
+    void setDisplayMode(bool on);
+    QToolButton* m_chip = nullptr;
+    QLabel* m_display = nullptr;
+    bool m_secureHttps = false;
 
     HistoryManager* m_history = nullptr;
     ThemeManager* m_theme = nullptr;

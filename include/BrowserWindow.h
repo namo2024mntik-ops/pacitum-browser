@@ -95,6 +95,8 @@ private slots:
     void onSettingChanged(const QString& key);
     void clearBrowsingData(bool history, bool cookies, bool cache);
     void tickSpinner();
+    void showDevTools();
+    void showExtensionsMenu();
 
 private:
     void setupUI();
@@ -117,6 +119,9 @@ private:
     bool isCaptionArea(const QPoint& local) const;
     Qt::Edges edgesAt(const QPoint& global) const;
     void updateTabIcon(BrowserTab* tab);
+    void updateTabAudio(BrowserTab* tab);
+    void updateToolbarOverflow();
+    bool m_downloadsWanted = false;
     void updateNavState();
 
     bool m_darkMode = false;

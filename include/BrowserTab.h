@@ -45,6 +45,7 @@ public:
     bool isLazy() const { return !m_pendingUrl.isEmpty(); }
     static std::function<BrowserTab*()> s_popupFactory;
     void showFindBar();
+    void refreshTheme();   // re-tint native chrome inside the tab (info bar)
     void hideFindBar();
 
 signals:
@@ -53,6 +54,7 @@ signals:
     void loadingChanged(bool loading);
     void iconChanged();
     void progressChanged(int progress);
+    void crashed();
 
 private slots:
     void onUrlChanged(const QUrl& url);
@@ -66,9 +68,7 @@ private:
     void buildSignInBar();
     void showSignInBar(const QUrl& target);
     void checkGoogleSignIn(const QUrl& url);
-    QFrame* m_signInBar = nullptr;
-    QLabel* m_signInIcon = nullptr;
-    QToolButton* m_signInClose = nullptr;
+    class InfoBar* m_signInBar = nullptr;
     QUrl m_signInUrl;
     QString m_pendingUrl;
 protected:

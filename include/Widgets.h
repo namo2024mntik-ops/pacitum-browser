@@ -75,7 +75,55 @@ private:
     QString m_color;
 };
 
+class QLabel;
+class QPushButton;
+class QPropertyAnimation;
+
+// Inset info bar card (spec §5.7): 8 px margins, 44 px, radius 10, card fill + 1 px border,
+// leading 18 px icon, message, optional secondary + primary 32 px pills, 30 px close circle.
+class InfoBar : public QWidget {
+    Q_OBJECT
+public:
+    enum Kind { Info, Warning };
+    explicit InfoBar(QWidget* parent = nullptr);
+    void setKind(Kind k) { m_kind = k; refresh(); }
+    void setMessage(const QString& text);
+    void setPrimary(const QString& text, const QString& iconName = QString());
+    void setSecondary(const QString& text);   // empty = hidden
+    void showAnimated();
+    void hideAnimated();
+    void refresh();   // re-tint icons after a theme change
+signals:
+    void primaryClicked();
+    void secondaryClicked();
+    void closed();
+private:
+    void animateTo(int h, bool hideAtEnd);
+    Kind m_kind = Info;
+    QString m_primaryIcon;
+    QWidget* m_card = nullptr;
+    QLabel* m_icon = nullptr;
+    QLabel* m_text = nullptr;
+    QPushButton* m_secondary = nullptr;
+    QPushButton* m_primary = nullptr;
+    QToolButton* m_close = nullptr;
+    QPropertyAnimation* m_anim = nullptr;
+};
+
+#include <QMenu>
 namespace Pacitum {
+// Popup with the spec's shadow-popup (0 16px 40px) painted into a 16 px transparent margin
+// around a card (radius 14). Falls back to the 1 px outline when translucency isn't available.
+class PopupMenu : public QMenu {
+    Q_OBJECT
+public:
+    static constexpr int kShadow = 16;
+    explicit PopupMenu(QWidget* parent = nullptr);
+    int shadowMargin() const { return m_shadow ? kShadow : 0; }
+protected:
+    bool m_shadow = false;
+    void paintEvent(QPaintEvent* e) override;
+};
 // 16 px accent spinner arc (2 px stroke) for loading tabs.
 QIcon spinnerIcon(int angle, const QString& color);
 // Fade-in for every QMenu popup (installed once on qApp).

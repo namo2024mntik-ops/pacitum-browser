@@ -105,6 +105,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     qApp->installEventFilter(this);
     m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test"));
     setupUpdater();
+    setupHome();
 #ifdef Q_OS_WIN
     // Do NOT force native window creation from the constructor; apply the frame
     // once Qt has created the HWND during show().
@@ -1082,7 +1083,12 @@ void BrowserWindow::applyTheme(){
                      {QStringLiteral("BORD"), p.border}, {QStringLiteral("TXT"), p.text}, {QStringLiteral("SEC"), p.textSecondary},
                      {QStringLiteral("ACC"), p.accent}, {QStringLiteral("ACCS"), p.accentSoft},
                      {QStringLiteral("SURFH"), p.surfaceHover}, {QStringLiteral("BORD2"), p.borderStrong}, {QStringLiteral("TER"), p.textTertiary},
-                     {QStringLiteral("ONACC"), p.onAccent}, {QStringLiteral("DANGER"), p.danger}});
+                     {QStringLiteral("ONACC"), p.onAccent}, {QStringLiteral("DANGER"), p.danger},
+                     {QStringLiteral("CHROME"), p.frame}, {QStringLiteral("ACCH"), p.accentHover}, {QStringLiteral("RING"), p.focusRing},
+                     {QStringLiteral("WARN"), p.warning.isEmpty() ? QStringLiteral("#F59E0B") : p.warning},
+                     // home blob 1: the accent / profile colour (spec §2.4 "Home")
+                     {QStringLiteral("PCOL"), QColor(m_accent).isValid() ? m_accent : QStringLiteral("#2DD4BF")},
+                     {QStringLiteral("BLOBO"), m_darkMode ? QStringLiteral(".20") : QStringLiteral(".22")}});
     // Internal pages are re-served with the new tokens. The welcome flow is live-updated over its
     // web channel instead (a reload would lose the current step).
     for (auto* tw : {m_tabs, m_splitTabs})
@@ -1670,4 +1676,76 @@ void BrowserWindow::endWelcome() {
     FirstRunBridge::markFirstRunDone();
     if (m_bookmarksBar && !m_bookmarksBar->isVisible())
         m_bookmarksBar->setVisible(readSettings().value(QStringLiteral("show_bookmarks_bar")).toBool(true));
+}
+
+
+// ---------------------------------------------------------------------------------------------
+// 1.6 home page bridge (home-profile-spec.md §1): data for pacitum://newtab and the
+// pacitum://action/<name> calls it makes (theme, engine, open, downloads, history).
+// ---------------------------------------------------------------------------------------------
+static QPointer<BrowserWindow> s_homeWindow;
+
+void BrowserWindow::setupHome() {
+    s_homeWindow = this;
+    auto* h = PacitumSchemeHandler::instance();
+    h->setHomeDataProvider([]{ return s_homeWindow ? s_homeWindow->homeData() : QStringLiteral("{}"); });
+    connect(h, &PacitumSchemeHandler::homeAction, this, [this](const QString& n, const QMap<QString, QString>& a){
+        if (s_homeWindow && s_homeWindow != this) return;   // one window handles each call
+        handleHomeAction(n, a);
+    });
+    connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now){ if (now && now->window() == this) s_homeWindow = this; });
+}
+
+QString BrowserWindow::homeData() {
+    QJsonObject o;
+    // Greeting name hook: "profile_name" in the settings (the profile system can supply it).
+    const QString name = readSettings().value(QStringLiteral("profile_name")).toString();
+    o["first"] = m_privateMode ? QString() : name.section(QLatin1Char(' '), 0, 0);
+    o["dark"] = m_darkMode;
+    o["reduced"] = Pacitum::reducedMotion();
+    o["theme"] = m_themeSetting;
+    o["engine"] = m_searchEngine;
+    o["engines"] = QJsonObject{{"Google", "https://www.google.com/search?q="}, {"Bing", "https://www.bing.com/search?q="},
+                               {"DuckDuckGo", "https://duckduckgo.com/?q="}, {"Yahoo", "https://search.yahoo.com/search?p="},
+                               {"Brave", "https://search.brave.com/search?q="}};
+    o["search"] = QStringLiteral("https://www.google.com/search?q=");
+    // Continue reading: recently closed tabs first, then recent history (internal pages skipped).
+    QJsonArray recent; QSet<QString> seen;
+    auto addRecent = [&](const QString& u, const QString& t, double at){
+        if (recent.size() >= 5 || u.isEmpty() || seen.contains(u) || !(u.startsWith(QLatin1String("http://")) || u.startsWith(QLatin1String("https://")))) return;
+        seen.insert(u); recent.append(QJsonObject{{"u", u}, {"t", t}, {"at", at}});
+    };
+    for (int i = m_recentlyClosed.size() - 1; i >= 0; --i) addRecent(m_recentlyClosed[i].url, m_recentlyClosed[i].title, 0);
+    if (m_history && !m_privateMode) for (const auto& e : m_history->recent(20)) addRecent(e.url, e.title, e.visitTime);
+    o["recent"] = recent;
+    QJsonArray top;
+    if (m_history) for (const auto& e : m_history->topSites(8)) if (e.url.startsWith(QLatin1String("http"))) top.append(QJsonObject{{"u", e.url}, {"t", e.title}});
+    o["top"] = top;
+    QJsonArray dls; int n = 0;
+    if (m_downloads) for (const auto& d : m_downloads->entries()) {
+        if (n++ >= 3) break;
+        const double p = d.active() ? (d.total > 0 ? double(d.received) / double(d.total) : 0.0) : -1.0;
+        dls.append(QJsonObject{{"n", d.fileName}, {"p", p}, {"s", d.state == DownloadEntry::Completed ? DownloadManager::formatSize(d.total > 0 ? d.total : d.received)
+                                                         : d.state == DownloadEntry::Failed ? QStringLiteral("Failed") : d.state == DownloadEntry::Cancelled ? QStringLiteral("Cancelled") : QString()}});
+    }
+    o["downloads"] = dls;
+    return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+}
+
+void BrowserWindow::handleHomeAction(const QString& name, const QMap<QString, QString>& args) {
+    const QString v = args.value(QStringLiteral("v"));
+    if (name == QStringLiteral("theme") && (v == QLatin1String("System") || v == QLatin1String("Light") || v == QLatin1String("Dark"))) {
+        writeSetting(QStringLiteral("theme"), v);
+        crossFadeTheme([this]{ onSettingChanged(QStringLiteral("theme")); });
+    } else if (name == QStringLiteral("engine") && QStringList{"Google", "Bing", "DuckDuckGo", "Yahoo", "Brave"}.contains(v)) {
+        writeSetting(QStringLiteral("search_engine"), v);
+        onSettingChanged(QStringLiteral("search_engine"));
+    } else if (name == QStringLiteral("open")) {
+        const QUrl u(args.value(QStringLiteral("url")));
+        if (u.scheme() == QLatin1String("http") || u.scheme() == QLatin1String("https")) newTab(u.toString());
+    } else if (name == QStringLiteral("downloads")) {
+        showDownloads();
+    } else if (name == QStringLiteral("history")) {
+        showHistory();
+    }
 }

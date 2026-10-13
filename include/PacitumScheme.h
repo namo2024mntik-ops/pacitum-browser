@@ -2,6 +2,7 @@
 #include <QWebEngineUrlSchemeHandler>
 #include <QMap>
 #include <QString>
+#include <functional>
 
 class QWebEngineProfile;
 
@@ -17,9 +18,15 @@ public:
     void setThemeVars(const QMap<QString, QString>& vars) { m_vars = vars; }
     void setSearchBase(const QString& s) { m_search = s; }
     void requestStarted(QWebEngineUrlRequestJob* job) override;
+    // 1.6 home page: per-request JSON (profile name, recent pages, downloads, engine, theme) and
+    // pacitum://action/<name>?k=v calls made by the page (theme, engine, open, downloads, history).
+    void setHomeDataProvider(std::function<QString()> fn) { m_homeData = std::move(fn); }
+signals:
+    void homeAction(const QString& name, const QMap<QString, QString>& args);
 
 private:
     using QWebEngineUrlSchemeHandler::QWebEngineUrlSchemeHandler;
     QMap<QString, QString> m_vars;
+    std::function<QString()> m_homeData;
     QString m_search = QStringLiteral("https://www.google.com/search?q=");
 };

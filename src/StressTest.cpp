@@ -109,7 +109,18 @@ void BrowserWindow::runStressTest() {
             timer->stop();
             if (m_chromeHidden) finishExitFullscreen();
             st->import.waitForFinished();
-            QTimer::singleShot(1500, this, [this, st]{
+            // 1.6: the home page (pacitum://newtab) must render and its script must run.
+            newTab(QStringLiteral("pacitum://newtab"));
+            QPointer<BrowserTab> home = activeTab();
+            auto ntp = std::make_shared<int>(-1);
+            QTimer::singleShot(2500, this, [home, ntp]{
+                if (home && home->view()) home->view()->page()->runJavaScript(
+                    QStringLiteral("(typeof S==='object'&&document.querySelectorAll('#dock .sc').length>0&&!!document.getElementById('sheet'))?1:0"),
+                    [ntp](const QVariant& v){ *ntp = v.toInt(); });
+            });
+            QTimer::singleShot(4000, this, [this, st, ntp]{
+                pacitumLog(QStringLiteral("HOME %1").arg(*ntp == 1 ? QStringLiteral("OK") : QStringLiteral("FAIL")));
+                if (*ntp != 1) { pacitumLog(QStringLiteral("STRESS FAIL home page")); QCoreApplication::exit(5); return; }
                 pacitumLog(QStringLiteral("STRESS OK steps=%1 opened=%2 closed=%3 tabsLeft=%4 f11=%5 pageFullscreenRequests=%6 frozen=%7 imported=%8 history=%9 in %10 ms pageFullscreenEntered=%11 stuckInFullscreen=%12")
                            .arg(st->step).arg(st->opened).arg(st->closed).arg(m_tabs->count()).arg(st->fs).arg(st->pageFsReq)
                            .arg(st->frozen).arg(st->import.result()).arg(m_history->count()).arg(st->t.elapsed()).arg(st->pageFsEntered).arg(st->stuck));

@@ -1,5 +1,9 @@
 <RCC>
     <qresource prefix="/">
+        <file>icons/ui/widgets.svg</file>
+        <file>icons/ui/weather-partly.svg</file>
+        <file>icons/ui/wallpaper.svg</file>
+        <file>icons/ui/reading-list.svg</file>
         <file>icons/ui/add.svg</file>
         <file>icons/ui/audio-playing.svg</file>
         <file>icons/ui/customize.svg</file>

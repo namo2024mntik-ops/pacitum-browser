@@ -16,6 +16,7 @@
 #include <QPointer>
 #include <QDateTime>
 #include <QList>
+#include <QMap>
 
 class PacitumTabWidget;
 class BrowserTab;
@@ -142,6 +143,10 @@ private:
     QPointer<class UpdateDialog> m_updateDialog;
     bool m_pendingUpdatePrompt = false;
     bool m_noBackgroundUpdates = false;
+    // 1.6 home page bridge
+    void setupHome();
+    void handleHomeAction(const QString& action, const QMap<QString, QString>& args);
+    QString homeData();
 public:
     void runStressTest();              // --stress-test (CI): tabs, switching, fullscreen, loads
     void runResizeTest();              // --resize-test (CI): window/client/web view geometry after resizes

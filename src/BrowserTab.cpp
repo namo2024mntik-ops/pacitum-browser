@@ -128,6 +128,16 @@ bool BrowserTab::isMuted() const { return m_view->page()->isAudioMuted(); }
 void BrowserTab::showFindBar() { m_findBar->showFind(); }
 void BrowserTab::hideFindBar() { m_findBar->hide(); }
 
+void BrowserTab::setLazyUrl(const QString& url, const QString& title) {
+    m_pendingUrl = url; m_url = url;
+    m_title = title.isEmpty() ? url : title;
+    emit urlChanged(m_url); emit titleChanged(m_title);
+}
+void BrowserTab::showEvent(QShowEvent* e) {
+    QWidget::showEvent(e);
+    if (!m_pendingUrl.isEmpty()) { const QString u = m_pendingUrl; m_pendingUrl.clear(); loadUrl(u); }
+}
+
 void BrowserTab::buildSignInBar() {
     m_signInBar = new QFrame(this);
     m_signInBar->setObjectName(QStringLiteral("SignInBar"));

@@ -40,6 +40,9 @@ public:
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
     void fadeIn();
+    // Session restore: remember the URL/title but only create the page load when first shown.
+    void setLazyUrl(const QString& url, const QString& title);
+    bool isLazy() const { return !m_pendingUrl.isEmpty(); }
     static std::function<BrowserTab*()> s_popupFactory;
     void showFindBar();
     void hideFindBar();
@@ -67,6 +70,10 @@ private:
     QLabel* m_signInIcon = nullptr;
     QToolButton* m_signInClose = nullptr;
     QUrl m_signInUrl;
+    QString m_pendingUrl;
+protected:
+    void showEvent(QShowEvent* e) override;
+private:
     static int s_idCounter;
     int m_tabId = 0;
     bool m_private = false;

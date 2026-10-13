@@ -74,7 +74,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     setMouseTracking(true);
     Pacitum::installMenuFader();
     m_spinTimer = new QTimer(this);
-    m_spinTimer->setInterval(30);
+    m_spinTimer->setInterval(50);   // 20 fps spinner is plenty and halves repaint work
     connect(m_spinTimer, &QTimer::timeout, this, &BrowserWindow::tickSpinner);
     setupAdBlocker();
     setupDownloadHandler();
@@ -86,7 +86,9 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     installPopupFactory();
     qApp->installEventFilter(this);
 #ifdef Q_OS_WIN
-    applyNativeFrame();
+    // Do NOT force native window creation from the constructor; apply the frame
+    // once Qt has created the HWND during show().
+    QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });
 #endif
 }
 
@@ -366,7 +368,8 @@ void BrowserWindow::createStatusBar() {
 
 // ---- Tab management ----
 void BrowserWindow::newTab(const QString& url) {
-    QString u = url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
+    const bool lazy = url == QLatin1String("pacitum-lazy:");   // session restore placeholder: no load yet
+    QString u = lazy ? QString() : url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
     auto* tab = new BrowserTab(u, m_privateMode, m_searchEngine, this);
     tab->setZoomFactor(m_zoom->zoom());
     connect(tab, &BrowserTab::urlChanged, this, &BrowserWindow::updateAddressBar);
@@ -788,7 +791,16 @@ void BrowserWindow::restoreOrNewTab(){
     if (startup.isEmpty()) startup = s.value(QStringLiteral("restore_session")).toBool(true) ? QStringLiteral("restore") : QStringLiteral("newtab");
     if (startup == QStringLiteral("restore")) {
         auto tabs = m_session->restore();
-        if (!tabs.isEmpty()) { for (auto &t : tabs) newTab(t.url); return; }
+        if (!tabs.isEmpty()) {
+            // Only the active (last) tab loads now; the others load on first activation.
+            for (int i = 0; i < tabs.size(); ++i) {
+                if (i == tabs.size() - 1) { newTab(tabs[i].url); break; }
+                newTab(QStringLiteral("pacitum-lazy:"));
+                if (auto* t = activeTab()) { t->setLazyUrl(tabs[i].url, tabs[i].title);
+                    m_tabs->setTabText(m_tabs->currentIndex(), tabs[i].title.isEmpty() ? tabs[i].url : tabs[i].title); }
+            }
+            return;
+        }
     } else if (startup == QStringLiteral("homepage")) {
         newTab(s.value(QStringLiteral("homepage")).toString(PacitumSchemeHandler::newTabUrl())); return;
     }
@@ -932,7 +944,8 @@ static int autoHideTaskbarEdge(HMONITOR mon) {
 }
 
 void BrowserWindow::applyNativeFrame() {
-    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    if (!hwnd) return;   // not created yet; never create from here
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
     // 1px of DWM frame keeps the native drop shadow (and Win11 snap highlight) on the frameless window.
@@ -964,7 +977,8 @@ void BrowserWindow::setNcMaxHover(bool on) {
 }
 
 void BrowserWindow::showSystemMenu(int physX, int physY) {
-    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    if (!hwnd) return;
     HMENU menu = GetSystemMenu(hwnd, FALSE);
     if (!menu) return;
     const bool zoomed = IsZoomed(hwnd), iconic = IsIconic(hwnd);
@@ -983,7 +997,9 @@ void BrowserWindow::showSystemMenu(int physX, int physY) {
 
 bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
     MSG* msg = static_cast<MSG*>(message);
-    if (!msg || msg->hwnd != reinterpret_cast<HWND>(winId())) return QMainWindow::nativeEvent(eventType, message, result);
+    // Never call winId() here: messages arrive *during* CreateWindowEx, and winId()
+    // would re-enter QWidget::create() -> recursive CreateWindowEx failures -> crash.
+    if (!msg || !msg->hwnd || msg->hwnd != reinterpret_cast<HWND>(internalWinId())) return QMainWindow::nativeEvent(eventType, message, result);
     HWND hwnd = msg->hwnd;
     switch (msg->message) {
     case WM_NCCALCSIZE:

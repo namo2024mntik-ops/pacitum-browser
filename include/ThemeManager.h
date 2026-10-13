@@ -27,6 +27,10 @@ public:
     // Load a design SVG icon from :/icons/ui/<name>.svg tinted with color.
     static QIcon icon(const QString& name, const QString& color, int size = 18,
                       const QString& disabledColor = QString());
+private:
+    static QIcon renderIcon(const QString& name, const QString& color, int size,
+                      const QString& disabledColor);
+public:
     QIcon icon(const QString& name, int size = 18) const {
         return icon(name, m_pal.text, size, m_pal.disabled);
     }

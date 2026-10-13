@@ -122,18 +122,15 @@ static void setupEnvironment() {
     QString gpu = detectGpu();
     std::cout << "[Browser] " << gpu.toStdString() << std::endl;
 
-    qputenv("QT_OPENGL", QByteArray("desktop"));
-    QByteArray flags = QByteArray(
-        "--enable-features=VaapiVideoDecoder,VaapiVideoEncoder,OverlayScrollbar,ParallelDownloading,"
-        "EnableIncomingRTCPDrops,WebRTCPipeWireCapturer"
-        " --disable-gpu-driver-bug-workarounds"
-        " --enable-zero-copy"
-        " --enable-gpu-rasterization"
-        " --enable-unsafe-swiftshader"
-    );
+    // Conservative, driver-safe Chromium flags. (Earlier builds disabled GPU driver-bug workarounds,
+    // forced desktop OpenGL and passed --enable-features twice, which made Chromium drop the first list.)
+    QByteArray flags = QByteArray("--enable-gpu-rasterization --enable-zero-copy");
 #ifdef Q_OS_WIN
-    flags += QByteArray(" --disable-features=DCompPresenter --enable-features=UseSkiaRenderer");
+    flags += " --enable-features=OverlayScrollbar,ParallelDownloading --disable-features=DCompPresenter";
+#else
+    flags += " --enable-features=OverlayScrollbar,ParallelDownloading,VaapiVideoDecoder,VaapiVideoEncoder,WebRTCPipeWireCapturer";
 #endif
+    if (qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) flags += ' ' + qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", flags);
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
 }

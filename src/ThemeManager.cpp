@@ -1,3 +1,4 @@
+#include <QHash>
 #include "ThemeManager.h"
 #include <QFile>
 #include <QPainter>
@@ -36,6 +37,19 @@ void ThemeManager::rebuild() {
 }
 
 QIcon ThemeManager::icon(const QString& name, const QString& color, int size, const QString& disabledColor) {
+    // Tinted SVG icons are requested on every repaint/theme pass; render each variant once.
+    static QHash<QString, QIcon> cache;
+    const qreal cdpr = qMax<qreal>(1.0, qGuiApp ? qGuiApp->devicePixelRatio() : 1.0);
+    const QString key = name + QLatin1Char('|') + color + QLatin1Char('|') + QString::number(size) + QLatin1Char('|') + disabledColor
+                      + QLatin1Char('|') + QString::number(cdpr);
+    if (auto it = cache.constFind(key); it != cache.constEnd()) return *it;
+    if (cache.size() > 2000) cache.clear();
+    QIcon made = renderIcon(name, color, size, disabledColor);
+    cache.insert(key, made);
+    return made;
+}
+
+QIcon ThemeManager::renderIcon(const QString& name, const QString& color, int size, const QString& disabledColor) {
     QFile f(QStringLiteral(":/icons/ui/%1.svg").arg(name));
     if (!f.open(QIODevice::ReadOnly)) return {};
     const QByteArray src = f.readAll();

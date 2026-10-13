@@ -142,6 +142,7 @@ private:
     bool m_noBackgroundUpdates = false;
 public:
     void runStressTest();              // --stress-test (CI): tabs, switching, fullscreen, loads
+    void runResizeTest();              // --resize-test (CI): window/client/web view geometry after resizes
 private:
     void setChromeHidden(bool hidden);
     bool m_pageFullscreen = false;     // a page (e.g. YouTube) owns fullscreen

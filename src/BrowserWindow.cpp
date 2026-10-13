@@ -102,7 +102,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     updateDownloadsButton();
     installPopupFactory();
     qApp->installEventFilter(this);
-    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test"));
+    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test"));
     setupUpdater();
 #ifdef Q_OS_WIN
     // Do NOT force native window creation from the constructor; apply the frame

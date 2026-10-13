@@ -64,6 +64,24 @@ jobs:
           $tl = Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-String 'window exposed \(time-to-window\)' | Select-Object -First 1
           "time-to-window: $tl" | Tee-Object smoke\timing.txt
           if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+      - name: Resize test (Qt resize, SetWindowPos, live drag, maximize/restore)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--resize-test' -PassThru
+          if (-not $p.WaitForExit(150000)) { Write-Host "resize test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          New-Item -ItemType Directory -Force resize | Out-Null
+          Copy-Item "$log\startup.log" resize\startup.log -ErrorAction SilentlyContinue
+          Copy-Item "$log\crash.log" resize\crash.log -ErrorAction SilentlyContinue
+          Copy-Item "$log\resize-shots" resize\shots -Recurse -ErrorAction SilentlyContinue
+          Get-Content resize\startup.log -ErrorAction SilentlyContinue | Select-String 'RESIZE|frame margins|WARN|CRITICAL' | ForEach-Object { $_.Line }
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path resize\startup.log -Pattern 'RESIZE OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path resize\crash.log)) { Write-Error "RESIZE TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: resize-test, path: resize/, if-no-files-found: ignore }
       - name: Stress test (tabs, switching, fullscreen, loads)
         shell: pwsh
         run: |

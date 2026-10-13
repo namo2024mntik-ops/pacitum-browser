@@ -1,6 +1,6 @@
 # Pacitum Browser (Qt6 WebEngine)
 
-A calm, fast web browser written in C++17 on Qt 6 WebEngine (originally ported from a Python/PyQt6 prototype).
+A calm, fast web browser written in C++17 on Qt 6 WebEngine.
 Version 1.1.0 implements the Pacitum design system: graphite/paper surfaces, single teal accent, pill omnibox,
 tab strip above the toolbar, design SVG icon set tinted at runtime, and a built-in `pacitum://newtab` page.
 
@@ -62,6 +62,8 @@ Qt Creator: Open `CMakeLists.txt` → Configure → Run.
 - Navigation, history (SQLite), bookmarks (JSON), downloads (QWebEngineDownloadRequest), find (Ctrl+F), zoom 25-500%
 - Ad blocker (host + path interceptor), private mode (NoPersistentCookies), session restore, Do Not Track
 - Hardware acceleration, GPU raster, 250MB disk cache, spellcheck, crash auto-reload
+
+Made by Ai (Grok bot + opencode-BaseApp)
 
 ## Settings
 Stored in `browser_settings.json`, `bookmarks.json`, `browser_session.json`, `browser_history.db` (identical filenames to Python so data migrates).

@@ -66,6 +66,18 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     applyWebSettings();
 
     connect(m_view->page(), &QWebEnginePage::renderProcessTerminated, this, &BrowserTab::onRenderCrashed);
+    // Website fullscreen (YouTube etc.): without a handler Qt rejects every request.
+    connect(m_view->page(), &QWebEnginePage::fullScreenRequested, this, &BrowserTab::fullScreenRequested);
+    // Background-tab lifecycle: follow Chromium's recommendation (Active -> Frozen -> Discarded for
+    // hidden tabs; never for tabs playing audio / with DevTools). Frozen tabs stop running JS and
+    // timers; discarded tabs drop their renderer and reload transparently when shown again.
+    m_view->page()->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+    connect(m_view->page(), &QWebEnginePage::recommendedStateChanged, this, [this](QWebEnginePage::LifecycleState st){
+        auto* pg = m_view->page();
+        if (!pg || isVisible()) return;                 // never freeze the tab the user is looking at
+        if (st == QWebEnginePage::LifecycleState::Discarded && pg->isAudioMuted() == false && pg->recentlyAudible()) return;
+        pg->setLifecycleState(st);
+    });
 
     buildSignInBar();
     layout->addWidget(m_signInBar);
@@ -137,6 +149,8 @@ void BrowserTab::setLazyUrl(const QString& url, const QString& title) {
 }
 void BrowserTab::showEvent(QShowEvent* e) {
     QWidget::showEvent(e);
+    if (auto* pg = m_view->page(); pg && pg->lifecycleState() != QWebEnginePage::LifecycleState::Active)
+        pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);   // thaw / reload a frozen or discarded tab
     if (!m_pendingUrl.isEmpty()) { const QString u = m_pendingUrl; m_pendingUrl.clear(); loadUrl(u); }
 }
 

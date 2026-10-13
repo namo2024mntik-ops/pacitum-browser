@@ -8,6 +8,7 @@
 #include <functional>
 #include <QFrame>
 #include <QUrl>
+#include <QWebEngineFullScreenRequest>
 class QLabel;
 class QToolButton;
 
@@ -57,6 +58,7 @@ signals:
     void progressChanged(int progress);
     void loadDone(bool ok);
     void crashed();
+    void fullScreenRequested(QWebEngineFullScreenRequest request);
 
 private:
     int m_loadValue = 0;

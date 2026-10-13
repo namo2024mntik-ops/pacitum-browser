@@ -32,6 +32,7 @@ protected:
 class PacitumTabBar : public QTabBar {
     Q_OBJECT
 public:
+    void setSpinnerSuspended(bool on);   // pause the loading-spinner animation while the window is minimized/hidden
     // Pacitum 1.5 floating-tab look (custom painted; used for the window's tab strip).
     void enableFloatingTabs();
     bool floating() const { return m_floating; }
@@ -83,6 +84,7 @@ private:
     QHash<quint64, QVariantAnimation*> m_hoverAnim;
     quint64 m_hoverId = 0;
     QVariantAnimation* m_spin = nullptr;
+    bool m_spinSuspended = false;
     qreal m_spinAngle = 0;
     qreal m_spinV = 0;                        // shared spinner phase 0..1 (1600 ms loop)
     QHash<quint64, qreal> m_favIn;            // favicon fade-in after load (160 ms)

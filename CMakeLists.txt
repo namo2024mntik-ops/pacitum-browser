@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.1.0 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,9 @@ set(SOURCES
     src/AdBlocker.cpp
     src/SessionManager.cpp
     src/ZoomController.cpp
-    src/SettingsDialog.cpp
+    src/SettingsPage.cpp
+    src/WebProfile.cpp
+    src/Widgets.cpp
     src/ThemeManager.cpp
     src/PacitumScheme.cpp
 )
@@ -46,7 +48,9 @@ set(HEADERS
     include/AdBlocker.h
     include/SessionManager.h
     include/ZoomController.h
-    include/SettingsDialog.h
+    include/SettingsPage.h
+    include/WebProfile.h
+    include/Widgets.h
     include/ThemeManager.h
     include/PacitumScheme.h
 )
@@ -72,6 +76,9 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Sql
     Qt6::Network
 )
+if(WIN32)
+    target_link_libraries(PacitumBrowser PRIVATE user32)
+endif()
 
 # Platform specific
 if(WIN32)

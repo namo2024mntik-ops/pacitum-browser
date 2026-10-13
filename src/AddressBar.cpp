@@ -111,7 +111,7 @@ void AddressBar::onTextChanged(const QString&) { m_timer.start(); }
 
 void AddressBar::updateSuggestions() {
     QString text = m_input->text().trimmed();
-    if (text.isEmpty() || !m_history) { m_completer->setModel(new QStringListModel(m_completer)); return; }
+    if (text.isEmpty() || !m_history || !m_suggest) { m_completer->setModel(new QStringListModel(m_completer)); return; }
     auto results = m_history->search(text, 10);
     QStringList suggestions; QSet<QString> seen;
     for (auto &r : results) {

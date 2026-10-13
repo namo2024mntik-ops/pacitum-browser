@@ -15,6 +15,9 @@
 #include <QtGlobal>
 #include "BrowserWindow.h"
 #include "PacitumScheme.h"
+#include "WebProfile.h"
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <iostream>
 
@@ -52,13 +55,14 @@ static void setupEnvironment() {
 }
 
 int main(int argc, char *argv[]) {
-    // Ensure cwd is executable dir (mirrors os.chdir in main.py:12)
-    QDir::setCurrent(QCoreApplication::applicationDirPath());
-
     setupEnvironment();
     PacitumSchemeHandler::registerScheme();
 
     QApplication app(argc, argv);
+#ifdef Q_OS_WIN
+    // Lets the installer (AppMutex) detect a running instance before upgrading.
+    CreateMutexW(nullptr, FALSE, L"PacitumBrowserRunning");
+#endif
     app.setApplicationName(QStringLiteral("Pacitum Browser"));
     app.setOrganizationName(QStringLiteral("Pacitum"));
     app.setApplicationDisplayName(QStringLiteral("Pacitum Browser"));
@@ -72,38 +76,46 @@ int main(int argc, char *argv[]) {
         app.setFont(f);
     }
 
+    // User data lives in %LOCALAPPDATA%/Pacitum/Pacitum Browser (survives upgrades/reinstalls).
+    {
+        const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        QDir().mkpath(dataDir);
+        const QString oldDir = QCoreApplication::applicationDirPath();   // 1.0/1.1 kept data next to the exe
+        for (const char* n : {"browser_settings.json", "bookmarks.json", "browser_session.json", "browser_history.db"}) {
+            const QString src = oldDir + QLatin1Char('/') + QLatin1String(n), dst = dataDir + QLatin1Char('/') + QLatin1String(n);
+            if (QFile::exists(src) && !QFile::exists(dst)) QFile::copy(src, dst);
+        }
+        QDir::setCurrent(dataDir);
+    }
+    {   // web prefs from settings before any page is created
+        QFile f(QStringLiteral("browser_settings.json"));
+        if (f.open(QIODevice::ReadOnly)) {
+            const auto o = QJsonDocument::fromJson(f.readAll()).object();
+            Pacitum::webPrefs().javascript = o.value(QStringLiteral("javascript_enabled")).toBool(true);
+            Pacitum::webPrefs().popups = o.value(QStringLiteral("popups_allowed")).toBool(false);
+        }
+    }
+
     // Persistent profile storage (mirrors main.py:82)
-    auto* profile = QWebEngineProfile::defaultProfile();
-    QString storagePath = QDir::currentPath() + QStringLiteral("/browser_data");
+    auto* profile = Pacitum::mainProfile();
+    QString storagePath = QDir::currentPath() + QStringLiteral("/browser_data");  // persistent storage incl. cookies
     QDir().mkpath(storagePath + QStringLiteral("/storage"));
     QDir().mkpath(storagePath + QStringLiteral("/cache"));
     profile->setPersistentStoragePath(storagePath + QStringLiteral("/storage"));
     profile->setCachePath(storagePath + QStringLiteral("/cache"));
-    profile->setPersistentCookiesPolicy(QWebEngineProfile::AllowPersistentCookies);
-
-    PacitumSchemeHandler::install(profile);
 
     auto* settings = profile->settings();
-    settings->setAttribute(QWebEngineSettings::PluginsEnabled, true);
-    settings->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
-    settings->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);
-    settings->setAttribute(QWebEngineSettings::ScrollAnimatorEnabled, true);
-    settings->setAttribute(QWebEngineSettings::WebGLEnabled, true);
-    settings->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, true);
     settings->setAttribute(QWebEngineSettings::AutoLoadIconsForPage, true);
     settings->setAttribute(QWebEngineSettings::TouchIconsEnabled, true);
     settings->setAttribute(QWebEngineSettings::PlaybackRequiresUserGesture, false);
-    settings->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, true);
     settings->setAttribute(QWebEngineSettings::AllowRunningInsecureContent, false);
     settings->setAttribute(QWebEngineSettings::JavascriptCanAccessClipboard, false);
-    settings->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows, false);
     settings->setAttribute(QWebEngineSettings::HyperlinkAuditingEnabled, false);
-    settings->setAttribute(QWebEngineSettings::ErrorPageEnabled, true);
-
     profile->setSpellCheckEnabled(true);
     profile->setSpellCheckLanguages({QStringLiteral("en-US")});
-    profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
-    profile->setHttpCacheMaximumSize(250 * 1024 * 1024);
+    Pacitum::configureProfile(profile, true);
+    Pacitum::configureProfile(QWebEngineProfile::defaultProfile(), false);
+    std::cout << "[Browser] profile off-the-record: " << profile->isOffTheRecord() << " storage: " << profile->persistentStoragePath().toStdString() << std::endl;
 
     try {
         BrowserWindow w;

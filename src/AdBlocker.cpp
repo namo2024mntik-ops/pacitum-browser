@@ -22,6 +22,7 @@ const QStringList AdBlocker::s_patterns = {
 AdBlocker::AdBlocker(bool enabled, QObject* parent) : QWebEngineUrlRequestInterceptor(parent), m_enabled(enabled) {}
 
 void AdBlocker::interceptRequest(QWebEngineUrlRequestInfo &info) {
+    if (m_dnt) { info.setHttpHeader("DNT", "1"); info.setHttpHeader("Sec-GPC", "1"); }
     if (!m_enabled) return;
     const QString host = info.requestUrl().host().toLower();
     const QString url  = info.requestUrl().toString().toLower();

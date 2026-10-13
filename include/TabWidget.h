@@ -4,6 +4,12 @@
 #include <QPushButton>
 #include <QToolButton>
 #include <QSet>
+#include <QHash>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <functional>
+
+class AnimatedToolButton;
 
 class ThemeManager;
 
@@ -14,6 +20,15 @@ public:
     void setVerticalMode(bool v);
     bool isTabPinned(int index) const { return m_pinned.contains(index); }
     void setTabPinned(int index, bool pinned);
+    void setAvailableWidth(int w);
+    // Width animations (150 ms): grow a freshly inserted tab / shrink before removal.
+    void animateIn(int index);
+    void animateOut(int index, std::function<void()> done);
+    bool animationsEnabled = true;
+
+protected:
+    QSize tabSizeHint(int index) const override;
+    QSize minimumTabSizeHint(int index) const override;
 
 signals:
     void tabRightClicked(int index, const QPoint& globalPos);
@@ -24,8 +39,14 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* e) override;
 
 private:
+    quint64 idOf(int index) const;
+    int indexOfId(quint64 id) const;
+    void relayout();
     bool m_vertical = false;
     QSet<int> m_pinned;
+    int m_avail = 0;
+    quint64 m_nextId = 1;
+    QHash<quint64, qreal> m_progress;
 };
 
 // QTabWidget whose (horizontal) tabs can be shown in a separate "TabStrip" widget placed
@@ -41,6 +62,11 @@ public:
 
     // Creates the external tab strip (call once, for the main tab widget).
     QWidget* createTabStrip(QWidget* parent);
+    QHBoxLayout* stripLayout() const { return m_stripLayout; }
+    QTabBar* stripBar() const { return m_ext; }
+    QWidget* stripLogo() const { return m_logo; }
+    // Animate the tab closed (if it lives in the strip), then call done().
+    void animateRemove(int index, std::function<void()> done);
 
     // Shadow QTabWidget setters so the external strip stays in sync.
     void setTabText(int index, const QString& text);
@@ -60,6 +86,7 @@ protected:
     void tabInserted(int index) override;
     void tabRemoved(int index) override;
     void showEvent(QShowEvent* e) override;
+    bool eventFilter(QObject* o, QEvent* e) override;
 
 private slots:
     void showTabContextMenu(int index, const QPoint& pos);
@@ -71,6 +98,7 @@ private:
     void closeTabsToRight(int index);
     void updateCorner();
     void updateBarVisibility();
+    void updateTabWidths();
     PacitumTabBar* activeBar() const { return m_ext ? m_ext : m_bar; }
 
     bool m_vertical = false;
@@ -79,6 +107,8 @@ private:
     PacitumTabBar* m_ext = nullptr;
     QWidget* m_strip = nullptr;
     QToolButton* m_newTabBtn = nullptr;
-    QToolButton* m_stripNewTab = nullptr;
-    QToolButton* m_tabListBtn = nullptr;
+    AnimatedToolButton* m_stripNewTab = nullptr;
+    AnimatedToolButton* m_tabListBtn = nullptr;
+    QHBoxLayout* m_stripLayout = nullptr;
+    QLabel* m_logo = nullptr;
 };

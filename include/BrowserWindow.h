@@ -9,6 +9,8 @@
 #include <QWebEngineDownloadRequest>
 #include <QStyle>
 #include <QToolButton>
+#include <QTimer>
+#include <QSet>
 
 class PacitumTabWidget;
 class BrowserTab;
@@ -21,6 +23,7 @@ class DownloadManager;
 class SessionManager;
 class ZoomController;
 class AdBlocker;
+class WindowButton;
 
 class BrowserWindow : public QMainWindow {
     Q_OBJECT
@@ -30,6 +33,11 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    void changeEvent(QEvent* e) override;
+    bool eventFilter(QObject* o, QEvent* e) override;
+#ifdef Q_OS_WIN
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+#endif
     void keyPressEvent(QKeyEvent* e) override;
 
 private slots:
@@ -75,6 +83,9 @@ private slots:
     void nextTab();
     void prevTab();
     void lastTab();
+    void onSettingChanged(const QString& key);
+    void clearBrowsingData(bool history, bool cookies, bool cache);
+    void tickSpinner();
 
 private:
     void setupUI();
@@ -93,6 +104,9 @@ private:
     QJsonObject readSettings() const;
     QToolButton* makeToolBtn(const QString& tip);
     void refreshIcons();
+    void installPopupFactory();
+    bool isCaptionArea(const QPoint& local) const;
+    Qt::Edges edgesAt(const QPoint& global) const;
     void updateTabIcon(BrowserTab* tab);
     void updateNavState();
 
@@ -121,6 +135,14 @@ private:
     QToolButton* m_splitBtn = nullptr;
     QToolButton* m_profileBtn = nullptr;
     QWidget* m_tabStrip = nullptr;
+    WindowButton* m_minBtn = nullptr;
+    WindowButton* m_maxBtn = nullptr;
+    WindowButton* m_closeBtn = nullptr;
+    QTimer* m_spinTimer = nullptr;
+    int m_spinAngle = 0;
+    bool m_animations = true;
+    bool m_edgeCursor = false;
+    QSet<QWidget*> m_closing;
     QLabel* m_privateBadge = nullptr;
     QToolButton* m_downloadsBtn = nullptr;
     QToolButton* m_menuBtn = nullptr;

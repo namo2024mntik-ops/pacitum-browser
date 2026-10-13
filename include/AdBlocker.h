@@ -9,9 +9,11 @@ public:
     explicit AdBlocker(bool enabled = true, QObject* parent = nullptr);
     void setEnabled(bool e) { m_enabled = e; }
     bool isEnabled() const { return m_enabled; }
+    void setDoNotTrack(bool d) { m_dnt = d; }
     void interceptRequest(QWebEngineUrlRequestInfo &info) override;
 private:
     bool m_enabled;
+    bool m_dnt = false;
     static const QSet<QString> s_hosts;
     static const QStringList s_patterns;
 };

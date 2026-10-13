@@ -1,6 +1,24 @@
 #include "BrowserTab.h"
 #include "FindBar.h"
 #include "PacitumScheme.h"
+#include "WebProfile.h"
+#include <functional>
+
+std::function<BrowserTab*()> BrowserTab::s_popupFactory;
+
+namespace {
+class PacitumWebView : public QWebEngineView {
+public:
+    using QWebEngineView::QWebEngineView;
+protected:
+    QWebEngineView* createWindow(QWebEnginePage::WebWindowType) override {
+        if (!BrowserTab::s_popupFactory) return nullptr;
+        BrowserTab* t = BrowserTab::s_popupFactory();
+        return t ? t->view() : nullptr;
+    }
+};
+}
+
 #include <QVBoxLayout>
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
@@ -26,24 +44,18 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     m_progress->setFixedHeight(3); m_progress->setTextVisible(false); m_progress->setRange(0,100); m_progress->hide();
     layout->addWidget(m_progress);
 
-    m_view = new QWebEngineView(this);
+    m_view = new PacitumWebView(this);
     if (m_private) {
-        m_profile = new QWebEngineProfile(this);
+        m_profile = new QWebEngineProfile(this);   // off-the-record
         m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
-        PacitumSchemeHandler::install(m_profile);
+        Pacitum::configureProfile(m_profile, false);
         m_page = new QWebEnginePage(m_profile, m_view);
-        m_view->setPage(m_page);
+    } else {
+        m_page = new QWebEnginePage(Pacitum::mainProfile(), m_view);
     }
+    m_view->setPage(m_page);
 
-    auto* s = m_view->settings();
-    s->setAttribute(QWebEngineSettings::ScrollAnimatorEnabled, true);
-    s->setAttribute(QWebEngineSettings::WebGLEnabled, true);
-    s->setAttribute(QWebEngineSettings::Accelerated2dCanvasEnabled, true);
-    s->setAttribute(QWebEngineSettings::PlaybackRequiresUserGesture, false);
-    s->setAttribute(QWebEngineSettings::FullScreenSupportEnabled, true);
-    s->setAttribute(QWebEngineSettings::JavascriptEnabled, true);
-    s->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);
-    s->setAttribute(QWebEngineSettings::PluginsEnabled, true);
+    applyWebSettings();
 
     connect(m_view->page(), &QWebEnginePage::renderProcessTerminated, this, &BrowserTab::onRenderCrashed);
 
@@ -87,6 +99,8 @@ void BrowserTab::loadUrl(const QString& raw) {
     m_view->setUrl(QUrl(url));
 }
 
+void BrowserTab::applyWebSettings() { Pacitum::applyWebSettings(m_view->settings()); }
+
 void BrowserTab::goBack() { if (m_view->history()->canGoBack()) m_view->back(); }
 void BrowserTab::goForward() { if (m_view->history()->canGoForward()) m_view->forward(); }
 void BrowserTab::reload() { m_view->reload(); }
@@ -113,7 +127,11 @@ void BrowserTab::onLoadFinished(bool) { m_loading = false; emit loadingChanged(f
 void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus, int) { QTimer::singleShot(1000, this, &BrowserTab::reload); }
 
 void BrowserTab::fadeIn() {
+    if (m_anim) { m_anim->stop(); m_anim->deleteLater(); }
+    m_opacity->setEnabled(true);
     m_anim = new QPropertyAnimation(m_opacity, "opacity", this);
-    m_anim->setDuration(300); m_anim->setStartValue(0.0); m_anim->setEndValue(1.0);
-    m_anim->setEasingCurve(QEasingCurve::OutCubic); m_anim->start();
+    m_anim->setDuration(200); m_anim->setStartValue(0.0); m_anim->setEndValue(1.0);
+    m_anim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_anim, &QPropertyAnimation::finished, this, [this]{ m_opacity->setEnabled(false); });  // no offscreen cost when idle
+    m_anim->start();
 }

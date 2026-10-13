@@ -21,6 +21,7 @@ public:
     QString url() const;
     void focusUrl();
     void setBookmarked(bool b);
+    void setSuggestionsEnabled(bool e) { m_suggest = e; }
 
 signals:
     void returnPressed(const QString& url);
@@ -49,5 +50,6 @@ private:
     QTimer m_timer;
     QString m_currentUrl;
     bool m_bookmarked = false;
+    bool m_suggest = true;
     bool m_selectOnClick = false;
 };

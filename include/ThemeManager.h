@@ -18,6 +18,7 @@ public:
     void setPrivate(bool p) { m_private = p; }
     void setAccent(const QString& accent) { m_accentOverride = accent; }
     const PacitumPalette& palette() const { return m_pal; }
+    static const PacitumPalette& current();   // palette of the most recently applied theme
 
     QString mainWindowStyle() const;
     QString tabWidgetStyle(bool vertical) const;

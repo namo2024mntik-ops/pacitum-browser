@@ -22,7 +22,14 @@ jobs:
           New-Item -ItemType Directory dist | Out-Null
           $exe = Get-ChildItem build -Recurse -Filter PacitumBrowser.exe | Select-Object -First 1
           Copy-Item $exe.FullName dist/
-          windeployqt --release --no-translations dist/PacitumBrowser.exe
+          windeployqt --release --no-translations --no-system-d3d-compiler --no-quick-import --skip-plugin-types qmltooling,generic,networkinformation,position,sqldrivers dist/PacitumBrowser.exe
+          # keep the SQLite driver only; drop devtools resources and unused image formats
+          New-Item -ItemType Directory -Force dist/sqldrivers | Out-Null
+          Copy-Item "$env:QT_ROOT_DIR/plugins/sqldrivers/qsqlite.dll" dist/sqldrivers/
+          Remove-Item -Force -ErrorAction SilentlyContinue dist/resources/qtwebengine_devtools_resources.pak
+          Get-ChildItem dist/imageformats -Filter *.dll | Where-Object { $_.Name -notmatch '^(qsvg|qico|qjpeg|qgif)\.dll$' } | Remove-Item -Force
+          Get-ChildItem dist -Recurse -Filter *.pdb | Remove-Item -Force
+          "{0:N1} MB in dist" -f ((Get-ChildItem dist -Recurse | Measure-Object Length -Sum).Sum / 1MB)
           if (Test-Path "$env:VCToolsRedistDir\x64") { Get-ChildItem "$env:VCToolsRedistDir\x64" -Recurse -Filter *.dll | Where-Object { $_.FullName -match 'CRT' } | Copy-Item -Destination dist }
       - name: Installer
         shell: pwsh

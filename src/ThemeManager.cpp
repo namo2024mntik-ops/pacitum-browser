@@ -14,6 +14,9 @@ static PacitumPalette lightPalette() {
             "#1A1D23","#5F6672","#A9AFB9","#0D9488","#FFFFFF","rgba(13,148,136,0.12)","#059669","#DC2626"};
 }
 
+static PacitumPalette s_current = darkPalette();
+const PacitumPalette& ThemeManager::current() { return s_current; }
+
 ThemeManager::ThemeManager(bool darkMode) : m_darkMode(darkMode) { rebuild(); }
 
 void ThemeManager::setDarkMode(bool enabled) { m_darkMode = enabled; rebuild(); }
@@ -29,6 +32,7 @@ void ThemeManager::rebuild() {
         }
     }
     if (m_private) m_pal.frame = m_darkMode ? QStringLiteral("#1E1B2E") : QStringLiteral("#DCD8EE");
+    s_current = m_pal;
 }
 
 QIcon ThemeManager::icon(const QString& name, const QString& color, int size, const QString& disabledColor) {
@@ -57,14 +61,9 @@ QString ThemeManager::mainWindowStyle() const {
 QWidget { color: @text; font-family: "Inter", "Segoe UI", "Cantarell", sans-serif; font-size: 13px; }
 QMainWindow, QDialog { background: @page; }
 #TabStrip { background: @frame; }
-#TabStrip QToolButton { background: transparent; border: none; border-radius: 7px; }
-#TabStrip QToolButton:hover { background: @surface; }
-#TabStrip QToolButton:pressed { background: @surfaceHover; }
-#NavToolbar { background: @toolbar; }
-#NavToolbar QToolButton { background: transparent; border: none; border-radius: 8px; padding: 0; }
-#NavToolbar QToolButton:hover { background: @surface; }
-#NavToolbar QToolButton:pressed { background: @surfaceHover; }
-#NavToolbar QToolButton:focus { border: 2px solid @accent; }
+#TabStrip QToolButton { background: transparent; border: none; }
+#NavToolbar { background: @toolbar; border-bottom: 1px solid @border; }
+#NavToolbar QToolButton { background: transparent; border: none; padding: 0; }
 #NavToolbar QToolButton::menu-indicator { image: none; width: 0; }
 #Avatar { border-radius: 12px; color: #FFFFFF; font-weight: 600; font-size: 11px;
           background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #F59E0B, stop:1 #EC4899); }
@@ -103,6 +102,22 @@ QTabWidget#SettingsTabs::pane { border: none; background: @page; }
 QTabWidget#SettingsTabs QTabBar::tab { background: transparent; color: @text; height: 36px; padding: 0 14px; margin: 8px 2px 0 2px; border-radius: 8px; }
 QTabWidget#SettingsTabs QTabBar::tab:selected { background: @accentSoft; color: @accent; font-weight: 600; }
 QTabWidget#SettingsTabs QTabBar::tab:hover:!selected { background: @surface; }
+#SettingsPage, #SettingsContent, #SettingsScroll, #SettingsScroll > QWidget > QWidget { background: @page; }
+#SettingsNav { background: @page; border: none; border-right: 1px solid @border; outline: 0; padding: 0 12px; }
+#SettingsNav::item { height: 36px; border-radius: 8px; padding: 0 12px; color: @text; margin: 1px 0; }
+#SettingsNav::item:hover { background: @surface; }
+#SettingsNav::item:selected { background: @accentSoft; color: @accent; font-weight: 600; }
+#SettingsH1 { font-size: 20px; font-weight: 600; background: transparent; }
+#SettingsH2 { font-size: 15px; font-weight: 600; background: transparent; margin-top: 6px; }
+#Card { background: @toolbar; border: 1px solid @border; border-radius: 12px; }
+#Card QLabel { background: transparent; }
+#Divider { background: @border; border: none; min-height: 1px; max-height: 1px; }
+#RowSub { color: @textSecondary; font-size: 12px; }
+#Segmented { background: @surface; border-radius: 8px; }
+#Segmented QPushButton { background: transparent; border: none; border-radius: 6px; min-height: 28px; padding: 0 14px; }
+#Segmented QPushButton:checked { background: @toolbar; font-weight: 600; }
+#PrimaryButton { background: @accent; color: @onAccent; border: none; font-weight: 600; }
+#PrimaryButton:hover { background: @accent; }
 QStatusBar { background: @toolbar; color: @textSecondary; border-top: 1px solid @border; font-size: 12px; }
 QStatusBar QLabel { background: transparent; color: @textSecondary; }
 QToolTip { background: @toolbar; color: @text; border: 1px solid @border; border-radius: 6px; padding: 4px 8px; }

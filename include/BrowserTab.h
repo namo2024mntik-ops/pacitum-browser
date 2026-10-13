@@ -5,6 +5,7 @@
 #include <QProgressBar>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <functional>
 
 class FindBar;
 
@@ -31,6 +32,11 @@ public:
     bool isMuted() const;
     QIcon icon() const { return m_view->icon(); }
     bool isLoading() const { return m_loading; }
+    void applyWebSettings();
+    void setSearchEngine(const QString& e) { m_searchEngine = e; }
+    QWebEngineView* view() const { return m_view; }
+    void fadeIn();
+    static std::function<BrowserTab*()> s_popupFactory;
     void showFindBar();
     void hideFindBar();
 
@@ -50,7 +56,6 @@ private slots:
     void onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus status, int code);
 
 private:
-    void fadeIn();
 
     static int s_idCounter;
     int m_tabId = 0;

@@ -110,6 +110,7 @@ jobs:
       - name: Installer pages + in-place upgrade check
         shell: pwsh
         continue-on-error: true
+        timeout-minutes: 12
         run: |
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
           New-Item -ItemType Directory -Force installer-shots | Out-Null
@@ -156,7 +157,9 @@ jobs:
           Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue | Out-String | Tee-Object -Append installer-shots\upgrade-check.txt
           if (@($keys).Count -ne 1) { Write-Error "expected exactly one uninstall entry"; exit 1 }
           # 3) what the built-in updater does: silent upgrade with /RELAUNCH=1 must start the browser again
-          Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS','/RELAUNCH=1' -Wait
+          # (not Start-Process -Wait: that also waits for the relaunched browser, i.e. forever)
+          $u = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS','/RELAUNCH=1' -PassThru
+          if (-not $u.WaitForExit(180000)) { Write-Host "silent upgrade did not finish in 180 s" }
           $relaunched = $false
           for ($i = 0; $i -lt 40 -and -not $relaunched; $i++) { Start-Sleep -Milliseconds 500; $relaunched = [bool](Get-Process PacitumBrowser -ErrorAction SilentlyContinue) }
           "updater-style silent upgrade relaunched the browser: $relaunched" | Tee-Object -Append installer-shots\upgrade-check.txt

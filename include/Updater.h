@@ -18,7 +18,7 @@ class QTextBrowser;
 //
 // Feed: any URL that returns a GitHub "release" JSON object (tag_name, name, body, html_url,
 // assets[{name, size, browser_download_url}]). Default:
-//   https://api.github.com/repos/namo2024mntik-ops/safari-browser-cpp/releases/latest
+//   https://api.github.com/repos/namo2024mntik-ops/pacitum-browser/releases/latest
 // Overrides (first wins): env PACITUM_UPDATE_FEED, setting "update_feed_url".
 // Flow: check -> compare versions -> prompt with release notes -> download the Setup .exe with
 // progress -> verify size (and SHA256 when a "<installer>.sha256" or "SHA256SUMS" asset exists) ->

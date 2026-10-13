@@ -31,6 +31,33 @@ jobs:
           Get-ChildItem dist -Recurse -Filter *.pdb | Remove-Item -Force
           "{0:N1} MB in dist" -f ((Get-ChildItem dist -Recurse | Measure-Object Length -Sum).Sum / 1MB)
           if (Test-Path "$env:VCToolsRedistDir\x64") { Get-ChildItem "$env:VCToolsRedistDir\x64" -Recurse -Filter *.dll | Where-Object { $_.FullName -match 'CRT' } | Copy-Item -Destination dist }
+      - name: Smoke test (exe starts and shows a window)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--smoke-test' -PassThru
+          Start-Sleep -Seconds 6
+          $p.Refresh()
+          $alive = -not $p.HasExited
+          $hwnd = if ($alive) { $p.MainWindowHandle } else { 0 }
+          Write-Host "alive=$alive MainWindowHandle=$hwnd title='$($p.MainWindowTitle)'"
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $bmp.Save("$PWD\smoke\desktop.png"); $g.Dispose(); $bmp.Dispose()
+          if (-not $p.WaitForExit(30000)) { Write-Host "still running after smoke window; killing"; $p.Kill() }
+          Write-Host "exit code: $($p.ExitCode)"
+          Copy-Item "$log\startup.log","$log\crash.log" smoke\ -ErrorAction SilentlyContinue
+          Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+          Get-Content smoke\crash.log -ErrorAction SilentlyContinue
+          Get-ChildItem dist -Name | Out-File smoke\dist-files.txt
+          Get-ChildItem dist -Recurse -Name | Out-File -Append smoke\dist-files.txt
+          if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }
       - name: Installer
         shell: pwsh
         run: |

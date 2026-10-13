@@ -1,9 +1,9 @@
-; Pacitum Browser installer — Inno Setup 6.6+ (CI pins 6.7.1). Design: design-1.5-extra/installer-spec.md
+; Pacitum Browser installer - Inno Setup 6.6+ (CI pins 6.7.1). Design: design-1.5-extra/installer-spec.md
 #define AppName "Pacitum Browser"
 #define AppVer "1.5.0"
 #define AppExe "PacitumBrowser.exe"
 [Setup]
-; Same AppId as 1.0–1.4: Setup finds the existing install and upgrades it in place.
+; Same AppId as 1.0-1.4: Setup finds the existing install and upgrades it in place.
 AppId={{FD3A16C9-4CF0-4B0B-BBEC-A5E3334D7CFE}
 AppName={#AppName}
 AppVersion={#AppVer}
@@ -27,7 +27,7 @@ PrivilegesRequiredOverridesAllowed=dialog
 ; styles need no extra files, so they behave the same locally and on CI.
 WizardStyle=modern dynamic zircon hidebevels
 WizardSizePercent=120
-; Every DPI step (100–250 %): Setup picks the closest match for the monitor.
+; Every DPI step (100-250 %): Setup picks the closest match for the monitor.
 WizardImageFile=installer\assets\wizard-image-light-100.png,installer\assets\wizard-image-light-125.png,installer\assets\wizard-image-light-150.png,installer\assets\wizard-image-light-175.png,installer\assets\wizard-image-light-200.png,installer\assets\wizard-image-light-225.png,installer\assets\wizard-image-light-250.png
 WizardImageFileDynamicDark=installer\assets\wizard-image-dark-100.png,installer\assets\wizard-image-dark-125.png,installer\assets\wizard-image-dark-150.png,installer\assets\wizard-image-dark-175.png,installer\assets\wizard-image-dark-200.png,installer\assets\wizard-image-dark-225.png,installer\assets\wizard-image-dark-250.png
 WizardSmallImageFile=installer\assets\wizard-small-light-100.png,installer\assets\wizard-small-light-125.png,installer\assets\wizard-small-light-150.png,installer\assets\wizard-small-light-175.png,installer\assets\wizard-small-light-200.png,installer\assets\wizard-small-light-225.png,installer\assets\wizard-small-light-250.png
@@ -35,7 +35,7 @@ WizardSmallImageFileDynamicDark=installer\assets\wizard-small-dark-100.png,insta
 WizardImageBackColor=#FFFFFF
 WizardImageBackColorDynamicDark=#202020
 WizardImageStretch=no
-; --- pages: Welcome → Location (+ disk space, tasks) → Installing → Finish ---
+; --- pages: Welcome > Location (+ disk space, tasks) > Installing > Finish ---
 DisableWelcomePage=no
 DisableDirPage=auto
 DisableProgramGroupPage=yes
@@ -80,7 +80,7 @@ Name: "{group}\Uninstall Pacitum Browser"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Pacitum Browser"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Registry]
-; Register as a web browser so it appears in Settings → Default apps (the welcome flow's
+; Register as a web browser so it appears in Settings > Default apps (the welcome flow's
 ; "Set as default" opens ms-settings:defaultapps?registeredAppUser=Pacitum Browser).
 Root: HKA; Subkey: "Software\Classes\PacitumHTML"; ValueType: string; ValueData: "Pacitum HTML Document"; Flags: uninsdeletekey
 Root: HKA; Subkey: "Software\Classes\PacitumHTML\DefaultIcon"; ValueType: string; ValueData: "{app}\{#AppExe},0"
@@ -113,7 +113,7 @@ begin
   Drive := ExtractFileDrive(WizardDirValue);
   if (Drive <> '') and GetSpaceOnDisk64(Drive, Free, Total) and (Total > 0) then
   begin
-    DiskLabel.Caption := Format('%s  —  %d GB free of %d GB  ·  Pacitum needs about 400 MB', [Drive, Free div (1024*1024*1024), Total div (1024*1024*1024)]);
+    DiskLabel.Caption := Format('%s  -  %d GB free of %d GB.  Pacitum needs about 400 MB.', [Drive, Free div (1024*1024*1024), Total div (1024*1024*1024)]);
     DiskBar.Position := 100 - (Free * 100) div Total;
     DiskBar.Visible := True;
   end else begin
@@ -163,4 +163,5 @@ begin
   if CurPageID = wpSelectDir then
   begin
     UpdateDiskPanel;
+  end;
 end;

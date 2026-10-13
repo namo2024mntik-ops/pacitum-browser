@@ -69,7 +69,7 @@ jobs:
         run: |
           $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
           Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
-          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--resize-test' -PassThru
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--resize-test',"$PWD\tests\resize-test.html" -PassThru
           if (-not $p.WaitForExit(150000)) { Write-Host "resize test hung; killing"; $p.Kill(); $p.WaitForExit() }
           New-Item -ItemType Directory -Force resize | Out-Null
           Copy-Item "$log\startup.log" resize\startup.log -ErrorAction SilentlyContinue

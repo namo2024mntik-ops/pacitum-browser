@@ -7,6 +7,7 @@
 #include "BrowserTab.h"
 #include <QApplication>
 #include <QWebEngineView>
+#include <QWebEnginePage>
 #include <QScreen>
 #include <QWindow>
 #include <QTimer>
@@ -25,7 +26,7 @@ QString r2s(const QRect& r) { return QStringLiteral("%1,%2 %3x%4").arg(r.x()).ar
 }
 
 void BrowserWindow::runResizeTest() {
-    struct Step { QString name; std::function<void()> act; int waitMs; };
+    struct Step { QString name; std::function<void()> act; int waitMs; QSize expect; };
     struct State { QVector<Step> steps; int i = 0; int fails = 0; };
     auto st = std::make_shared<State>();
     const QString shotDir = QDir::currentPath() + QStringLiteral("/resize-shots");
@@ -35,7 +36,7 @@ void BrowserWindow::runResizeTest() {
     auto hwnd = [this]{ return reinterpret_cast<HWND>(internalWinId()); };
     auto swp = [hwnd](int x, int y, int w, int h){ SetWindowPos(hwnd(), nullptr, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE); };
 #endif
-    auto add = [st](const QString& n, std::function<void()> f, int wait = 700){ st->steps.push_back({n, std::move(f), wait}); };
+    auto add = [st](const QString& n, std::function<void()> f, int wait = 700, QSize expect = {}){ st->steps.push_back({n, std::move(f), wait, expect}); };
 
     add(QStringLiteral("initial"), []{});
     add(QStringLiteral("qt-resize-900x600"), [this]{ showNormal(); resize(900, 600); });
@@ -53,6 +54,14 @@ void BrowserWindow::runResizeTest() {
     add(QStringLiteral("drag-exit"), [hwnd]{ SendMessageW(hwnd(), WM_EXITSIZEMOVE, 0, 0); });
     add(QStringLiteral("sw-maximize"), [hwnd]{ ShowWindow(hwnd(), SW_MAXIMIZE); }, 900);
     add(QStringLiteral("sw-restore"), [hwnd]{ ShowWindow(hwnd(), SW_RESTORE); }, 900);
+    // Aero Snap / Win+arrow style: maximize and restore happen *inside* a move loop that
+    // started while maximized. The size changes must go through (1.5.2 pinned them).
+    add(QStringLiteral("loop-maximize"), [hwnd]{ ShowWindow(hwnd(), SW_MAXIMIZE); }, 900);
+    add(QStringLiteral("loop-enter-while-max"), [hwnd]{ SendMessageW(hwnd(), WM_ENTERSIZEMOVE, 0, 0); }, 50);
+    add(QStringLiteral("loop-restore"), [hwnd]{ ShowWindow(hwnd(), SW_RESTORE); }, 700);
+    add(QStringLiteral("loop-swp-860x580"), [swp]{ swp(100, 80, 860, 580); }, 700, QSize(860, 580));
+    add(QStringLiteral("loop-exit"), [hwnd]{ SendMessageW(hwnd(), WM_EXITSIZEMOVE, 0, 0); }, 500, QSize(860, 580));
+    add(QStringLiteral("swp-resize-after-loop"), [swp]{ swp(120, 60, 900, 640); }, 700, QSize(900, 640));
 #endif
     add(QStringLiteral("qt-maximize"), [this]{ showMaximized(); }, 900);
     add(QStringLiteral("qt-restore"), [this]{ showNormal(); }, 900);
@@ -79,6 +88,8 @@ void BrowserWindow::runResizeTest() {
             problems << QStringLiteral("Qt origin %1 != client origin %2").arg(r2s(qtPhys), r2s(clientPhys));
         if (!IsZoomed(h) && (cr.right != wr.right - wr.left || cr.bottom != wr.bottom - wr.top))
             problems << QStringLiteral("restored window has a non-client frame");
+        if (const QSize ex = st->steps[st->i - 1].expect; ex.isValid() && QSize(wr.right - wr.left, wr.bottom - wr.top) != ex)
+            problems << QStringLiteral("window size %1x%2, expected %3x%4 (size change was blocked)").arg(wr.right - wr.left).arg(wr.bottom - wr.top).arg(ex.width()).arg(ex.height());
         if (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_LAYERED) problems << QStringLiteral("window is WS_EX_LAYERED");
         if (windowOpacity() < 0.999) problems << QStringLiteral("windowOpacity %1").arg(windowOpacity());
 #endif
@@ -98,6 +109,17 @@ void BrowserWindow::runResizeTest() {
             // the native/compositor child that actually shows the page must follow the view
             if (QWidget* fp = v->focusProxy(); fp && fp != v && fp->size() != v->size())
                 problems << QStringLiteral("web view delegate %1x%2 != view %3x%4").arg(fp->width()).arg(fp->height()).arg(v->width()).arg(v->height());
+            // the page's own viewport (tests/resize-test.html in CI) must match the view
+            const int stepNo = st->i; const QSize vs = v->size();
+            v->page()->runJavaScript(QStringLiteral("innerWidth+'x'+innerHeight+' '+location.pathname.split('/').pop()"),
+                [st, stepNo, vs](const QVariant& r){
+                    const QStringList p = r.toString().split(QLatin1Char(' ')).value(0).split(QLatin1Char('x'));
+                    const int jw = p.value(0).toInt(), jh = p.value(1).toInt();
+                    const bool bad = jw > 0 && (qAbs(jw - vs.width()) > 2 || qAbs(jh - vs.height()) > 2);
+                    pacitumLog(QStringLiteral("RESIZE js step %1: page viewport %2 vs view %3x%4 %5").arg(stepNo).arg(r.toString()).arg(vs.width()).arg(vs.height())
+                                   .arg(bad ? QStringLiteral("PROBLEM") : QStringLiteral("ok")));
+                    if (bad) st->fails++;
+                });
         }
         for (QWidget* c : findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
             if (c->isVisible() && c->autoFillBackground() && c->testAttribute(Qt::WA_TransparentForMouseEvents) && c->geometry() != rect())
@@ -117,8 +139,10 @@ void BrowserWindow::runResizeTest() {
     *runNext = [this, st, check, runNext]{
         if (st->i > 0) check(st->steps[st->i - 1].name);
         if (st->i >= st->steps.size()) {
-            pacitumLog(st->fails ? QStringLiteral("RESIZE FAIL (%1 steps with problems)").arg(st->fails) : QStringLiteral("RESIZE OK"));
-            QCoreApplication::exit(st->fails ? 5 : 0);
+            QTimer::singleShot(600, qApp, [st]{   // let the last page-viewport check report
+                pacitumLog(st->fails ? QStringLiteral("RESIZE FAIL (%1 checks with problems)").arg(st->fails) : QStringLiteral("RESIZE OK"));
+                QCoreApplication::exit(st->fails ? 5 : 0);
+            });
             return;
         }
         const Step& s = st->steps[st->i++];

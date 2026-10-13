@@ -36,10 +36,15 @@ jobs:
         run: |
           $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
           $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--smoke-test' -PassThru
-          Start-Sleep -Seconds 6
-          $p.Refresh()
-          $alive = -not $p.HasExited
-          $hwnd = if ($alive) { $p.MainWindowHandle } else { 0 }
+          # Poll for the window instead of a fixed 6 s sleep: cold runners sometimes need ~8 s
+          # (QtWebEngine init) and the old check failed although the app reported SMOKE OK.
+          $hwnd = 0; $alive = $true
+          for ($i = 0; $i -lt 50; $i++) {
+            Start-Sleep -Milliseconds 500; $p.Refresh()
+            if ($p.HasExited) { $alive = $false; break }
+            if ($p.MainWindowHandle -ne 0) { $hwnd = $p.MainWindowHandle; break }
+          }
+          Start-Sleep -Seconds 3   # let the first page paint before the screenshot
           Write-Host "alive=$alive MainWindowHandle=$hwnd title='$($p.MainWindowTitle)'"
           Add-Type -AssemblyName System.Windows.Forms,System.Drawing
           $b = [System.Windows.Forms.SystemInformation]::VirtualScreen

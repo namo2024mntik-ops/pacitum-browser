@@ -3,6 +3,7 @@
 #include <QWebChannel>
 #include "FirstRun.h"
 #include <QPainter>
+#include <QResizeEvent>
 #include <QDateTime>
 #include "BrowserWindow.h"
 #include "BrowserTab.h"
@@ -102,7 +103,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     updateDownloadsButton();
     installPopupFactory();
     qApp->installEventFilter(this);
-    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test"));
+    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test"));
     setupUpdater();
 #ifdef Q_OS_WIN
     // Do NOT force native window creation from the constructor; apply the frame
@@ -127,10 +128,17 @@ void BrowserWindow::showEvent(QShowEvent* e) {
 // Window fade-in on open: a theme-coloured veil over the content fades out (220 ms). Window-level
 // opacity (WS_EX_LAYERED) is deliberately not used: it is incompatible with the GPU swap chain
 // that hosts the web view and would turn the page black.
+void BrowserWindow::resizeEvent(QResizeEvent* e) {
+    QMainWindow::resizeEvent(e);
+    // Transient full-window overlays (open fade veil, theme cross-fade shot) must follow the size.
+    for (auto* c : findChildren<QWidget*>(QStringLiteral("PacitumWindowOverlay"), Qt::FindDirectChildrenOnly)) c->setGeometry(rect());
+}
+
 void BrowserWindow::fadeInContent() {
     const int ms = Pacitum::motionMs(220);
     if (Pacitum::reducedMotion() || ms <= 0 || !centralWidget()) return;
     auto* veil = new QWidget(this);
+    veil->setObjectName(QStringLiteral("PacitumWindowOverlay"));
     veil->setAttribute(Qt::WA_TransparentForMouseEvents);
     veil->setAutoFillBackground(true);
     QPalette pal = veil->palette(); pal.setColor(QPalette::Window, QColor(m_theme->palette().page)); veil->setPalette(pal);
@@ -1429,12 +1437,18 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
         if (msg->wParam == TRUE) {
             auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
             if (IsZoomed(hwnd) && !isFullScreen() && !m_chromeHidden) {
-                // A maximized window is placed with its resize border off-screen: clamp the client
-                // area to the monitor work area (correct per-monitor, respects docked taskbars).
-                HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                // A maximized window is placed with its resize border off-screen. Derive the client
+                // rect from the *proposed* window rect (rgrc[0]) -- never replace it wholesale -- so
+                // the client area can't be larger than / offset from the window if the size Windows
+                // proposes is not the full monitor (snap/restore in a move loop, monitor change).
+                const int fx = resizeBorder(hwnd, true), fy = resizeBorder(hwnd, false);
+                p->rgrc[0].left += fx; p->rgrc[0].right -= fx; p->rgrc[0].top += fy; p->rgrc[0].bottom -= fy;
+                // Monitor of the proposed rect, not of the current window position.
+                HMONITOR mon = MonitorFromRect(&p->rgrc[0], MONITOR_DEFAULTTONEAREST);
                 MONITORINFO mi{}; mi.cbSize = sizeof(mi);
                 if (GetMonitorInfoW(mon, &mi)) {
-                    p->rgrc[0] = mi.rcWork;
+                    RECT clipped;
+                    if (IntersectRect(&clipped, &p->rgrc[0], &mi.rcWork)) p->rgrc[0] = clipped;
                     // Leave 1px for an auto-hide taskbar so it can still be revealed.
                     switch (autoHideTaskbarEdge(mon)) {
                     case ABE_BOTTOM: p->rgrc[0].bottom -= 1; break;
@@ -1443,9 +1457,6 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
                     case ABE_RIGHT:  p->rgrc[0].right -= 1; break;
                     default: break;
                     }
-                } else {
-                    const int fx = resizeBorder(hwnd, true), fy = resizeBorder(hwnd, false);
-                    p->rgrc[0].left += fx; p->rgrc[0].right -= fx; p->rgrc[0].top += fy; p->rgrc[0].bottom -= fy;
                 }
             }
             *result = 0;          // whole window is client area (no native caption / borders drawn)
@@ -1547,13 +1558,18 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
             *result = 0; return true;
         }
         break;
-    case WM_ENTERSIZEMOVE: m_inSizeMove = true; break;
-    case WM_EXITSIZEMOVE:  m_inSizeMove = false; break;
+    case WM_ENTERSIZEMOVE: m_inSizeMove = true; m_sizeMoveLocked = moveLocked(); break;
+    case WM_EXITSIZEMOVE:  m_inSizeMove = false; m_sizeMoveLocked = false; break;
     case WM_WINDOWPOSCHANGING:
-        // Last line of defence: if a move loop was started anyway while locked, pin the window.
-        if (m_inSizeMove && moveLocked()) {
+        // Last line of defence: a move loop that *started* while maximized must not drag the window.
+        // Only the position is pinned, and only while still zoomed. Never add SWP_NOSIZE here: Aero
+        // Snap / Win+arrows maximize or restore from inside a normal move loop (IsZoomed() is already
+        // true when that WINDOWPOS arrives), and blocking the size left a maximized-state window at
+        // the old size, so WM_NCCALCSIZE / Qt laid out for a different rect (clipped, shifted UI).
+        if (m_inSizeMove && m_sizeMoveLocked && IsZoomed(hwnd) && !isFullScreen() && !m_chromeHidden) {
             auto* wp = reinterpret_cast<WINDOWPOS*>(msg->lParam);
-            wp->flags |= SWP_NOMOVE | SWP_NOSIZE;
+            if (!(wp->flags & SWP_NOSIZE)) break;   // a real resize (maximize/restore/snap): let it through
+            wp->flags |= SWP_NOMOVE;
         }
         break;
     case WM_STYLECHANGING:
@@ -1588,6 +1604,8 @@ void BrowserWindow::writeSetting(const QString& key, const QJsonValue& value) {
 void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {
     if (Pacitum::reducedMotion() || !isVisible()) { apply(); return; }   // reduced motion: theme change is instant
     auto* shot = new QLabel(this);
+    shot->setObjectName(QStringLiteral("PacitumWindowOverlay"));
+    shot->setScaledContents(true);
     shot->setPixmap(grab());
     shot->setGeometry(rect());
     shot->setAttribute(Qt::WA_TransparentForMouseEvents);

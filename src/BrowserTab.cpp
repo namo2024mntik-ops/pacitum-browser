@@ -1,4 +1,5 @@
 #include "BrowserTab.h"
+#include <QResizeEvent>
 #include "FindBar.h"
 #include "PacitumScheme.h"
 #include "WebProfile.h"
@@ -261,4 +262,9 @@ void BrowserTab::fadeIn() {
     connect(a, &QPropertyAnimation::finished, veil, [this, guard]{ if (guard) { if (m_veil == guard) m_veil = nullptr; guard->deleteLater(); } });
     m_veil = veil;
     a->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void BrowserTab::resizeEvent(QResizeEvent* e) {
+    QWidget::resizeEvent(e);
+    if (m_veil) m_veil->setGeometry(rect());   // page-transition veil follows the tab size
 }

@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resize / Layout Test</title>
+<style>
+html,body{margin:0;padding:0;overflow:hidden;font:13px/1.35 monospace;color:#111}
+body{background-color:#fff;
+ background-image:linear-gradient(#888 1px,transparent 1px),linear-gradient(90deg,#888 1px,transparent 1px),
+ linear-gradient(#ddd 1px,transparent 1px),linear-gradient(90deg,#ddd 1px,transparent 1px);
+ background-size:100px 100px,100px 100px,10px 10px,10px 10px;min-height:100vh}
+#frame{position:fixed;left:0;top:0;width:100vw;height:100vh;box-sizing:border-box;pointer-events:none;
+ border-top:4px solid red;border-right:4px solid #0a0;border-bottom:4px solid blue;border-left:4px solid gold;z-index:5}
+.lbl{position:fixed;font-size:10px;color:#555;pointer-events:none}
+.corner,.mid{position:fixed;background:#000;color:#fff;padding:2px 5px;font-weight:bold;z-index:6;pointer-events:none}
+#tl{top:6px;left:6px}#tr{top:6px;right:6px}#bl{bottom:6px;left:6px}#br{bottom:6px;right:6px}
+.mid{background:#c0f}
+#mt{top:6px;left:50%;transform:translateX(-50%)}#mb{bottom:6px;left:50%;transform:translateX(-50%)}
+#ml{left:6px;top:50%;transform:translateY(-50%)}#mr{right:6px;top:50%;transform:translateY(-50%)}
+#panel{position:fixed;top:40px;left:40px;background:rgba(255,255,240,.95);border:1px solid #333;padding:10px;z-index:7;max-width:calc(100vw - 100px);max-height:calc(100vh - 100px);overflow:auto}
+#panel td{padding:0 8px 0 0}#panel td:last-child{font-weight:bold}
+#warn{color:#fff;background:#c00;padding:3px;display:none;margin-top:6px}
+#fsErr{color:#c00}
+button{font:inherit;padding:4px 10px}
+.hint{background:#eef;padding:5px;margin-top:6px;max-width:440px}
+</style></head><body>
+<div id="frame"></div>
+<div class="corner" id="tl">↖ TL</div><div class="corner" id="tr">TR ↗</div>
+<div class="corner" id="bl">↙ BL</div><div class="corner" id="br">BR ↘</div>
+<div class="mid" id="mt">↑ TOP</div><div class="mid" id="mb">↓ BOTTOM</div>
+<div class="mid" id="ml">← LEFT</div><div class="mid" id="mr">RIGHT →</div>
+<div id="labels"></div>
+<div id="panel">
+<b>Resize / Layout Test</b>
+<table id="t"></table>
+<div id="warn"></div>
+<div style="margin-top:6px"><button id="fsBtn">Toggle Fullscreen</button> <span id="fsStatus"></span> <div id="fsErr"></div></div>
+<div class="hint">Drag the window edges and corners (and maximize/restore, fullscreen). Watch for: stale sizes that don't match the borders, scrollbars appearing, gaps/white strips beyond the colored border, or clipped corner/edge markers. All four colored edges (red top, green right, blue bottom, yellow left) and all markers must stay fully visible.</div>
+</div>
+<script>
+(function(){
+var resizeCount=0,lastResize='never',dprCount=0,mql=null;
+var t=document.getElementById('t'),warn=document.getElementById('warn');
+function row(k,v){return '<tr><td>'+k+'</td><td>'+v+'</td></tr>';}
+function update(){
+ var de=document.documentElement,vv=window.visualViewport,h='';
+ h+=row('innerWidth × innerHeight',innerWidth+' × '+innerHeight);
+ h+=row('outerWidth × outerHeight',outerWidth+' × '+outerHeight);
+ h+=row('docEl client W × H',de.clientWidth+' × '+de.clientHeight);
+ h+=row('docEl scroll W × H',de.scrollWidth+' × '+de.scrollHeight);
+ h+=row('visualViewport',vv?(vv.width.toFixed(1)+' × '+vv.height.toFixed(1)+' scale '+vv.scale+' off '+vv.offsetLeft+','+vv.offsetTop):'n/a');
+ h+=row('screen W × H',screen.width+' × '+screen.height);
+ h+=row('screen avail W × H',screen.availWidth+' × '+screen.availHeight);
+ h+=row('devicePixelRatio',window.devicePixelRatio+' (changes: '+dprCount+')');
+ h+=row('resize events',resizeCount);
+ h+=row('last resize',lastResize);
+ t.innerHTML=h;
+ var w=[];
+ if(de.scrollWidth>de.clientWidth)w.push('Horizontal overflow: scrollWidth '+de.scrollWidth+' > clientWidth '+de.clientWidth);
+ if(de.scrollHeight>de.clientHeight)w.push('Vertical overflow: scrollHeight '+de.scrollHeight+' > clientHeight '+de.clientHeight);
+ if(de.clientWidth!==innerWidth||de.clientHeight!==innerHeight)w.push('clientW/H differs from innerW/H (scrollbar present?)');
+ warn.style.display=w.length?'block':'none';warn.innerHTML=w.join('<br>');
+ drawLabels();
+}
+function drawLabels(){
+ var s='',x,y;
+ for(x=100;x<innerWidth;x+=100)s+='<div class="lbl" style="left:'+(x+2)+'px;top:16px">'+x+'</div>';
+ for(y=100;y<innerHeight;y+=100)s+='<div class="lbl" style="left:2px;top:'+(y+2)+'px">'+y+'</div>';
+ document.getElementById('labels').innerHTML=s;
+}
+function watchDpr(){
+ if(!window.matchMedia)return;
+ if(mql){if(mql.removeEventListener)mql.removeEventListener('change',onDpr);else mql.removeListener(onDpr);}
+ mql=matchMedia('(resolution: '+window.devicePixelRatio+'dppx)');
+ if(mql.addEventListener)mql.addEventListener('change',onDpr);else mql.addListener(onDpr);
+}
+function onDpr(){dprCount++;watchDpr();update();}
+window.addEventListener('resize',function(){resizeCount++;lastResize=new Date().toISOString();update();});
+if(window.visualViewport){visualViewport.addEventListener('resize',update);visualViewport.addEventListener('scroll',update);}
+var fsStatus=document.getElementById('fsStatus'),fsErr=document.getElementById('fsErr');
+function fsEl(){return document.fullscreenElement||document.webkitFullscreenElement||null;}
+function fsUpd(){fsStatus.textContent='Fullscreen: '+(fsEl()?'ON':'off')+' @ '+new Date().toLocaleTimeString();update();}
+document.addEventListener('fullscreenchange',fsUpd);document.addEventListener('webkitfullscreenchange',fsUpd);
+document.addEventListener('fullscreenerror',function(){fsErr.textContent='fullscreenerror event fired';});
+document.getElementById('fsBtn').addEventListener('click',function(){
+ fsErr.textContent='';
+ try{
+  var p;
+  if(fsEl())p=(document.exitFullscreen||document.webkitExitFullscreen).call(document);
+  else{var e=document.documentElement;var f=e.requestFullscreen||e.webkitRequestFullscreen;
+   if(!f)throw new Error('Fullscreen API not supported');p=f.call(e);}
+  if(p&&p.catch)p.catch(function(err){fsErr.textContent='Error: '+(err&&err.message||err);});
+ }catch(err){fsErr.textContent='Error: '+err.message;}
+});
+watchDpr();fsUpd();update();
+setInterval(update,500);
+})();
+</script>
+</body></html>

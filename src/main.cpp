@@ -141,9 +141,11 @@ int main(int argc, char *argv[]) {
     installLogging();
     bool smoke = false;
     bool stress = false;
+    bool resizeTest = false;
     for (int i = 1; i < argc; ++i) {
         if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
         if (qstrcmp(argv[i], "--stress-test") == 0) stress = true;
+        if (qstrcmp(argv[i], "--resize-test") == 0) resizeTest = true;
     }
     const QString launchDir = QDir::currentPath();   // before we switch to the data dir (relative file args)
     setupEnvironment();
@@ -223,11 +225,12 @@ int main(int argc, char *argv[]) {
         // Time-to-window: first moment the native window is actually exposed (on screen).
         auto* exposeProbe = new QTimer(&app);
         exposeProbe->setInterval(15);
-        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress]{
+        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress, resizeTest]{
             if (!w.windowHandle() || !w.windowHandle()->isExposed()) return;
             exposeProbe->stop(); exposeProbe->deleteLater();
             pacitumLog(QStringLiteral("window exposed (time-to-window)"));
-            if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
+            if (resizeTest) QTimer::singleShot(2500, &w, [&w]{ pacitumLog(QStringLiteral("resize test starting")); w.runResizeTest(); });
+            else if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
             else if (smoke) {
                 // CI smoke test: window must stay visible; quit cleanly 5 s after it appeared.
                 QTimer::singleShot(5000, &w, [&w]{
@@ -239,7 +242,7 @@ int main(int argc, char *argv[]) {
             }
         });
         exposeProbe->start();
-        if (smoke || stress) QTimer::singleShot(stress ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
+        if (smoke || stress || resizeTest) QTimer::singleShot(stress || resizeTest ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
         const int rc = app.exec();
         pacitumLog(QStringLiteral("exit %1").arg(rc));
         return rc;

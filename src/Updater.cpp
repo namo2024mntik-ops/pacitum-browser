@@ -28,7 +28,7 @@
 void pacitumLog(const QString& line);   // main.cpp (startup.log)
 
 namespace {
-const char* kDefaultFeed = "https://api.github.com/repos/namo2024mntik-ops/safari-browser-cpp/releases/latest";
+const char* kDefaultFeed = "https://api.github.com/repos/namo2024mntik-ops/pacitum-browser/releases/latest";
 constexpr int kFirstCheckMs = 45 * 1000;            // well after startup: never competes with the first paint
 constexpr int kIntervalMs = 6 * 60 * 60 * 1000;     // every 6 h while running
 constexpr qint64 kMinCheckGapSecs = 12 * 60 * 60;   // background checks at most twice a day across restarts

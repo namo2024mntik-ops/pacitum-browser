@@ -27,6 +27,12 @@ protected:
 #include <QUrlQuery>
 #include <QTimer>
 #include <QEasingCurve>
+#include <QDesktopServices>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QToolButton>
+#include "ThemeManager.h"
 
 int BrowserTab::s_idCounter = 0;
 
@@ -54,11 +60,14 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
         m_page = new QWebEnginePage(Pacitum::mainProfile(), m_view);
     }
     m_view->setPage(m_page);
+    m_page->setUrlRequestInterceptor(new Pacitum::GoogleSignInInterceptor(m_page));
 
     applyWebSettings();
 
     connect(m_view->page(), &QWebEnginePage::renderProcessTerminated, this, &BrowserTab::onRenderCrashed);
 
+    buildSignInBar();
+    layout->addWidget(m_signInBar);
     layout->addWidget(m_view, 1);
 
     m_findBar = new FindBar(this);
@@ -119,11 +128,67 @@ bool BrowserTab::isMuted() const { return m_view->page()->isAudioMuted(); }
 void BrowserTab::showFindBar() { m_findBar->showFind(); }
 void BrowserTab::hideFindBar() { m_findBar->hide(); }
 
-void BrowserTab::onUrlChanged(const QUrl& u) { m_url = u.toString(); emit urlChanged(m_url); }
+void BrowserTab::buildSignInBar() {
+    m_signInBar = new QFrame(this);
+    m_signInBar->setObjectName(QStringLiteral("SignInBar"));
+    auto* h = new QHBoxLayout(m_signInBar); h->setContentsMargins(12, 6, 8, 6); h->setSpacing(10);
+    m_signInIcon = new QLabel(m_signInBar);
+    auto* text = new QLabel(tr("Google sign-in isn't supported here"), m_signInBar);
+    text->setObjectName(QStringLiteral("SignInText"));
+    auto* open = new QPushButton(tr("Open in default browser"), m_signInBar);
+    open->setObjectName(QStringLiteral("SignInOpen")); open->setCursor(Qt::PointingHandCursor);
+    auto* close = new QToolButton(m_signInBar);
+    close->setObjectName(QStringLiteral("SignInClose")); close->setAutoRaise(true); close->setCursor(Qt::PointingHandCursor);
+    m_signInClose = close;
+    h->addWidget(m_signInIcon); h->addWidget(text); h->addStretch(1); h->addWidget(open); h->addWidget(close);
+    connect(open, &QPushButton::clicked, this, [this]{
+        const QUrl target = m_signInUrl.isValid() ? m_signInUrl : m_view->url();
+        QDesktopServices::openUrl(target);
+    });
+    connect(close, &QToolButton::clicked, m_signInBar, &QWidget::hide);
+    m_signInBar->hide();
+}
+
+void BrowserTab::showSignInBar(const QUrl& target) {
+    const auto& p = ThemeManager::current();
+    m_signInBar->setStyleSheet(QStringLiteral(
+        "#SignInBar{background:%1;border-bottom:1px solid %2;}"
+        "#SignInText{color:%3;font-size:13px;}"
+        "#SignInOpen{background:%4;color:%5;border:none;border-radius:8px;padding:5px 12px;font-weight:600;}"
+        "#SignInOpen:hover{background:%6;}"
+        "#SignInClose{border:none;border-radius:6px;padding:3px;} #SignInClose:hover{background:%7;}")
+        .arg(p.toolbar, p.border, p.text, p.accent, p.onAccent, p.accent, p.surfaceHover));
+    m_signInIcon->setPixmap(ThemeManager::icon(QStringLiteral("warning"), p.textSecondary, 18).pixmap(18, 18));
+    m_signInClose->setIcon(ThemeManager::icon(QStringLiteral("close"), p.textSecondary, 16));
+    m_signInUrl = target;
+    m_signInBar->show();
+}
+
+void BrowserTab::checkGoogleSignIn(const QUrl& u) {
+    if (Pacitum::isGoogleSignInBlocked(u)) {
+        // The rejection page carries the original sign-in URL in "continue" when present.
+        QUrl target(QStringLiteral("https://accounts.google.com/"));
+        const QString cont = QUrlQuery(u).queryItemValue(QStringLiteral("continue"), QUrl::FullyDecoded);
+        if (!cont.isEmpty()) {
+            const QUrl c(cont);
+            if (c.scheme() == QLatin1String("https")) target = c;
+        }
+        showSignInBar(target);
+        return;
+    }
+    if (!Pacitum::isGoogleSignInHost(u.host())) { m_signInBar->hide(); return; }
+    // Fallback: detect the rejection by page text (Google sometimes keeps the generic /v3/signin URL).
+    m_view->page()->runJavaScript(QStringLiteral(
+        "(function(){var t=(document.body&&document.body.innerText)||'';"
+        "return /Couldn.t sign you in|This browser or app may not be secure/i.test(t);})()"),
+        [this, u](const QVariant& v){ if (v.toBool() && m_view->url() == u) showSignInBar(u); });
+}
+
+void BrowserTab::onUrlChanged(const QUrl& u) { m_url = u.toString(); emit urlChanged(m_url); checkGoogleSignIn(u); }
 void BrowserTab::onTitleChanged(const QString& t) { m_title = t.isEmpty() ? QStringLiteral("New Tab") : t; emit titleChanged(m_title); }
 void BrowserTab::onLoadStarted() { m_loading = true; emit loadingChanged(true); m_progress->setValue(0); m_progress->show(); }
 void BrowserTab::onLoadProgress(int p) { m_progress->setValue(p); emit progressChanged(p); }
-void BrowserTab::onLoadFinished(bool) { m_loading = false; emit loadingChanged(false); m_progress->hide(); m_progress->setValue(100); }
+void BrowserTab::onLoadFinished(bool) { checkGoogleSignIn(m_view->url()); m_loading = false; emit loadingChanged(false); m_progress->hide(); m_progress->setValue(100); }
 void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus, int) { QTimer::singleShot(1000, this, &BrowserTab::reload); }
 
 void BrowserTab::fadeIn() {

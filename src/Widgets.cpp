@@ -69,23 +69,12 @@ void WindowButton::paintEvent(QPaintEvent*) {
     paintBackground(p);
     const auto& pal = ThemeManager::current();
     QColor fg = (m_kind == Close && (hoverLevel() > 0.5 || isDown())) ? QColor(Qt::white) : QColor(pal.text);
-    p.setRenderHint(QPainter::Antialiasing, true);
-    QPen pen(fg, 1.0); pen.setCosmetic(true); p.setPen(pen); p.setBrush(Qt::NoBrush);
-    const QPointF c(width() / 2.0, height() / 2.0);
-    const qreal r = 5.0;
-    switch (m_kind) {
-    case Minimize: p.drawLine(QPointF(c.x() - r, c.y()), QPointF(c.x() + r, c.y())); break;
-    case Maximize:
-        if (m_max) {
-            p.drawRect(QRectF(c.x() - r, c.y() - r + 2, 2 * r - 2, 2 * r - 2));
-            p.drawPolyline(QPolygonF({QPointF(c.x() - r + 2, c.y() - r), QPointF(c.x() + r, c.y() - r), QPointF(c.x() + r, c.y() + r - 2)}));
-        } else p.drawRect(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r));
-        break;
-    case Close:
-        p.drawLine(QPointF(c.x() - r, c.y() - r), QPointF(c.x() + r, c.y() + r));
-        p.drawLine(QPointF(c.x() + r, c.y() - r), QPointF(c.x() - r, c.y() + r));
-        break;
-    }
+    // Icon pack glyphs (window-minimize / window-maximize / window-restore / close), 16 px centred.
+    const QString name = m_kind == Minimize ? QStringLiteral("window-minimize")
+                       : m_kind == Close ? QStringLiteral("close")
+                       : (m_max ? QStringLiteral("window-restore") : QStringLiteral("window-maximize"));
+    const QPixmap pm = ThemeManager::icon(name, fg.name(), 16).pixmap(QSize(16, 16), devicePixelRatioF());
+    p.drawPixmap(QPointF((width() - 16) / 2.0, (height() - 16) / 2.0), pm);
 }
 
 ToggleSwitch::ToggleSwitch(QWidget* parent) : QAbstractButton(parent) {

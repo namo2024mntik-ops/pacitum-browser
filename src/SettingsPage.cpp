@@ -59,13 +59,13 @@ SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
 
     struct S { const char* icon; const char* name; QWidget* (SettingsPage::*fn)(); };
     const S sections[] = {
-        {"palette", "Appearance", &SettingsPage::appearancePage},
-        {"search", "Search engine", &SettingsPage::searchPage},
-        {"home", "On startup", &SettingsPage::startupPage},
-        {"shield", "Privacy and security", &SettingsPage::privacyPage},
-        {"globe", "Site settings", &SettingsPage::contentPage},
+        {"settings-appearance", "Appearance", &SettingsPage::appearancePage},
+        {"settings-search", "Search engine", &SettingsPage::searchPage},
+        {"settings-startup", "On startup", &SettingsPage::startupPage},
+        {"settings-privacy", "Privacy and security", &SettingsPage::privacyPage},
+        {"site-info", "Site settings", &SettingsPage::contentPage},
         {"download", "Downloads", &SettingsPage::downloadsPage},
-        {"info", "About Pacitum", &SettingsPage::aboutPage},
+        {"settings-system", "About Pacitum", &SettingsPage::aboutPage},
     };
     const auto& pal = ThemeManager::current();
     for (const auto& sct : sections) {

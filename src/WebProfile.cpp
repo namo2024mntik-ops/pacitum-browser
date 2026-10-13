@@ -6,6 +6,9 @@
 #include <QRegularExpression>
 #include <QLocale>
 #include <QStringList>
+#include <QWebEngineScript>
+#include <QWebEngineScriptCollection>
+#include <QUrl>
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
 #include <QWebEngineClientHints>
 #endif
@@ -47,16 +50,54 @@ static QString chromeUserAgent(const QString& defaultUa) {
     return ua.simplified();
 }
 
+static QString& defaultUaStore() { static QString ua; return ua; }
+QString defaultUserAgent() { return defaultUaStore(); }
+
+bool isGoogleSignInHost(const QString& rawHost) {
+    const QString h = rawHost.toLower();
+    return h == QLatin1String("accounts.google.com") || h.startsWith(QLatin1String("accounts.google."))
+        || h == QLatin1String("accounts.youtube.com") || h == QLatin1String("gds.google.com");
+}
+
+bool isGoogleSignInBlocked(const QUrl& u) {
+    if (!isGoogleSignInHost(u.host())) return false;
+    const QString path = u.path().toLower();
+    return path.contains(QLatin1String("/signin/rejected")) || path.contains(QLatin1String("/disallowed"))
+        || path.contains(QLatin1String("deniedsigninrejected"));
+}
+
+GoogleSignInInterceptor::GoogleSignInInterceptor(QObject* parent) : QWebEngineUrlRequestInterceptor(parent) {}
+void GoogleSignInInterceptor::interceptRequest(QWebEngineUrlRequestInfo& info) {
+    // Google sign-in pages must see the honest, unmodified QtWebEngine user agent (Google's embedded-browser policy).
+    if (isGoogleSignInHost(info.requestUrl().host()) || isGoogleSignInHost(info.firstPartyUrl().host()))
+        if (!defaultUaStore().isEmpty()) info.setHttpHeader("User-Agent", defaultUaStore().toUtf8());
+}
+
 void configureProfile(QWebEngineProfile* profile, bool persistent) {
     if (!profile) return;
-    profile->setHttpUserAgent(chromeUserAgent(profile->httpUserAgent()));
+    const QString honest = profile->httpUserAgent();
+    if (defaultUaStore().isEmpty()) defaultUaStore() = honest;
+    profile->setHttpUserAgent(chromeUserAgent(honest));
+    {   // Same honesty for navigator.userAgent on Google sign-in pages.
+        QString js = QStringLiteral(
+            "(function(){var h=location.hostname;"
+            "if(!(h==='accounts.google.com'||h.indexOf('accounts.google.')===0||h==='accounts.youtube.com'||h==='gds.google.com'))return;"
+            "var ua=%1;try{Object.defineProperty(Navigator.prototype,'userAgent',{get:function(){return ua;},configurable:true});"
+            "Object.defineProperty(Navigator.prototype,'appVersion',{get:function(){return ua.replace(/^Mozilla\\//,'');},configurable:true});}catch(e){}})();");
+        QString q = honest; q.replace(QLatin1Char('\\'), QStringLiteral("\\\\")).replace(QLatin1Char('\''), QStringLiteral("\\'"));
+        js = js.arg(QStringLiteral("'") + q + QStringLiteral("'"));
+        QWebEngineScript sc; sc.setName(QStringLiteral("pacitum-honest-ua")); sc.setSourceCode(js);
+        sc.setInjectionPoint(QWebEngineScript::DocumentCreation); sc.setWorldId(QWebEngineScript::MainWorld);
+        sc.setRunsOnSubFrames(true);
+        profile->scripts()->insert(sc);
+    }
     profile->setHttpAcceptLanguage(acceptLanguage());
 #if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
     if (auto* ch = profile->clientHints()) {
         const QString full = QString::fromLatin1(qWebEngineChromiumVersion());
         const QString major = full.section(QLatin1Char('.'), 0, 0);
         ch->setFullVersion(full);
-        ch->setFullVersionList({{QStringLiteral("Chromium"), full}, {QStringLiteral("Google Chrome"), full},
+        ch->setFullVersionList({{QStringLiteral("Chromium"), full},
                                 {QStringLiteral("Not-A.Brand"), QStringLiteral("99.0.0.0")}});
         Q_UNUSED(major);
     }

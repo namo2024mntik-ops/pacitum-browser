@@ -6,6 +6,10 @@
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <functional>
+#include <QFrame>
+#include <QUrl>
+class QLabel;
+class QToolButton;
 
 class FindBar;
 
@@ -56,7 +60,13 @@ private slots:
     void onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus status, int code);
 
 private:
-
+    void buildSignInBar();
+    void showSignInBar(const QUrl& target);
+    void checkGoogleSignIn(const QUrl& url);
+    QFrame* m_signInBar = nullptr;
+    QLabel* m_signInIcon = nullptr;
+    QToolButton* m_signInClose = nullptr;
+    QUrl m_signInUrl;
     static int s_idCounter;
     int m_tabId = 0;
     bool m_private = false;

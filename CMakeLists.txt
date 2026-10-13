@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.4.1 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,7 +8,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Find Qt6
-find_package(Qt6 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network Concurrent)
 
 # Include dirs
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -33,6 +33,7 @@ set(SOURCES
     src/Widgets.cpp
     src/ThemeManager.cpp
     src/PacitumScheme.cpp
+    src/FirstRun.cpp
 )
 
 set(HEADERS
@@ -53,6 +54,7 @@ set(HEADERS
     include/Widgets.h
     include/ThemeManager.h
     include/PacitumScheme.h
+    include/FirstRun.h
 )
 
 # Resources
@@ -75,6 +77,7 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::WebChannel
     Qt6::Sql
     Qt6::Network
+    Qt6::Concurrent
 )
 if(WIN32)
     target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32)

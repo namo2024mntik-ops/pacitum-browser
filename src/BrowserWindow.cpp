@@ -1,3 +1,7 @@
+#include <QPropertyAnimation>
+#include <QGraphicsOpacityEffect>
+#include <QWebChannel>
+#include "FirstRun.h"
 #include <QPainter>
 #include <QDateTime>
 #include "BrowserWindow.h"
@@ -58,6 +62,10 @@
 #include <QUrl>
 #include <QDir>
 #include <QWebEngineView>
+#include <QRegularExpression>
+#include <QHash>
+#include <QFrame>
+#include <QLineEdit>
 
 BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_history = new HistoryManager(QStringLiteral("browser_history.db"));
@@ -74,7 +82,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     setMouseTracking(true);
     Pacitum::installMenuFader();
     m_spinTimer = new QTimer(this);
-    m_spinTimer->setInterval(30);
+    m_spinTimer->setInterval(50);   // 20 fps spinner is plenty and halves repaint work
     connect(m_spinTimer, &QTimer::timeout, this, &BrowserWindow::tickSpinner);
     setupAdBlocker();
     setupDownloadHandler();
@@ -86,7 +94,9 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     installPopupFactory();
     qApp->installEventFilter(this);
 #ifdef Q_OS_WIN
-    applyNativeFrame();
+    // Do NOT force native window creation from the constructor; apply the frame
+    // once Qt has created the HWND during show().
+    QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });
 #endif
 }
 
@@ -122,7 +132,7 @@ void BrowserWindow::setupDownloadHandler() {
 
 void BrowserWindow::setupUI() {
     setWindowTitle(QStringLiteral("Pacitum Browser"));
-    setMinimumSize(900,600); resize(1440,900);
+    setMinimumSize(720,520); resize(1440,900);   // spec §4.4: min width 720
 
     auto* central = new QWidget(this); setCentralWidget(central);
     auto* mainLay = new QVBoxLayout(central); mainLay->setContentsMargins(0,0,0,0); mainLay->setSpacing(0);
@@ -132,6 +142,9 @@ void BrowserWindow::setupUI() {
     m_bookmarksBar = new BookmarksBar(m_bookmarks, this);
     connect(m_bookmarksBar, &BookmarksBar::urlActivated, this, &BrowserWindow::navigateToUrl);
     mainLay->addWidget(m_bookmarksBar);
+    // 1 px line that separates the chrome from content; always present, even with the bar hidden.
+    auto* divider = new QFrame(central); divider->setObjectName(QStringLiteral("ChromeDivider")); divider->setFixedHeight(1);
+    mainLay->addWidget(divider);
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(1);
@@ -146,6 +159,7 @@ void BrowserWindow::setupUI() {
     connect(m_tabs, &PacitumTabWidget::tabReopenRequested, this, &BrowserWindow::reopenClosedTab);
     connect(m_tabs, &PacitumTabWidget::tabMuteRequested, this, &BrowserWindow::muteTab);
     connect(m_tabs, &PacitumTabWidget::tabPinRequested, this, &BrowserWindow::pinTab);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this]{ m_tabs->stripBar() ? m_tabs->stripBar()->update() : void(); });
     m_splitter->addWidget(m_tabs);
     m_activeWidget = m_tabs;
 
@@ -187,7 +201,7 @@ void BrowserWindow::setupUI() {
 
 QToolButton* BrowserWindow::makeToolBtn(const QString& tip) {
     auto* b = new AnimatedToolButton(m_toolbar);
-    b->setFixedSize(32,32); b->setIconSize(QSize(18,18));
+    b->setFixedSize(34,34); b->setIconSize(QSize(18,18)); b->setRadius(17);   // spec §3: 34 px circles
     b->setToolTip(tip); b->setFocusPolicy(Qt::TabFocus);
     return b;
 }
@@ -195,15 +209,16 @@ QToolButton* BrowserWindow::makeToolBtn(const QString& tip) {
 void BrowserWindow::createToolbar() {
     m_toolbar = new QWidget(this); m_toolbar->setObjectName(QStringLiteral("NavToolbar"));
     m_toolbar->setAttribute(Qt::WA_StyledBackground, true);
-    m_toolbar->setFixedHeight(44);
-    auto* lay = new QHBoxLayout(m_toolbar); lay->setContentsMargins(8,0,8,0); lay->setSpacing(4);
+    m_toolbar->setFixedHeight(48);
+    auto* lay = new QHBoxLayout(m_toolbar); lay->setContentsMargins(8,0,8,0); lay->setSpacing(2);
+    m_toolbar->installEventFilter(this);   // resize -> collapse buttons per spec §4.4
 
     m_backBtn = makeToolBtn(QStringLiteral("Back (Alt+Left)")); connect(m_backBtn, &QToolButton::clicked, this, &BrowserWindow::goBack);
     m_forwardBtn = makeToolBtn(QStringLiteral("Forward (Alt+Right)")); connect(m_forwardBtn, &QToolButton::clicked, this, &BrowserWindow::goForward);
     m_reloadBtn = makeToolBtn(QStringLiteral("Reload (F5)"));
     connect(m_reloadBtn, &QToolButton::clicked, this, [this]{
         auto* t = activeTab(); if (!t) return;
-        if (t->isLoading()) t->stop(); else t->reload();
+        if (t->isLoading()) t->stop(); else reloadPage();
     });
     m_homeBtn = makeToolBtn(QStringLiteral("Home")); connect(m_homeBtn, &QToolButton::clicked, this, &BrowserWindow::goHome);
     m_addressBar = new AddressBar(m_history, this);
@@ -221,20 +236,22 @@ void BrowserWindow::createToolbar() {
     });
     connect(m_downloads, &DownloadManager::listChanged, this, &BrowserWindow::updateDownloadsButton);
     connect(m_downloads, &DownloadManager::downloadStarted, this, &BrowserWindow::updateDownloadsButton);
-    m_splitBtn = makeToolBtn(QStringLiteral("Split view")); connect(m_splitBtn, &QToolButton::clicked, this, [this]{ toggleSplitView(); });
-    m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(32,32); m_privateBadge->setAlignment(Qt::AlignCenter);
+    // spec issue #6: puzzle "extensions" glyph instead of the unclear window icon
+    m_splitBtn = makeToolBtn(QStringLiteral("Extensions")); connect(m_splitBtn, &QToolButton::clicked, this, &BrowserWindow::showExtensionsMenu);
+    m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(34,34); m_privateBadge->setAlignment(Qt::AlignCenter);
     m_privateBadge->setToolTip(QStringLiteral("Private browsing")); m_privateBadge->hide();
     m_profileBtn = makeToolBtn(QStringLiteral("Profile"));
     auto* avatar = new QLabel(QStringLiteral("P"), m_profileBtn); avatar->setObjectName(QStringLiteral("Avatar"));
-    avatar->setAlignment(Qt::AlignCenter); avatar->setFixedSize(24,24); avatar->move(4,4);
+    avatar->setAlignment(Qt::AlignCenter); avatar->setFixedSize(26,26); avatar->move(4,4);
     avatar->setAttribute(Qt::WA_TransparentForMouseEvents);
     connect(m_profileBtn, &QToolButton::clicked, this, &BrowserWindow::showSettings);
     m_menuBtn = makeToolBtn(QStringLiteral("Customize and control Pacitum (Alt+F)")); connect(m_menuBtn, &QToolButton::clicked, this, &BrowserWindow::showMenu);
 
     lay->addWidget(m_backBtn); lay->addWidget(m_forwardBtn); lay->addWidget(m_reloadBtn); lay->addWidget(m_homeBtn);
-    lay->addSpacing(8);
+    m_homeBtn->setVisible(readSettings().value(QStringLiteral("show_home_button")).toBool(false));   // off by default (spec §4.3)
+    lay->addSpacing(6);
     lay->addWidget(m_addressBar, 1);
-    lay->addSpacing(8);
+    lay->addSpacing(6);
     lay->addWidget(m_downloadsBtn); lay->addWidget(m_splitBtn); lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
 }
 
@@ -243,11 +260,14 @@ void BrowserWindow::refreshIcons() {
     m_backBtn->setIcon(tm->icon(QStringLiteral("back")));
     m_forwardBtn->setIcon(tm->icon(QStringLiteral("forward")));
     auto* t = activeTab();
-    m_reloadBtn->setIcon(tm->icon(t && t->isLoading() ? QStringLiteral("stop") : QStringLiteral("reload")));
+    {   // spec §2: reload ⇄ stop cross-fade (120 ms OutCubic, scale 0.8→1)
+        const QIcon ic = tm->icon(t && t->isLoading() ? QStringLiteral("stop") : QStringLiteral("reload"));
+        if (auto* b = qobject_cast<AnimatedToolButton*>(m_reloadBtn)) b->setIconAnimated(ic); else m_reloadBtn->setIcon(ic);
+    }
     m_reloadBtn->setToolTip(t && t->isLoading() ? QStringLiteral("Stop loading") : QStringLiteral("Reload (F5)"));
     m_homeBtn->setIcon(tm->icon(QStringLiteral("home")));
     m_downloadsBtn->setIcon(tm->icon(QStringLiteral("download")));
-    m_splitBtn->setIcon(tm->icon(QStringLiteral("window")));
+    m_splitBtn->setIcon(tm->icon(QStringLiteral("extensions")));
     m_menuBtn->setIcon(tm->icon(QStringLiteral("menu")));
     m_privateBadge->setPixmap(tm->icon(QStringLiteral("private")).pixmap(QSize(18,18), devicePixelRatioF()));
 }
@@ -259,17 +279,40 @@ void BrowserWindow::updateNavState() {
     refreshIcons();
 }
 
+// Letter tile used when a site has no favicon (spec §5.1: letter fallback with site colour).
+static QIcon letterTile(const QString& url) {
+    static QHash<QString, QIcon> cache;
+    const QString host = QUrl(url).host().remove(QRegularExpression(QStringLiteral("^www\\.")));
+    if (host.isEmpty()) return {};
+    if (auto it = cache.constFind(host); it != cache.constEnd()) return *it;
+    static const char* colors[] = {"#EA4335","#24292F","#41CD52","#FF0000","#0EA5E9","#8B5CF6","#F97316","#0A66C2","#1DB954","#64748B","#E11D48","#14B8A6"};
+    const QColor bg(colors[qHash(host) % 12]);
+    QPixmap pm(32, 32); pm.fill(Qt::transparent);
+    QPainter p(&pm); p.setRenderHint(QPainter::Antialiasing);
+    p.setPen(Qt::NoPen); p.setBrush(bg); p.drawRoundedRect(QRectF(0, 0, 32, 32), 8, 8);
+    QFont f = QApplication::font(); f.setPixelSize(19); f.setWeight(QFont::Bold); p.setFont(f);
+    p.setPen(Qt::white); p.drawText(QRect(0, 0, 32, 32), Qt::AlignCenter, host.left(1).toUpper());
+    p.end(); pm.setDevicePixelRatio(2.0);
+    QIcon ic(pm);
+    if (cache.size() > 500) cache.clear();
+    cache.insert(host, ic);
+    return ic;
+}
+
 void BrowserWindow::updateTabIcon(BrowserTab* tab) {
     for (auto* tw : {m_tabs, m_splitTabs}) {
         int idx = tw->indexOf(tab);
         if (idx < 0) continue;
-        if (tab->isLoading()) { if (!m_spinTimer->isActive()) m_spinTimer->start(); continue; }
+        const bool floating = tw->hasFloatingStrip();
+        if (floating) tw->setTabLoading(idx, tab->isLoading());   // tab bar animates its own 16 px spinner
+        if (tab->isLoading() && !floating) { if (!m_spinTimer->isActive()) m_spinTimer->start(); continue; }
         QIcon ic = tab->icon();
         if (ic.isNull()) {
             const QString u = tab->currentUrl();
             ic = u.startsWith(QStringLiteral("pacitum:")) || u.isEmpty()
                  ? QIcon(QStringLiteral(":/icons/pacitum-icon-32.png"))
-                 : m_theme->secondaryIcon(QStringLiteral("globe"), 16);
+                 : letterTile(u);
+            if (ic.isNull()) ic = m_theme->secondaryIcon(QStringLiteral("globe"), 16);
         }
         tw->setTabIcon(idx, ic);
     }
@@ -279,10 +322,49 @@ void BrowserWindow::tickSpinner() {
     m_spinAngle = (m_spinAngle + 12) % 360;
     const QIcon ic = Pacitum::spinnerIcon(m_spinAngle, m_theme->palette().accent);
     bool any = false;
-    for (auto* tw : {m_tabs, m_splitTabs})
+    for (auto* tw : {m_tabs, m_splitTabs}) {
+        if (tw->hasFloatingStrip()) continue;
         for (int i = 0; i < tw->count(); ++i)
             if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i)); t && t->isLoading()) { tw->setTabIcon(i, ic); any = true; }
+    }
     if (!any) m_spinTimer->stop();
+}
+
+void BrowserWindow::updateTabAudio(BrowserTab* tab) {
+    const int idx = m_tabs->indexOf(tab);
+    if (idx < 0 || !tab->view()) return;
+    m_tabs->setTabAudio(idx, tab->view()->page()->recentlyAudible(), tab->isMuted());
+}
+
+void BrowserWindow::showExtensionsMenu() {
+    QMenu m(this);
+    auto* none = m.addAction(m_theme->secondaryIcon(QStringLiteral("extensions"), 18), QStringLiteral("No extensions installed"));
+    none->setEnabled(false);
+    m.addSeparator();
+    auto* split = m.addAction(m_theme->secondaryIcon(QStringLiteral("split-view"), 18), m_splitActive ? QStringLiteral("Close split view") : QStringLiteral("Split view"));
+    connect(split, &QAction::triggered, this, [this]{ toggleSplitView(); });
+    const QSize sz = m.sizeHint();
+    QPoint anchor = m_splitBtn->mapToGlobal(QPoint(m_splitBtn->width(), m_splitBtn->height() + 6));
+    m.exec(QPoint(anchor.x() - sz.width(), anchor.y()));
+}
+
+// spec §4.4 step 3: when the toolbar gets too narrow for a 240 px omnibox, collapse
+// extensions -> downloads -> profile (they stay reachable from the ⋮ menu).
+void BrowserWindow::updateToolbarOverflow() {
+    if (!m_toolbar) return;
+    const int w = m_toolbar->width();
+    const int fixed = 16 + 34 * 3 + (m_homeBtn->isVisibleTo(m_toolbar) ? 36 : 0) + 6 * 2 + 34 /* ⋮ */ + 2 * 6
+                      + (m_privateBadge->isVisibleTo(m_toolbar) ? 36 : 0);
+    int room = w - fixed - 240;
+    const bool wantDownloads = m_downloadsWanted;
+    auto fits = [&room](bool want){ if (!want) return false; if (room >= 36) { room -= 36; return true; } return false; };
+    // reserve in priority order (profile kept longest, extensions dropped first)
+    const bool showProfile = fits(true);
+    const bool showDownloads = fits(wantDownloads);
+    const bool showExt = fits(true);
+    m_profileBtn->setVisible(showProfile);
+    m_downloadsBtn->setVisible(showDownloads);
+    m_splitBtn->setVisible(showExt);
 }
 
 void BrowserWindow::setupShortcuts() {
@@ -310,6 +392,8 @@ void BrowserWindow::setupShortcuts() {
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+P")), this, [this]{ if (auto* t = activeTab()) t->findChild<QWebEngineView*>()->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); });
     new QShortcut(QKeySequence(QStringLiteral("F11")), this, SLOT(toggleFullscreen()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+F")), this, SLOT(showMenu()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]{ m_tabs->showTabSearch(); });
+    new QShortcut(QKeySequence(QStringLiteral("F12")), this, SLOT(showDevTools()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+Left")), this, SLOT(goBack()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+Right")), this, SLOT(goForward()));
     for (int i = 1; i <= 9; ++i)
@@ -366,14 +450,27 @@ void BrowserWindow::createStatusBar() {
 
 // ---- Tab management ----
 void BrowserWindow::newTab(const QString& url) {
-    QString u = url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
+    const bool lazy = url == QLatin1String("pacitum-lazy:");   // session restore placeholder: no load yet
+    QString u = lazy ? QString() : url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
     auto* tab = new BrowserTab(u, m_privateMode, m_searchEngine, this);
     tab->setZoomFactor(m_zoom->zoom());
     connect(tab, &BrowserTab::urlChanged, this, &BrowserWindow::updateAddressBar);
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);
+    // omnibox progress follows the active tab (animations-spec §7)
+    connect(tab, &BrowserTab::loadingChanged, this, [this, tab](bool on){ if (tab == activeTab() && on) m_addressBar->progressStarted(); });
+    connect(tab, &BrowserTab::progressChanged, this, [this, tab](int p){
+        if (tab == activeTab()) m_addressBar->progressChanged(p);
+        for (auto* tw : {m_tabs, m_splitTabs}) if (int i = tw->indexOf(tab); i >= 0) tw->setTabWaiting(i, tab->isLoading() && p <= 10);
+    });
+    connect(tab, &BrowserTab::loadDone, this, [this, tab](bool ok){ if (tab == activeTab()) m_addressBar->progressFinished(ok); });
     connect(tab, &BrowserTab::iconChanged, this, [this, tab]{ updateTabIcon(tab); });
     connect(tab, &BrowserTab::urlChanged, this, [this, tab]{ updateTabIcon(tab); });
+    connect(tab, &BrowserTab::crashed, this, [this, tab]{ const int i = m_tabs->indexOf(tab); if (i >= 0) m_tabs->setTabCrashed(i, true); });
+    if (tab->view()) {
+        connect(tab->view()->page(), &QWebEnginePage::recentlyAudibleChanged, this, [this, tab]{ updateTabAudio(tab); });
+        connect(tab->view()->page(), &QWebEnginePage::audioMutedChanged, this, [this, tab]{ updateTabAudio(tab); });
+    }
     // choose target
     PacitumTabWidget* target = m_splitActive && m_splitTabs->isVisible() && m_splitTabs->count()==0 ? m_splitTabs : m_tabs;
     // if split active and caller wants split, use split; otherwise default to main
@@ -399,6 +496,8 @@ void BrowserWindow::closeTab(int index) {
     if (m_closing.contains(w)) return;
     if (m_tabs->count() == 1 && !m_splitActive) { close(); return; }
     m_closing.insert(w);
+    if (auto* bt = qobject_cast<BrowserTab*>(w); bt && bt->currentUrl().startsWith(QStringLiteral("pacitum://welcome")))
+        endWelcome();   // closing the welcome tab = "Skip all" (defaults kept, flag set)
     QPointer<QWidget> guard(w);
     m_tabs->animateRemove(index, [this, guard, w]{
         m_closing.remove(w);
@@ -428,6 +527,7 @@ void BrowserWindow::onTabChanged(int index) {
     QWidget* w = sender->widget(index);
     if (auto* tab = qobject_cast<BrowserTab*>(w)) {
         updateAddressBar(tab->currentUrl());
+        m_addressBar->syncProgress(tab->isLoading(), tab->loadProgressValue());
         if (m_animations) tab->fadeIn();
         setWindowTitle(tab->currentTitle() + QStringLiteral(" — Pacitum Browser"));
     } else if (qobject_cast<DownloadsPage*>(w)) {
@@ -468,7 +568,11 @@ void BrowserWindow::updateTabTitle(const QString& title) {
     if (!sender) return;
     for (auto* tw : {m_tabs, m_splitTabs}) {
         int idx = tw->indexOf(sender);
-        if (idx >= 0) { tw->setTabText(idx, title.left(30) + (title.size()>30 ? QStringLiteral("...") : QString{})); break; }
+        if (idx >= 0) {   // full title: the floating tab fades the overflow instead of "…"
+            tw->setTabText(idx, title); tw->setTabToolTip(idx, title);
+            if (tw == m_tabs && idx == m_tabs->currentIndex()) setWindowTitle(title + QStringLiteral(" — Pacitum Browser"));
+            break;
+        }
     }
 }
 
@@ -482,15 +586,20 @@ void BrowserWindow::onTabLoading(bool) {
 
 void BrowserWindow::goBack() { if (auto* t=activeTab()) { t->goBack(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_backBtn->setEnabled(tt->canGoBack()); }}); } }
 void BrowserWindow::goForward() { if (auto* t=activeTab()) { t->goForward(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_forwardBtn->setEnabled(tt->canGoForward()); }}); } }
-void BrowserWindow::reloadPage() { if (auto* t=activeTab()) t->reload(); }
+void BrowserWindow::reloadPage() {
+    if (auto* t = activeTab()) {
+        if (auto* b = qobject_cast<AnimatedToolButton*>(m_reloadBtn)) b->spin();   // animations-spec §2 (click or F5)
+        t->reload();
+    }
+}
 void BrowserWindow::goHome() { navigateToUrl(readSettings().value(QStringLiteral("homepage")).toString(PacitumSchemeHandler::newTabUrl())); }
 
 void BrowserWindow::toggleBookmark() {
     auto* t = activeTab(); if (!t) return;
     QString url = t->currentUrl(), title = t->currentTitle();
     if (url.isEmpty()) return;
-    if (m_bookmarks->isBookmarked(url)) { m_bookmarks->removeBookmark(url); m_addressBar->setBookmarked(false); statusBar()->showMessage(QStringLiteral("Bookmark removed"), 2000); }
-    else { m_bookmarks->addBookmark(title, url); m_addressBar->setBookmarked(true); statusBar()->showMessage(QStringLiteral("Bookmark added"), 2000); }
+    if (m_bookmarks->isBookmarked(url)) { m_bookmarks->removeBookmark(url); m_addressBar->setBookmarked(false, true); statusBar()->showMessage(QStringLiteral("Bookmark removed"), 2000); }
+    else { m_bookmarks->addBookmark(title, url); m_addressBar->setBookmarked(true, true); statusBar()->showMessage(QStringLiteral("Bookmark added"), 2000); }
     m_bookmarksBar->refresh();
 }
 
@@ -528,7 +637,9 @@ void BrowserWindow::toggleDownloadsPopup(bool autoClose) {
 void BrowserWindow::updateDownloadsButton() {
     const bool show = readSettings().value(QStringLiteral("pin_downloads_button")).toBool(false)
                    || m_downloads->hadDownloadThisSession() || m_downloads->activeCount() > 0;
+    m_downloadsWanted = show;
     m_downloadsBtn->setVisible(show);
+    updateToolbarOverflow();
 }
 void BrowserWindow::showSettings() {
     for (int i = 0; i < m_tabs->count(); ++i)
@@ -581,11 +692,11 @@ void BrowserWindow::onSettingChanged(const QString& key) {
     // homepage, startup/restore_session, download_path, ask_download_location, clear_on_exit are read when used.
 }
 void BrowserWindow::showMenu() {
-    // Main menu popup (design-spec §4 "Main menu"): 300 wide, rows 32, icons 18 secondary.
-    QMenu m(this);
-    m.setMinimumWidth(300);
-    m.setWindowFlags(m.windowFlags() | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint);
-    m.setAttribute(Qt::WA_TranslucentBackground);
+    // ⋮ menu (spec §5.5, menu-*.png): 312 wide, r14, padding 6, rows 34 r8, icons 18 text-secondary.
+    Pacitum::PopupMenu m(this);
+    m.setObjectName(QStringLiteral("MainMenu"));
+    m.setMinimumWidth(312 + 2 * m.shadowMargin());
+    const auto& pal = m_theme->palette();
     auto add = [&](const QString& icon, const QString& text, const QString& keys, auto&& fn) {
         auto* a = m.addAction(m_theme->secondaryIcon(icon, 18), text);
         if (!keys.isEmpty()) a->setShortcut(QKeySequence(keys));
@@ -593,44 +704,101 @@ void BrowserWindow::showMenu() {
         connect(a, &QAction::triggered, this, fn);
         return a;
     };
-    add(QStringLiteral("add"), QStringLiteral("New tab"), QStringLiteral("Ctrl+T"), [this]{ newTab(); });
+
+    // Profile header: avatar 36, name 13/600, status 12 (local profile; Pacitum has no sync service)
+    {
+        auto* hdr = new QWidget(&m); hdr->setObjectName(QStringLiteral("MenuProfile"));
+        hdr->setAttribute(Qt::WA_StyledBackground, true); hdr->setAttribute(Qt::WA_Hover, true);
+        hdr->setFixedHeight(52); hdr->setCursor(Qt::PointingHandCursor);
+        auto* hl = new QHBoxLayout(hdr); hl->setContentsMargins(10, 8, 10, 8); hl->setSpacing(12);
+        const QString name = readSettings().value(QStringLiteral("profile_name")).toString(QStringLiteral("Personal"));
+        auto* av = new QLabel(name.left(1).toUpper(), hdr); av->setObjectName(QStringLiteral("MenuAvatar"));
+        av->setFixedSize(36, 36); av->setAlignment(Qt::AlignCenter);
+        auto* col = new QVBoxLayout; col->setSpacing(1); col->setContentsMargins(0, 0, 0, 0);
+        auto* nl = new QLabel(name, hdr); nl->setObjectName(QStringLiteral("MenuProfileName"));
+        auto* sl = new QLabel(m_privateBadge->isVisible() ? QStringLiteral("Private browsing") : QStringLiteral("Local profile · Not syncing"), hdr);
+        sl->setObjectName(QStringLiteral("MenuProfileSub"));
+        col->addWidget(nl); col->addWidget(sl);
+        auto* chev = new QLabel(hdr); chev->setPixmap(m_theme->secondaryIcon(QStringLiteral("chevron-right"), 16).pixmap(QSize(16, 16), devicePixelRatioF()));
+        hl->addWidget(av); hl->addLayout(col, 1); hl->addWidget(chev);
+        auto* wa = new QWidgetAction(&m); wa->setDefaultWidget(hdr); m.addAction(wa);
+        struct Click : QObject { std::function<void()> fn; using QObject::QObject;
+            bool eventFilter(QObject*, QEvent* e) override { if (e->type() == QEvent::MouseButtonRelease) { fn(); return true; } return false; } };
+        auto* cf = new Click(hdr); cf->fn = [this, &m]{ m.close(); QTimer::singleShot(0, this, &BrowserWindow::showSettings); };
+        hdr->installEventFilter(cf);
+        hdr->setToolTip(QStringLiteral("Profile settings"));
+    }
+    m.addSeparator();
+    add(QStringLiteral("tab-new"), QStringLiteral("New tab"), QStringLiteral("Ctrl+T"), [this]{ newTab(); });
     add(QStringLiteral("window"), QStringLiteral("New window"), QStringLiteral("Ctrl+N"), [this]{ auto* w = new BrowserWindow(); w->setAttribute(Qt::WA_DeleteOnClose); w->show(); });
     add(QStringLiteral("private"), QStringLiteral("New private tab"), QStringLiteral("Ctrl+Shift+N"), [this]{ newPrivateTab(); });
     m.addSeparator();
     add(QStringLiteral("history"), QStringLiteral("History"), QStringLiteral("Ctrl+H"), [this]{ showHistory(); });
     add(QStringLiteral("download"), QStringLiteral("Downloads"), QStringLiteral("Ctrl+J"), [this]{ showDownloads(); });
     add(QStringLiteral("bookmarks"), QStringLiteral("Bookmarks"), QStringLiteral("Ctrl+Shift+O"), [this]{ showBookmarksDialog(); });
-    add(QStringLiteral("extensions"), QStringLiteral("Split view"), QString(), [this]{ toggleSplitView(); });
+    add(QStringLiteral("extensions"), QStringLiteral("Extensions"), QString(), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showExtensionsMenu); });
     m.addSeparator();
 
-    // Zoom row: [icon] Zoom ........ [−] 100% [+]
-    auto* zoomRow = new QWidget(&m);
-    auto* zl = new QHBoxLayout(zoomRow); zl->setContentsMargins(10,2,6,2); zl->setSpacing(4);
-    auto* zi = new QLabel(zoomRow); zi->setPixmap(m_theme->secondaryIcon(QStringLiteral("zoom-in"), 18).pixmap(QSize(18,18), devicePixelRatioF()));
-    auto* zt = new QLabel(QStringLiteral("Zoom"), zoomRow);
-    auto* zminus = new QToolButton(zoomRow); zminus->setFixedSize(28,28); zminus->setIcon(m_theme->icon(QStringLiteral("zoom-out"), 16)); zminus->setAutoRaise(true);
-    auto* zpct = new QLabel(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%"), zoomRow); zpct->setFixedWidth(44); zpct->setAlignment(Qt::AlignCenter);
-    auto* zplus = new QToolButton(zoomRow); zplus->setFixedSize(28,28); zplus->setIcon(m_theme->icon(QStringLiteral("zoom-in"), 16)); zplus->setAutoRaise(true);
-    connect(zminus, &QToolButton::clicked, this, [this, zpct]{ zoomOut(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
-    connect(zplus, &QToolButton::clicked, this, [this, zpct]{ zoomIn(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
-    zl->addWidget(zi); zl->addSpacing(8); zl->addWidget(zt); zl->addStretch(1); zl->addWidget(zminus); zl->addWidget(zpct); zl->addWidget(zplus);
-    zoomRow->setFixedHeight(32);
-    auto* za = new QWidgetAction(&m); za->setDefaultWidget(zoomRow); m.addAction(za);
+    // Zoom row: [zoom] Zoom ......  ( −  100 %  + )  [⛶]
+    {
+        auto* zoomRow = new QWidget(&m);
+        auto* zl = new QHBoxLayout(zoomRow); zl->setContentsMargins(10, 2, 2, 2); zl->setSpacing(0);
+        auto* zi = new QLabel(zoomRow); zi->setPixmap(m_theme->secondaryIcon(QStringLiteral("zoom-in"), 18).pixmap(QSize(18, 18), devicePixelRatioF()));
+        auto* zt = new QLabel(QStringLiteral("Zoom"), zoomRow);
+        auto* pill = new QWidget(zoomRow); pill->setObjectName(QStringLiteral("ZoomPill")); pill->setAttribute(Qt::WA_StyledBackground, true);
+        pill->setFixedHeight(30);
+        auto* pl = new QHBoxLayout(pill); pl->setContentsMargins(2, 0, 2, 0); pl->setSpacing(0);
+        auto mk = [&](const QString& icon, const QString& tip, QWidget* parent) {
+            auto* b = new QToolButton(parent); b->setFixedSize(26, 26); b->setIconSize(QSize(16, 16));
+            b->setIcon(m_theme->secondaryIcon(icon, 16)); b->setToolTip(tip); b->setAccessibleName(tip); b->setAutoRaise(true);
+            return b; };
+        auto* zminus = mk(QStringLiteral("zoom-out"), QStringLiteral("Zoom out (Ctrl+-)"), pill);
+        auto* zpct = new QLabel(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%"), pill); zpct->setFixedWidth(44); zpct->setAlignment(Qt::AlignCenter);
+        auto* zplus = mk(QStringLiteral("zoom-in"), QStringLiteral("Zoom in (Ctrl+=)"), pill);
+        pl->addWidget(zminus); pl->addWidget(zpct); pl->addWidget(zplus);
+        auto* fs = mk(isFullScreen() ? QStringLiteral("fullscreen-exit") : QStringLiteral("fullscreen"), QStringLiteral("Full screen (F11)"), zoomRow);
+        fs->setFixedSize(30, 30); fs->setIconSize(QSize(18, 18));
+        connect(zminus, &QToolButton::clicked, this, [this, zpct]{ zoomOut(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
+        connect(zplus, &QToolButton::clicked, this, [this, zpct]{ zoomIn(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
+        connect(fs, &QToolButton::clicked, this, [this, &m]{ m.close(); toggleFullscreen(); });
+        zl->addWidget(zi); zl->addSpacing(12); zl->addWidget(zt); zl->addStretch(1); zl->addWidget(pill); zl->addSpacing(10); zl->addWidget(fs);
+        zoomRow->setFixedHeight(36);
+        auto* za = new QWidgetAction(&m); za->setDefaultWidget(zoomRow); m.addAction(za);
+    }
     m.addSeparator();
-    add(QStringLiteral("print"), QStringLiteral("Print to PDF…"), QStringLiteral("Ctrl+P"), [this]{ if (auto* t = activeTab()) if (auto* v = t->findChild<QWebEngineView*>()) { v->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); } });
-    add(QStringLiteral("find"), QStringLiteral("Find in page"), QStringLiteral("Ctrl+F"), [this]{ showFind(); });
+    add(QStringLiteral("print"), QStringLiteral("Print…"), QStringLiteral("Ctrl+P"), [this]{ if (auto* t = activeTab()) if (auto* v = t->findChild<QWebEngineView*>()) { v->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); statusBar()->showMessage(QStringLiteral("Saved page.pdf to your home folder"), 2500); } });
+    add(QStringLiteral("find"), QStringLiteral("Find in page…"), QStringLiteral("Ctrl+F"), [this]{ showFind(); });
+    add(QStringLiteral("share"), QStringLiteral("Share… (copy link)"), QString(), [this]{ copyCurrentUrl(); });
+    add(QStringLiteral("devtools"), QStringLiteral("Developer tools"), QStringLiteral("F12"), [this]{ showDevTools(); });
+    auto* tr = add(QStringLiteral("translate"), QStringLiteral("Translate page"), QString(), []{});
+    tr->setEnabled(false);   // not available yet (spec shows it disabled)
     m.addSeparator();
     add(QStringLiteral("settings"), QStringLiteral("Settings"), QStringLiteral("Ctrl+,"), [this]{ showSettings(); });
-    add(QStringLiteral("palette"), m_darkMode ? QStringLiteral("Light theme") : QStringLiteral("Dark theme"), QString(), [this]{ toggleDarkMode(); });
-    add(QStringLiteral("info"), QStringLiteral("About Pacitum"), QString(), [this]{
+    add(QStringLiteral("help"), QStringLiteral("Help && about"), QString(), [this]{
         QMessageBox::about(this, QStringLiteral("About Pacitum Browser"),
             QStringLiteral("<b>Pacitum Browser</b> %1<br>A calm, fast web browser built on Qt %2 WebEngine.")
                 .arg(QCoreApplication::applicationVersion(), QString::fromLatin1(qVersion()))); });
-    add(QStringLiteral("exit"), QStringLiteral("Exit"), QStringLiteral("Ctrl+Q"), [this]{ close(); });
+    add(QStringLiteral("exit"), QStringLiteral("Quit Pacitum"), QStringLiteral("Ctrl+Q"), [this]{ close(); });
+    Q_UNUSED(pal);
 
+    // top-right anchored: 8 px from the window's right edge, 6 px under the toolbar
     const QSize sz = m.sizeHint();
-    QPoint anchor = m_menuBtn->mapToGlobal(QPoint(m_menuBtn->width(), m_menuBtn->height() + 4));
-    m.exec(QPoint(anchor.x() - sz.width(), anchor.y()));
+    const QPoint tb = m_toolbar->mapToGlobal(QPoint(m_toolbar->width(), m_toolbar->height()));
+    m_menuBtn->setDown(true);
+    m.exec(QPoint(tb.x() - 8 - sz.width() + m.shadowMargin(), tb.y() + 6 - m.shadowMargin()));
+    m_menuBtn->setDown(false);
+}
+
+void BrowserWindow::showDevTools() {
+    auto* t = activeTab(); if (!t || !t->view()) return;
+    auto* page = t->view()->page();
+    if (page->devToolsPage()) { if (auto* v = QWebEngineView::forPage(page->devToolsPage())) { v->window()->show(); v->window()->raise(); v->window()->activateWindow(); return; } }
+    auto* v = new QWebEngineView();
+    v->setAttribute(Qt::WA_DeleteOnClose);
+    v->setWindowTitle(QStringLiteral("Developer tools — ") + t->currentTitle());
+    v->resize(1000, 700);
+    page->setDevToolsPage(v->page());
+    v->show();
 }
 
 void BrowserWindow::copyCurrentUrl() { if (auto* t=activeTab()) { QApplication::clipboard()->setText(t->currentUrl()); statusBar()->showMessage(QStringLiteral("Page address copied"), 1800);} }
@@ -667,12 +835,14 @@ void BrowserWindow::nextTab(){ m_tabs->setCurrentIndex((m_tabs->currentIndex()+1
 void BrowserWindow::prevTab(){ m_tabs->setCurrentIndex((m_tabs->currentIndex()-1+m_tabs->count())%m_tabs->count()); }
 void BrowserWindow::lastTab(){ m_tabs->setCurrentIndex(m_tabs->count()-1); }
 void BrowserWindow::duplicateTab(int index){ if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(index))) newTab(t->currentUrl()); }
-void BrowserWindow::muteTab(int idx,bool m){ if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(idx))){ t->setMuted(m); QString title=m_tabs->tabText(idx); if(m && !title.contains(QStringLiteral("🔇"))) m_tabs->setTabText(idx, title+QStringLiteral(" 🔇")); else if(!m) m_tabs->setTabText(idx, title.replace(QStringLiteral(" 🔇"), QString{})); } }
+void BrowserWindow::muteTab(int idx,bool m){ if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(idx))){ t->setMuted(m); updateTabAudio(t); } }
 void BrowserWindow::pinTab(int idx,bool p){ m_tabs->setTabPinned(idx,p); }
 void BrowserWindow::reopenClosedTab(){ if(!m_recentlyClosed.isEmpty()){ auto last=m_recentlyClosed.takeLast(); newTab(last.url);} }
 void BrowserWindow::saveSessionDialog(){
+    if (m_firstRun) FirstRunBridge::markFirstRunDone();   // the welcome flow is shown once
     QVector<SessionTab> tabs;
-    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
+    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i)))
+        if (!t->currentUrl().startsWith(QStringLiteral("pacitum://welcome"))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
     m_session->save(tabs); statusBar()->showMessage(QStringLiteral("Session saved"), 2000);
 }
 void BrowserWindow::onDownloadRequested(QWebEngineDownloadRequest* dl){
@@ -720,6 +890,8 @@ void BrowserWindow::applyTheme(){
     m_splitTabs->applyTheme(m_theme);
     m_addressBar->applyTheme(m_theme);
     applyToolbarTheme();
+    for (auto* tw : {m_tabs, m_splitTabs})
+        for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) t->refreshTheme();
     refreshIcons();
     if (m_downloadsPopup) m_downloadsPopup->applyTheme();
     if (m_downloadsBadge) m_downloadsBadge->update();
@@ -731,11 +903,16 @@ void BrowserWindow::applyTheme(){
     auto* h = PacitumSchemeHandler::instance();
     h->setThemeVars({{QStringLiteral("TOOL"), p.toolbar}, {QStringLiteral("PAGE"), p.page}, {QStringLiteral("SURF"), p.surface},
                      {QStringLiteral("BORD"), p.border}, {QStringLiteral("TXT"), p.text}, {QStringLiteral("SEC"), p.textSecondary},
-                     {QStringLiteral("ACC"), p.accent}, {QStringLiteral("ACCS"), p.accentSoft}});
+                     {QStringLiteral("ACC"), p.accent}, {QStringLiteral("ACCS"), p.accentSoft},
+                     {QStringLiteral("SURFH"), p.surfaceHover}, {QStringLiteral("BORD2"), p.borderStrong}, {QStringLiteral("TER"), p.textTertiary},
+                     {QStringLiteral("ONACC"), p.onAccent}, {QStringLiteral("DANGER"), p.danger}});
+    // Internal pages are re-served with the new tokens. The welcome flow is live-updated over its
+    // web channel instead (a reload would lose the current step).
     for (auto* tw : {m_tabs, m_splitTabs})
         for (int i = 0; i < tw->count(); ++i)
             if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i)))
-                if (t->currentUrl().startsWith(QStringLiteral("pacitum:"))) t->reload();
+                if (t->currentUrl().startsWith(QStringLiteral("pacitum:")) && !t->currentUrl().startsWith(QStringLiteral("pacitum://welcome"))) t->reload();
+    if (m_firstRun) emit m_firstRun->themeChanged(m_firstRun->palette());
 }
 
 void BrowserWindow::applyToolbarTheme(){
@@ -768,6 +945,10 @@ void BrowserWindow::loadSettings(){
     m_adblock->setEnabled(s.value(QStringLiteral("adblock_enabled")).toBool(true));
     m_adblock->setDoNotTrack(s.value(QStringLiteral("do_not_track")).toBool(false));
     m_animations = s.value(QStringLiteral("animations")).toBool(true);
+    // "reduce_motion" (or animations off) -> every spec duration becomes 0 (spec §6)
+    // (was: only ever switched *on*, so turning the setting off again needed a restart)
+    if (!m_animations || s.value(QStringLiteral("reduce_motion")).toBool(false)) Pacitum::setReducedMotion(true);
+    else Pacitum::clearReducedMotionOverride();
     if (auto* b = qobject_cast<PacitumTabBar*>(m_tabs->stripBar())) b->animationsEnabled = m_animations;
     m_addressBar->setSuggestionsEnabled(s.value(QStringLiteral("show_suggestions")).toBool(true));
     m_bookmarksBar->setVisible(s.value(QStringLiteral("show_bookmarks_bar")).toBool(true));
@@ -778,17 +959,33 @@ void BrowserWindow::loadSettings(){
 void BrowserWindow::saveSettings(){
     auto s=readSettings();
     s[QStringLiteral("dark_mode")] = m_darkMode;
-    s[QStringLiteral("theme")] = m_darkMode?QStringLiteral("Dark"):QStringLiteral("Light");
+    // (was: always wrote Dark/Light, silently turning "System" into a fixed theme on the next save)
+    s[QStringLiteral("theme")] = m_themeSetting.isEmpty() ? (m_darkMode?QStringLiteral("Dark"):QStringLiteral("Light")) : m_themeSetting;
     QFile f(QStringLiteral("browser_settings.json")); if(f.open(QIODevice::WriteOnly|QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented));
 }
 
 void BrowserWindow::restoreOrNewTab(){
     auto s = readSettings();
+    if (!s.value(QStringLiteral("first_run_done")).toBool(false)) {
+        // Upgrades from ≤1.4 already have a profile: don't interrupt them with the welcome flow.
+        const bool existingProfile = !s.isEmpty() || QFile::exists(QStringLiteral("browser_session.json")) || QFile::exists(QStringLiteral("bookmarks.json"));
+        if (existingProfile || m_privateMode) FirstRunBridge::markFirstRunDone();
+        else { openWelcome(); return; }
+    }
     QString startup = s.value(QStringLiteral("startup")).toString();
     if (startup.isEmpty()) startup = s.value(QStringLiteral("restore_session")).toBool(true) ? QStringLiteral("restore") : QStringLiteral("newtab");
     if (startup == QStringLiteral("restore")) {
         auto tabs = m_session->restore();
-        if (!tabs.isEmpty()) { for (auto &t : tabs) newTab(t.url); return; }
+        if (!tabs.isEmpty()) {
+            // Only the active (last) tab loads now; the others load on first activation.
+            for (int i = 0; i < tabs.size(); ++i) {
+                if (i == tabs.size() - 1) { newTab(tabs[i].url); break; }
+                newTab(QStringLiteral("pacitum-lazy:"));
+                if (auto* t = activeTab()) { t->setLazyUrl(tabs[i].url, tabs[i].title);
+                    m_tabs->setTabText(m_tabs->currentIndex(), tabs[i].title.isEmpty() ? tabs[i].url : tabs[i].title); }
+            }
+            return;
+        }
     } else if (startup == QStringLiteral("homepage")) {
         newTab(s.value(QStringLiteral("homepage")).toString(PacitumSchemeHandler::newTabUrl())); return;
     }
@@ -796,8 +993,10 @@ void BrowserWindow::restoreOrNewTab(){
 }
 
 void BrowserWindow::closeEvent(QCloseEvent* e){
+    if (m_firstRun) FirstRunBridge::markFirstRunDone();   // the welcome flow is shown once
     QVector<SessionTab> tabs;
-    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
+    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i)))
+        if (!t->currentUrl().startsWith(QStringLiteral("pacitum://welcome"))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
     if(!tabs.isEmpty()) m_session->save(tabs);
     auto s=readSettings();
     if(s.value(QStringLiteral("clear_on_exit")).toBool(false)){
@@ -848,6 +1047,7 @@ Qt::Edges BrowserWindow::edgesAt(const QPoint& global) const {
 }
 
 bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
+    if (o == m_toolbar && e->type() == QEvent::Resize) updateToolbarOverflow();
 #ifndef Q_OS_WIN
     // Frameless resize/move for non-Windows platforms via the compositor (startSystemResize/Move).
     if (e->type() == QEvent::MouseMove || e->type() == QEvent::MouseButtonPress || e->type() == QEvent::MouseButtonDblClick) {
@@ -932,7 +1132,8 @@ static int autoHideTaskbarEdge(HMONITOR mon) {
 }
 
 void BrowserWindow::applyNativeFrame() {
-    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    if (!hwnd) return;   // not created yet; never create from here
     LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
     SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
     // 1px of DWM frame keeps the native drop shadow (and Win11 snap highlight) on the frameless window.
@@ -964,7 +1165,8 @@ void BrowserWindow::setNcMaxHover(bool on) {
 }
 
 void BrowserWindow::showSystemMenu(int physX, int physY) {
-    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HWND hwnd = reinterpret_cast<HWND>(internalWinId());
+    if (!hwnd) return;
     HMENU menu = GetSystemMenu(hwnd, FALSE);
     if (!menu) return;
     const bool zoomed = IsZoomed(hwnd), iconic = IsIconic(hwnd);
@@ -983,7 +1185,9 @@ void BrowserWindow::showSystemMenu(int physX, int physY) {
 
 bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result) {
     MSG* msg = static_cast<MSG*>(message);
-    if (!msg || msg->hwnd != reinterpret_cast<HWND>(winId())) return QMainWindow::nativeEvent(eventType, message, result);
+    // Never call winId() here: messages arrive *during* CreateWindowEx, and winId()
+    // would re-enter QWidget::create() -> recursive CreateWindowEx failures -> crash.
+    if (!msg || !msg->hwnd || msg->hwnd != reinterpret_cast<HWND>(internalWinId())) return QMainWindow::nativeEvent(eventType, message, result);
     HWND hwnd = msg->hwnd;
     switch (msg->message) {
     case WM_NCCALCSIZE:
@@ -1107,3 +1311,79 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
     return QMainWindow::nativeEvent(eventType, message, result);
 }
 #endif
+
+// ---------------- first-run welcome flow ----------------
+void BrowserWindow::writeSetting(const QString& key, const QJsonValue& value) {
+    auto s = readSettings(); s[key] = value;
+    QFile f(QStringLiteral("browser_settings.json"));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) f.write(QJsonDocument(s).toJson(QJsonDocument::Indented));
+}
+
+void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {
+    if (Pacitum::reducedMotion() || !isVisible()) { apply(); return; }   // reduced motion: theme change is instant
+    auto* shot = new QLabel(this);
+    shot->setPixmap(grab());
+    shot->setGeometry(rect());
+    shot->setAttribute(Qt::WA_TransparentForMouseEvents);
+    shot->show(); shot->raise();
+    apply();
+    auto* eff = new QGraphicsOpacityEffect(shot); eff->setOpacity(1.0); shot->setGraphicsEffect(eff);
+    auto* a = new QPropertyAnimation(eff, "opacity", shot);
+    a->setDuration(200); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    connect(a, &QPropertyAnimation::finished, shot, &QObject::deleteLater);
+    a->start();
+}
+
+void BrowserWindow::openWelcome() {
+    if (!m_firstRun) {
+        FirstRunBridge::Hooks h;
+        h.setTheme = [this](const QString& mode) {
+            const QString m = mode == QLatin1String("dark") ? QStringLiteral("Dark") : mode == QLatin1String("light") ? QStringLiteral("Light") : QStringLiteral("System");
+            if (m == m_themeSetting) return;
+            crossFadeTheme([this, m]{ m_themeSetting = m; m_darkMode = m == QLatin1String("Dark"); applyTheme(); });
+            writeSetting(QStringLiteral("theme"), m);
+        };
+        h.setAccent = [this](const QString& hex) {
+            if (hex.compare(m_accent, Qt::CaseInsensitive) == 0) return;
+            crossFadeTheme([this, hex]{ m_accent = hex.toUpper(); applyTheme(); });
+            writeSetting(QStringLiteral("accent"), hex.toUpper());
+        };
+        h.palette = [this]() {
+            const auto& p = m_theme->palette();
+            return QVariantMap{{QStringLiteral("page"), p.page}, {QStringLiteral("card"), p.toolbar}, {QStringLiteral("surf"), p.surface},
+                {QStringLiteral("surfh"), p.surfaceHover}, {QStringLiteral("bord"), p.border}, {QStringLiteral("bord2"), p.borderStrong},
+                {QStringLiteral("txt"), p.text}, {QStringLiteral("sec"), p.textSecondary}, {QStringLiteral("ter"), p.textTertiary},
+                {QStringLiteral("acc"), p.accent}, {QStringLiteral("accs"), p.accentSoft}, {QStringLiteral("onacc"), p.onAccent},
+                {QStringLiteral("dan"), p.danger}};
+        };
+        h.finish = [this]() {
+            for (int i = 0; i < m_tabs->count(); ++i)
+                if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->currentUrl().startsWith(QStringLiteral("pacitum://welcome")))
+                    t->loadUrl(PacitumSchemeHandler::newTabUrl());
+            endWelcome();
+        };
+        m_firstRun = new FirstRunBridge(m_bookmarks, m_history, h, this);
+        connect(m_firstRun, &FirstRunBridge::importFinished, this, [this]{ if (m_bookmarksBar) m_bookmarksBar->refresh(); });
+        m_firstRunChannel = new QWebChannel(this);
+        m_firstRunChannel->registerObject(QStringLiteral("firstRun"), m_firstRun);
+    }
+    newTab(QStringLiteral("pacitum://welcome"));
+    auto* tab = activeTab();
+    if (!tab || !tab->view()) return;
+    tab->view()->page()->setWebChannel(m_firstRunChannel);
+    m_bookmarksBar->hide();   // spec: bookmarks bar hidden on the welcome page
+    tab->view()->setFocus();  // Enter = primary / Esc = Back work right away
+    QPointer<BrowserTab> guard(tab);
+    // Only pacitum://welcome gets the bridge: detach as soon as the tab navigates anywhere else.
+    connect(tab, &BrowserTab::urlChanged, this, [this, guard](const QString& u){
+        if (!guard || u.startsWith(QStringLiteral("pacitum://welcome"))) return;
+        guard->view()->page()->setWebChannel(nullptr);
+        endWelcome();
+    });
+}
+
+void BrowserWindow::endWelcome() {
+    FirstRunBridge::markFirstRunDone();
+    if (m_bookmarksBar && !m_bookmarksBar->isVisible())
+        m_bookmarksBar->setVisible(readSettings().value(QStringLiteral("show_bookmarks_bar")).toBool(true));
+}

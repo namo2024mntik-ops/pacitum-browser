@@ -3,11 +3,26 @@
 #include <QColor>
 #include <QIcon>
 
-// Pacitum design tokens (design-spec.md §2)
+// Pacitum design tokens (design-spec-1.5.md §1).
+// Legacy names kept for existing callers: frame = chrome, tab = elevated, toolbar = card.
 struct PacitumPalette {
     QString frame, tab, tabHover, toolbar, page, surface, surfaceHover, border,
             text, textSecondary, disabled, accent, onAccent, accentSoft, secure, danger;
+    // 1.5 additions
+    QString omnibox, omniboxHover, pressed, borderStrong, textTertiary,
+            accentHover, accentPressed, focusRing, warning;
+    const QString& chrome() const { return frame; }
+    const QString& elevated() const { return tab; }
+    const QString& card() const { return toolbar; }
 };
+
+namespace Pacitum {
+// Animation duration scaled for the OS / app "reduce motion" preference (0 when reduced).
+int motionMs(int ms);
+bool reducedMotion();
+void setReducedMotion(bool on);   // app setting override
+void clearReducedMotionOverride(); // back to the OS setting
+}
 
 class ThemeManager {
 public:
@@ -27,6 +42,10 @@ public:
     // Load a design SVG icon from :/icons/ui/<name>.svg tinted with color.
     static QIcon icon(const QString& name, const QString& color, int size = 18,
                       const QString& disabledColor = QString());
+private:
+    static QIcon renderIcon(const QString& name, const QString& color, int size,
+                      const QString& disabledColor);
+public:
     QIcon icon(const QString& name, int size = 18) const {
         return icon(name, m_pal.text, size, m_pal.disabled);
     }

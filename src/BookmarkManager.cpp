@@ -1,3 +1,4 @@
+#include <QSet>
 #include "BookmarkManager.h"
 #include <QFile>
 #include <QJsonDocument>
@@ -27,6 +28,18 @@ bool BookmarkManager::save() const {
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
     f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
     return true;
+}
+
+int BookmarkManager::addBookmarks(const QVector<QPair<QString, QString>>& items) {
+    QSet<QString> have; for (const auto& b : std::as_const(m_bookmarks)) have.insert(b.url);
+    const QString now = QDateTime::currentDateTime().toString(Qt::ISODate);
+    int n = 0;
+    for (const auto& it : items) {
+        if (it.second.isEmpty() || have.contains(it.second)) continue;
+        have.insert(it.second); m_bookmarks.push_back({it.first.isEmpty() ? it.second : it.first, it.second, now}); ++n;
+    }
+    if (n) save();
+    return n;
 }
 
 bool BookmarkManager::addBookmark(const QString& title, const QString& url) {

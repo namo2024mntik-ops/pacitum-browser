@@ -36,12 +36,17 @@ public:
     bool isMuted() const;
     QIcon icon() const { return m_view->icon(); }
     bool isLoading() const { return m_loading; }
+    int loadProgressValue() const { return m_loadValue; }
     void applyWebSettings();
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
     void fadeIn();
+    // Session restore: remember the URL/title but only create the page load when first shown.
+    void setLazyUrl(const QString& url, const QString& title);
+    bool isLazy() const { return !m_pendingUrl.isEmpty(); }
     static std::function<BrowserTab*()> s_popupFactory;
     void showFindBar();
+    void refreshTheme();   // re-tint native chrome inside the tab (info bar)
     void hideFindBar();
 
 signals:
@@ -50,7 +55,11 @@ signals:
     void loadingChanged(bool loading);
     void iconChanged();
     void progressChanged(int progress);
+    void loadDone(bool ok);
+    void crashed();
 
+private:
+    int m_loadValue = 0;
 private slots:
     void onUrlChanged(const QUrl& url);
     void onTitleChanged(const QString& title);
@@ -63,10 +72,12 @@ private:
     void buildSignInBar();
     void showSignInBar(const QUrl& target);
     void checkGoogleSignIn(const QUrl& url);
-    QFrame* m_signInBar = nullptr;
-    QLabel* m_signInIcon = nullptr;
-    QToolButton* m_signInClose = nullptr;
+    class InfoBar* m_signInBar = nullptr;
     QUrl m_signInUrl;
+    QString m_pendingUrl;
+protected:
+    void showEvent(QShowEvent* e) override;
+private:
     static int s_idCounter;
     int m_tabId = 0;
     bool m_private = false;

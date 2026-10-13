@@ -1,6 +1,13 @@
 <RCC>
     <qresource prefix="/">
         <file>icons/ui/add.svg</file>
+        <file>icons/ui/audio-playing.svg</file>
+        <file>icons/ui/customize.svg</file>
+        <file>icons/ui/open-in-browser.svg</file>
+        <file>icons/ui/pin-filled.svg</file>
+        <file>icons/ui/site-controls.svg</file>
+        <file>icons/ui/spinner.svg</file>
+        <file>icons/ui/tab-search.svg</file>
         <file>icons/ui/arrow-up.svg</file>
         <file>icons/ui/back.svg</file>
         <file>icons/ui/bookmark-add.svg</file>
@@ -170,6 +177,13 @@
         <file>icons/pacitum-icon-256.png</file>
         <file>icons/pacitum-icon-512.png</file>
         <file>pages/newtab.html</file>
+        <file>pages/welcome.html</file>
+        <file>icons/ui/arrow-right.svg</file>
+        <file>icons/ui/default-browser.svg</file>
+        <file>icons/ui/disk.svg</file>
+        <file>icons/ui/import.svg</file>
+        <file>icons/ui/sparkle.svg</file>
+        <file>icons/ui/theme-system.svg</file>
         <file>pages/logo.png</file>
     </qresource>
 </RCC>

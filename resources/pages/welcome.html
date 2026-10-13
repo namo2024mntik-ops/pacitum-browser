@@ -1,0 +1,207 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Welcome to Pacitum</title><style>
+:root{--page:%PAGE%;--card:%TOOL%;--surf:%SURF%;--surfh:%SURFH%;--bord:%BORD%;--bord2:%BORD2%;--txt:%TXT%;--sec:%SEC%;--ter:%TER%;--acc:%ACC%;--accs:%ACCS%;--onacc:%ONACC%;--dan:%DANGER%;
+--ocub:cubic-bezier(.33,1,.68,1);--icub:cubic-bezier(.32,0,.67,0);--oback:cubic-bezier(.34,1.56,.64,1)}
+*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%}
+body{font:13px/1.35 "Inter","Segoe UI",system-ui,sans-serif;color:var(--txt);background:var(--page);overflow:hidden auto;position:relative}
+.glow{position:fixed;left:50%;top:-260px;width:1100px;height:520px;margin-left:-550px;background:radial-gradient(closest-side,var(--accs),transparent);pointer-events:none}
+.ind{position:relative;margin:40px auto 0;display:flex;flex-direction:column;align-items:center}
+.dots{display:flex;gap:8px;height:6px}
+.dot{width:6px;height:6px;border-radius:3px;background:var(--bord2);border:0;padding:0;transition:width .24s var(--ocub),background-color .24s var(--ocub),opacity .24s var(--ocub)}
+.dot.done{background:var(--acc);opacity:.45;cursor:pointer}.dot.cur{width:28px;background:var(--acc)}
+.cap{margin-top:10px;font-size:12px;font-weight:500;color:var(--ter)}
+.skip{position:absolute;right:32px;top:24px;font:500 13px inherit;font-family:inherit;color:var(--sec);background:none;border:0;cursor:pointer;padding:4px 6px;border-radius:6px}.skip:hover{color:var(--txt)}
+.stage{position:relative;width:640px;max-width:calc(100% - 48px);margin:0 auto;text-align:center}
+.step{display:none;padding-bottom:40px}.step.on{display:block}
+.step.out{position:absolute;left:0;right:0;top:0;animation:outF .16s var(--icub) both}.step.in{animation:inF .24s var(--ocub) both}
+.step.out.back{animation-name:outB}.step.in.back{animation-name:inB}
+@keyframes outF{to{opacity:0;transform:translateX(-24px)}}@keyframes outB{to{opacity:0;transform:translateX(24px)}}
+@keyframes inF{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}@keyframes inB{from{opacity:0;transform:translateX(-24px)}to{opacity:1;transform:none}}
+.reduced .step.out{animation:fadeO .12s linear both}.reduced .step.in{animation:fadeI .12s linear both}
+@keyframes fadeO{to{opacity:0}}@keyframes fadeI{from{opacity:0}to{opacity:1}}
+h1{font-size:30px;font-weight:600;letter-spacing:-.5px;outline:none}
+.lead{font-size:15px;line-height:1.5;color:var(--sec);max-width:480px;margin:10px auto 0}
+.logo{width:104px;height:104px;margin:110px auto 28px;display:block;filter:drop-shadow(0 16px 36px color-mix(in srgb,var(--acc) 35%,transparent))}
+.s1 .logo{animation:logoIn .32s var(--ocub) both}.s1 h1{animation:fadeI .32s var(--ocub) .06s both}.s1 .lead{animation:fadeI .32s var(--ocub) .12s both}.s1 .foot{animation:fadeI .32s var(--ocub) .18s both}
+.reduced .s1 *{animation:none!important}
+@keyframes logoIn{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}
+.foot{margin-top:36px;display:flex;justify-content:center;gap:12px}
+.btn{height:40px;border-radius:20px;padding:0 22px;font:600 13px inherit;font-family:inherit;border:0;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:background-color .12s var(--ocub)}
+.pri{background:var(--acc);color:var(--onacc)}.pri:hover{filter:brightness(1.06)}
+.sec{background:transparent;color:var(--txt);box-shadow:inset 0 0 0 1px var(--bord2);font-weight:500}.sec:hover{background:var(--surf)}
+.btn:focus-visible,.tile:focus-within,.tcard:focus-within{outline:2px solid var(--acc);outline-offset:2px}
+.btn[disabled]{opacity:.6;cursor:default}
+svg.i{width:16px;height:16px;flex:none}
+.cards{margin-top:28px;display:flex;flex-direction:column;gap:16px;text-align:left}
+.card{background:var(--card);border-radius:16px;padding:20px;box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--bord)}
+.ch{display:flex;align-items:center;gap:14px}.tileic{width:40px;height:40px;border-radius:12px;background:var(--accs);color:var(--acc);display:grid;place-items:center;flex:none}.tileic svg{width:20px;height:20px}
+.ct{flex:1}.ct b{display:block;font-size:15px;font-weight:600}.ct span{font-size:12.5px;color:var(--sec)}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:16px}
+.tile{position:relative;height:52px;border-radius:12px;box-shadow:inset 0 0 0 1px var(--bord);display:flex;align-items:center;gap:10px;padding:0 14px;cursor:pointer;font-weight:500;transition:box-shadow .12s var(--ocub),background-color .12s var(--ocub)}
+.tile input{position:absolute;opacity:0;pointer-events:none}.tile.sel{box-shadow:inset 0 0 0 2px var(--acc);background:var(--accs)}
+.bico{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700}
+.checks{display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:16px}
+.chk{display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px}
+.chk input{appearance:none;-webkit-appearance:none;width:18px;height:18px;border-radius:5px;box-shadow:inset 0 0 0 1.5px var(--bord2);display:grid;place-items:center;margin:0;cursor:pointer;transition:background-color .12s var(--ocub)}
+.chk input:checked{background:var(--acc);box-shadow:none}
+.chk input:checked::after{content:"";width:13px;height:13px;background:var(--onacc);-webkit-mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>') center/contain no-repeat}
+.none{margin-top:14px;color:var(--sec)}
+.pill{height:36px;border-radius:18px;padding:0 16px;font:500 13px inherit;font-family:inherit;cursor:pointer;border:0;background:transparent;color:var(--txt);box-shadow:inset 0 0 0 1px var(--bord2)}.pill:hover{background:var(--surf)}
+.pill.isdef{color:var(--sec);box-shadow:none;cursor:default;background:none}
+.themes{display:flex;justify-content:center;gap:16px;margin-top:28px;flex-wrap:wrap}
+.tcard{width:200px;border-radius:16px;padding:10px;background:var(--card);box-shadow:0 0 0 1px var(--bord);cursor:pointer;text-align:left;transition:box-shadow .12s var(--ocub)}
+.tcard.sel{box-shadow:0 0 0 2px var(--acc)}.tcard input{position:absolute;opacity:0;pointer-events:none}
+.prev{height:118px;border-radius:10px;overflow:hidden;position:relative}
+.prev .c{height:26px;display:flex;align-items:center;gap:4px;padding:0 6px}.prev .t{height:16px;width:54px;border-radius:5px}.prev .o{height:12px;margin:0 8px;border-radius:6px}
+.prev .p{position:absolute;left:0;right:0;bottom:0;top:46px}.prev .l{height:6px;border-radius:3px;margin:10px 12px 0}
+.prev.split{background:linear-gradient(90deg,transparent 50%,transparent 50%)}
+.lab{display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:500;padding:0 2px}.lab svg{width:16px;height:16px;color:var(--sec)}.lab .r{margin-left:auto;width:16px;height:16px;border-radius:50%;box-shadow:inset 0 0 0 1.5px var(--bord2)}
+.tcard.sel .lab .r{box-shadow:inset 0 0 0 5px var(--acc)}
+.accents{display:flex;justify-content:center;gap:12px;margin-top:24px}
+.sw{width:28px;height:28px;border-radius:50%;border:0;cursor:pointer;transition:box-shadow .12s var(--ocub)}.sw.sel{box-shadow:0 0 0 2px var(--page),0 0 0 4px var(--txt)}
+.demo{margin:20px auto 0;max-width:460px;display:flex;align-items:center;gap:18px;justify-content:center;padding:16px;text-align:left}
+.dsw{width:38px;height:22px;border-radius:11px;background:var(--acc);position:relative;flex:none}.dsw::after{content:"";position:absolute;width:18px;height:18px;top:2px;left:18px;border-radius:50%;background:#fff}
+.dlink{color:var(--acc);font-weight:500}.dbar{width:90px;height:4px;border-radius:2px;background:var(--surf)}.dbar i{display:block;width:62%;height:4px;border-radius:2px;background:var(--acc)}
+.done-ic{position:relative;width:96px;height:96px;border-radius:50%;background:var(--accs);color:var(--acc);display:grid;place-items:center;margin:80px auto 28px}
+.done-ic svg.ck{width:44px;height:44px}.done-ic svg.sp{position:absolute;right:-6px;top:-4px;width:24px;height:24px}
+.s4.play .done-ic{animation:pop .24s var(--oback) both}.s4.play .ck path{stroke-dasharray:24;stroke-dashoffset:24;animation:draw .22s var(--ocub) .12s forwards}
+.s4.play .sp{animation:spk .2s var(--ocub) .3s both}
+.reduced .s4.play *{animation:none!important;stroke-dashoffset:0!important}
+@keyframes pop{from{transform:scale(.6)}to{transform:none}}@keyframes draw{to{stroke-dashoffset:0}}@keyframes spk{from{opacity:0;transform:rotate(-20deg)}to{opacity:1;transform:none}}
+.sum{width:460px;max-width:100%;margin:28px auto 0;padding:4px 0;text-align:left}
+.row{display:flex;align-items:center;gap:12px;padding:14px 18px}.row+.row{border-top:1px solid var(--bord)}.row svg{width:18px;height:18px;color:var(--acc);flex:none}.row .v{margin-left:auto;font-size:12px;color:var(--sec)}
+.row.err,.row.err svg{color:var(--dan)}.row.err a{color:var(--dan);font-weight:600;cursor:pointer;text-decoration:underline}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--surfh);border-top-color:var(--acc);animation:rot .8s linear infinite;flex:none}@keyframes rot{to{transform:rotate(360deg)}}
+.keys{margin-top:22px;color:var(--sec);font-size:12.5px}.kbd{background:var(--surf);border-radius:6px;padding:2px 7px;font-weight:600;color:var(--txt);margin:0 2px}
+@media (max-width:760px){.tiles{grid-template-columns:1fr}.themes .tcard{width:calc(50% - 8px)}}
+</style></head><body>
+<div class="glow"></div>
+<button class="skip" id="skip" hidden>Skip</button>
+<nav class="ind" aria-label="Setup progress"><div class="dots" id="dots"></div><div class="cap" id="cap">Step 1 of 4</div></nav>
+<main class="stage">
+<section class="step s1 on" role="region" aria-labelledby="h1">
+ <img class="logo" src="qrc:/pages/logo.png" alt="">
+ <h1 id="h1" tabindex="-1">Welcome to Pacitum</h1>
+ <p class="lead">A calm, fast browser that stays out of your way. Let's set a few things up — it takes less than a minute.</p>
+ <div class="foot"><button class="btn pri" data-next>Get started %ARROW%</button></div>
+</section>
+<section class="step s2" role="region" aria-labelledby="h2">
+ <h1 id="h2" tabindex="-1" style="margin-top:72px">Bring your stuff along</h1>
+ <div class="cards">
+  <div class="card" id="impCard">
+   <div class="ch"><div class="tileic">%I_IMPORT%</div><div class="ct"><b>Import from another browser</b><span>Nothing leaves this computer.</span></div></div>
+   <div id="srcWrap"><div class="tiles" id="srcs" role="radiogroup" aria-label="Browser"></div>
+   <div class="checks" id="types">
+    <label class="chk"><input type="checkbox" value="bookmarks" checked>Bookmarks</label>
+    <label class="chk"><input type="checkbox" value="history" checked>History</label>
+    <label class="chk"><input type="checkbox" value="passwords">Saved passwords</label>
+    <label class="chk"><input type="checkbox" value="tabs">Open tabs</label>
+   </div></div>
+   <div class="none" id="noSrc" hidden>No other browsers found</div>
+  </div>
+  <div class="card"><div class="ch"><div class="tileic">%I_DEFAULT%</div><div class="ct"><b>Make Pacitum your default browser</b><span>Links from other apps will open here.</span></div>
+   <button class="pill" id="defBtn">Set as default</button></div></div>
+ </div>
+ <div class="foot"><button class="btn sec" data-back>Back</button><button class="btn pri" data-next id="impNext">Import and continue %ARROW%</button></div>
+</section>
+<section class="step s3" role="region" aria-labelledby="h3">
+ <h1 id="h3" tabindex="-1" style="margin-top:72px">Pick your look</h1>
+ <div class="themes" role="radiogroup" aria-label="Theme" id="themes">
+  <label class="tcard sel" data-mode="system"><input type="radio" name="theme" value="system" checked><div class="prev" id="pvSys"></div><div class="lab">%I_SYSTEM%System<span class="r"></span></div></label>
+  <label class="tcard" data-mode="light"><input type="radio" name="theme" value="light"><div class="prev" id="pvLight"></div><div class="lab">%I_SUN%Light<span class="r"></span></div></label>
+  <label class="tcard" data-mode="dark"><input type="radio" name="theme" value="dark"><div class="prev" id="pvDark"></div><div class="lab">%I_MOON%Dark<span class="r"></span></div></label>
+ </div>
+ <div class="accents" id="accents" role="radiogroup" aria-label="Accent colour"></div>
+ <div class="card demo"><button class="btn pri" tabindex="-1" style="height:32px;padding:0 14px">Button</button><span class="dsw"></span><span class="dlink">Link</span><span class="dbar"><i></i></span></div>
+ <div class="foot"><button class="btn sec" data-back>Back</button><button class="btn pri" data-next>Continue %ARROW%</button></div>
+</section>
+<section class="step s4" role="region" aria-labelledby="h4">
+ <div class="done-ic"><svg class="ck" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>%I_SPARKLE%</div>
+ <h1 id="h4" tabindex="-1">You're all set</h1>
+ <div class="card sum" id="sum"></div>
+ <p class="keys"><span class="kbd">Ctrl</span>+<span class="kbd">T</span> new tab · <span class="kbd">Ctrl</span>+<span class="kbd">L</span> address bar · <span class="kbd">Ctrl</span>+<span class="kbd">D</span> bookmark</p>
+ <div class="foot"><button class="btn pri" id="startBtn">Start browsing %ARROW%</button></div>
+</section>
+</main>
+<script>%QWEBCHANNEL%</script>
+<script>
+(function(){
+var ICONS={check:'%I_CHECK%',import:'%I_IMPORT%',def:'%I_DEFAULT%',theme:'%I_SYSTEM%'};
+var steps=[].slice.call(document.querySelectorAll('.step')),cur=0,busy=false,maxDone=0,fr=null,reduced=false;
+var state={source:null,sources:[],importing:false,results:null,isDefault:false,theme:'system',accent:'#2DD4BF',importChosen:false};
+var dots=document.getElementById('dots');
+for(var i=0;i<4;i++){var d=document.createElement('button');d.className='dot';d.setAttribute('aria-label','Step '+(i+1));(function(n){d.onclick=function(){if(n<cur&&n<=maxDone)go(n);};})(i);dots.appendChild(d);}
+function paintInd(){[].forEach.call(dots.children,function(d,i){d.className='dot'+(i===cur?' cur':i<cur?' done':'');});
+ document.getElementById('cap').textContent='Step '+(cur+1)+' of 4';document.getElementById('skip').hidden=(cur===0||cur===3);}
+function setBusy(b){busy=b;[].forEach.call(document.querySelectorAll('.foot .btn,.skip'),function(x){x.disabled=b;});}
+function go(n){if(busy||n===cur||n<0||n>3)return;var back=n<cur,o=steps[cur],inn=steps[n];setBusy(true);
+ if(n===3)renderSummary();
+ // outgoing 160 ms InCubic; incoming starts 80 ms later, 240 ms OutCubic (≈320 ms). Reduced: 120 ms cross-fade.
+ var dOut=reduced?120:160,dStart=reduced?0:80,dIn=reduced?120:240;
+ o.classList.add('out');if(back)o.classList.add('back');
+ setTimeout(function(){inn.classList.add('on','in');if(back)inn.classList.add('back');
+   if(n===3){inn.classList.remove('play');void inn.offsetWidth;inn.classList.add('play');}
+   var h=inn.querySelector('h1');if(h)h.focus({preventScroll:true});},dStart);
+ setTimeout(function(){o.classList.remove('on','out','back');},dOut);
+ setTimeout(function(){inn.classList.remove('in','back');setBusy(false);},dStart+dIn);
+ cur=n;maxDone=Math.max(maxDone,n);paintInd();}
+document.querySelectorAll('[data-next]').forEach(function(b){b.onclick=function(){if(cur===1)maybeImport();go(cur+1);};});
+document.querySelectorAll('[data-back]').forEach(function(b){b.onclick=function(){go(cur-1);};});
+document.getElementById('skip').onclick=function(){go(3);};
+document.getElementById('startBtn').onclick=function(){if(fr)fr.finish();else location.href='pacitum://newtab';};
+document.addEventListener('keydown',function(e){if(e.target&&e.target.tagName==='INPUT'&&e.key===' ')return;
+ if(e.key==='Enter'){var p=steps[cur].querySelector('.btn.pri:not([tabindex="-1"])');if(p&&!busy){e.preventDefault();p.click();}}
+ else if(e.key==='Escape'&&cur>0&&cur<3){e.preventDefault();go(cur-1);}});
+function types(){return [].slice.call(document.querySelectorAll('#types input:checked')).map(function(x){return x.value;});}
+function updImpBtn(){var can=state.sources.length&&types().length;document.getElementById('impNext').innerHTML=(can?'Import and continue':'Continue')+' %ARROW%';}
+document.querySelectorAll('#types input').forEach(function(x){x.onchange=updImpBtn;});
+function maybeImport(){if(!fr||!state.sources.length||!types().length||state.importing||state.results)return;
+ state.importing=true;state.importChosen=true;state.importTypes=types();fr.startImport(state.source,state.importTypes);}
+function bcol(id){return {chrome:'#4285F4',edge:'#0F8A6E',firefox:'#E66000',brave:'#F43F5E',chromium:'#64748B'}[id]||'#64748B';}
+function renderSources(){var w=document.getElementById('srcs');w.innerHTML='';
+ if(!state.sources.length){document.getElementById('srcWrap').hidden=true;document.getElementById('noSrc').hidden=false;updImpBtn();return;}
+ state.sources.slice(0,3).forEach(function(s,i){var l=document.createElement('label');l.className='tile'+(i===0?' sel':'');
+  l.innerHTML='<input type="radio" name="src" value="'+s.id+'"'+(i===0?' checked':'')+'><span class="bico" style="background:'+bcol(s.id)+'">'+s.name[0]+'</span>'+s.name;
+  l.querySelector('input').onchange=function(){state.source=s.id;[].forEach.call(w.children,function(c){c.classList.toggle('sel',c===l);});};w.appendChild(l);});
+ state.source=state.sources[0].id;updImpBtn();}
+function setDef(isDef){state.isDefault=isDef;var b=document.getElementById('defBtn');
+ if(isDef){b.innerHTML='✓ Default';b.className='pill isdef';b.disabled=true;}}
+document.getElementById('defBtn').onclick=function(){if(fr)fr.requestDefaultBrowser();};
+// theme
+var ACC=['#2DD4BF','#6366F1','#F43F5E','#F59E0B','#22C55E','#64748B'];
+var acw=document.getElementById('accents');
+ACC.forEach(function(c,i){var b=document.createElement('button');b.className='sw'+(i===0?' sel':'');b.style.background=c;b.setAttribute('role','radio');b.setAttribute('aria-label','Accent '+c);
+ b.onclick=function(){state.accent=c;[].forEach.call(acw.children,function(x){x.classList.toggle('sel',x===b);});if(fr)fr.setAccent(c);};acw.appendChild(b);});
+document.querySelectorAll('.tcard input').forEach(function(r){r.onchange=function(){state.theme=r.value;
+ document.querySelectorAll('.tcard').forEach(function(c){c.classList.toggle('sel',c.dataset.mode===r.value);});if(fr)fr.setTheme(r.value);};});
+var L={c:'#ECEEF2',e:'#FFFFFF',o:'#F3F4F6',p:'#FFFFFF',l:'#E5E7EB'},D={c:'#16181D',e:'#262A31',o:'#22262D',p:'#121418',l:'#24282F'};
+function prev(t){return '<div style="position:absolute;inset:0;background:'+t.p+'"></div><div class="c" style="position:relative;background:'+t.c+'"><span class="t" style="background:'+t.e+'"></span></div>'
+ +'<div style="position:relative;background:'+t.e+';height:20px;display:flex;align-items:center"><span class="o" style="flex:1;background:'+t.o+'"></span></div>'
+ +'<div class="p"><div class="l" style="background:'+t.l+';width:60%"></div><div class="l" style="background:'+t.l+';width:80%"></div><div class="l" style="background:var(--acc);width:30%"></div></div>';}
+document.getElementById('pvLight').innerHTML=prev(L);document.getElementById('pvDark').innerHTML=prev(D);
+document.getElementById('pvSys').innerHTML='<div style="position:absolute;inset:0;clip-path:inset(0 50% 0 0)">'+prev(L)+'</div><div style="position:absolute;inset:0;clip-path:inset(0 0 0 50%)">'+prev(D)+'</div>';
+function applyPal(p){if(!p)return;var r=document.documentElement.style;for(var k in p)r.setProperty('--'+k,p[k]);}
+function renderSummary(){var s=document.getElementById('sum'),h='';
+ var src=state.sources.filter(function(x){return x.id===state.source;})[0];
+ if(state.importChosen&&src){
+  if(state.importing&&!state.results)h+='<div class="row"><span class="spin"></span>Importing from '+src.name+'…<span class="v">in progress</span></div>';
+  else if(state.results)state.results.forEach(function(r){var nm={bookmarks:'Bookmarks',history:'History',passwords:'Saved passwords',tabs:'Open tabs'}[r.type]||r.type;
+   if(r.ok)h+='<div class="row">'+ICONS.import+nm+' imported from '+src.name+'<span class="v">'+r.count+'</span></div>';
+   else h+='<div class="row err">'+ICONS.import+'<span>'+r.message+(r.type==='bookmarks'||r.type==='history'?' — <a data-retry="'+r.type+'">Retry</a>':'')+'</span></div>';});
+ } else h+='<div class="row">'+ICONS.import+'Import<span class="v">Skipped</span></div>';
+ h+='<div class="row">'+ICONS.def+'Default browser<span class="v">'+(state.isDefault?'Pacitum':'Not changed')+'</span></div>';
+ h+='<div class="row">'+ICONS.theme+'Theme<span class="v">'+state.theme[0].toUpperCase()+state.theme.slice(1)+' · <span style="display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:-1px;background:'+state.accent+'"></span></span></div>';
+ s.innerHTML=h;
+ s.querySelectorAll('[data-retry]').forEach(function(a){a.onclick=function(){if(!fr)return;state.results=null;state.importing=true;fr.startImport(state.source,[a.dataset.retry]);renderSummary();};});}
+paintInd();
+if(window.qt&&window.qt.webChannelTransport){new QWebChannel(qt.webChannelTransport,function(ch){
+ fr=ch.objects.firstRun;window.pacitum={firstRun:fr};
+ fr.reducedMotion(function(r){reduced=r;document.documentElement.classList.toggle('reduced',r);});
+ fr.listImportSources(function(l){state.sources=l||[];renderSources();});
+ fr.isDefaultBrowser(function(d){setDef(d);});
+ fr.palette(function(p){applyPal(p);});
+ fr.themeChanged.connect(applyPal);
+ fr.defaultBrowserChanged.connect(function(d){setDef(d);if(cur===3)renderSummary();});
+ fr.importFinished.connect(function(res){state.importing=false;state.results=res;if(cur===3)renderSummary();});
+});}else{renderSources();}
+})();
+</script></body></html>

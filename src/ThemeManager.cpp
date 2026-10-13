@@ -1,17 +1,54 @@
+#include <QHash>
 #include "ThemeManager.h"
 #include <QFile>
 #include <QPainter>
 #include <QPixmap>
 #include <QSvgRenderer>
 #include <QGuiApplication>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 static PacitumPalette darkPalette() {
-    return {"#0E1014","#1C1F26","#171A20","#1C1F26","#14161B","#232730","#2B303A","#2C313C",
-            "#E6E8EE","#9AA1AF","#5A616E","#2DD4BF","#0B1F1D","rgba(45,212,191,0.16)","#34D399","#F87171"};
+    PacitumPalette p;
+    p.frame = "#16181D"; p.tab = "#262A31"; p.tabHover = "#1F2228"; p.toolbar = "#1B1E24"; p.page = "#121418";
+    p.surface = "#24282F"; p.surfaceHover = "#2D323A"; p.border = "#2A2F37"; p.text = "#E8EAEE";
+    p.textSecondary = "#A0A6B1"; p.disabled = "#4F555F"; p.accent = "#2DD4BF"; p.onAccent = "#04201D";
+    p.accentSoft = "rgba(45,212,191,0.14)"; p.secure = "#34D399"; p.danger = "#F87171";
+    p.omnibox = "#22262D"; p.omniboxHover = "#2A2F37"; p.pressed = "#353B44"; p.borderStrong = "#363C46";
+    p.textTertiary = "#6E7581"; p.accentHover = "#5EEAD4"; p.accentPressed = "#14B8A6";
+    p.focusRing = "rgba(45,212,191,0.55)"; p.warning = "#FBBF24";
+    return p;
 }
 static PacitumPalette lightPalette() {
-    return {"#E7EAF0","#FFFFFF","#F3F5F8","#FFFFFF","#F6F7F9","#EEF1F5","#E3E7ED","#DCE0E7",
-            "#1A1D23","#5F6672","#A9AFB9","#0D9488","#FFFFFF","rgba(13,148,136,0.12)","#059669","#DC2626"};
+    PacitumPalette p;
+    p.frame = "#EDF0F4"; p.tab = "#FFFFFF"; p.tabHover = "#E2E6EC"; p.toolbar = "#FFFFFF"; p.page = "#F7F8FA";
+    p.surface = "#E9ECF1"; p.surfaceHover = "#DFE3E9"; p.border = "#DDE1E7"; p.text = "#16191E";
+    p.textSecondary = "#5B626D"; p.disabled = "#B3B9C2"; p.accent = "#0D9488"; p.onAccent = "#FFFFFF";
+    p.accentSoft = "rgba(13,148,136,0.10)"; p.secure = "#059669"; p.danger = "#DC2626";
+    p.omnibox = "#FFFFFF"; p.omniboxHover = "#FFFFFF"; p.pressed = "#D3D8E0"; p.borderStrong = "#CDD2DA";
+    p.textTertiary = "#8A919C"; p.accentHover = "#0F766E"; p.accentPressed = "#115E59";
+    p.focusRing = "rgba(13,148,136,0.45)"; p.warning = "#D97706";
+    return p;
+}
+
+namespace Pacitum {
+static int s_reduceOverride = -1;
+void setReducedMotion(bool on) { s_reduceOverride = on ? 1 : 0; }
+void clearReducedMotionOverride() { s_reduceOverride = -1; }
+bool reducedMotion() {
+    if (s_reduceOverride >= 0) return s_reduceOverride == 1;
+    static int os = -1;
+    if (os < 0) {
+        os = qEnvironmentVariableIntValue("PACITUM_REDUCED_MOTION") ? 1 : 0;
+#ifdef Q_OS_WIN
+        BOOL anim = TRUE;
+        if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &anim, 0) && !anim) os = 1;
+#endif
+    }
+    return os == 1;
+}
+int motionMs(int ms) { return reducedMotion() ? 0 : ms; }
 }
 
 static PacitumPalette s_current = darkPalette();
@@ -27,15 +64,31 @@ void ThemeManager::rebuild() {
         QColor c(m_accentOverride);
         if (c.isValid()) {
             m_pal.accent = c.name();
-            m_pal.accentSoft = QStringLiteral("rgba(%1,%2,%3,0.16)").arg(c.red()).arg(c.green()).arg(c.blue());
-            m_pal.onAccent = c.lightness() > 140 ? QStringLiteral("#0B1F1D") : QStringLiteral("#FFFFFF");
+            m_pal.accentSoft = QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(m_darkMode ? 0.14 : 0.10);
+            m_pal.focusRing = QStringLiteral("rgba(%1,%2,%3,%4)").arg(c.red()).arg(c.green()).arg(c.blue()).arg(m_darkMode ? 0.55 : 0.45);
+            m_pal.accentHover = (m_darkMode ? c.lighter(125) : c.darker(120)).name();
+            m_pal.accentPressed = (m_darkMode ? c.darker(115) : c.darker(140)).name();
+            m_pal.onAccent = c.lightness() > 140 ? QStringLiteral("#04201D") : QStringLiteral("#FFFFFF");
         }
     }
-    if (m_private) m_pal.frame = m_darkMode ? QStringLiteral("#1E1B2E") : QStringLiteral("#DCD8EE");
+    if (m_private) m_pal.frame = m_darkMode ? QStringLiteral("#1C1A2B") : QStringLiteral("#E9E7F5");
     s_current = m_pal;
 }
 
 QIcon ThemeManager::icon(const QString& name, const QString& color, int size, const QString& disabledColor) {
+    // Tinted SVG icons are requested on every repaint/theme pass; render each variant once.
+    static QHash<QString, QIcon> cache;
+    const qreal cdpr = qMax<qreal>(1.0, qGuiApp ? qGuiApp->devicePixelRatio() : 1.0);
+    const QString key = name + QLatin1Char('|') + color + QLatin1Char('|') + QString::number(size) + QLatin1Char('|') + disabledColor
+                      + QLatin1Char('|') + QString::number(cdpr);
+    if (auto it = cache.constFind(key); it != cache.constEnd()) return *it;
+    if (cache.size() > 2000) cache.clear();
+    QIcon made = renderIcon(name, color, size, disabledColor);
+    cache.insert(key, made);
+    return made;
+}
+
+QIcon ThemeManager::renderIcon(const QString& name, const QString& color, int size, const QString& disabledColor) {
     QFile f(QStringLiteral(":/icons/ui/%1.svg").arg(name));
     if (!f.open(QIODevice::ReadOnly)) return {};
     const QByteArray src = f.readAll();
@@ -62,31 +115,51 @@ QWidget { color: @text; font-family: "Inter", "Segoe UI", "Cantarell", sans-seri
 QMainWindow, QDialog { background: @page; }
 #TabStrip { background: @frame; }
 #TabStrip QToolButton { background: transparent; border: none; }
-#NavToolbar { background: @toolbar; border-bottom: 1px solid @border; }
+#NavToolbar { background: @frame; border: none; }
 #NavToolbar QToolButton { background: transparent; border: none; padding: 0; }
 #NavToolbar QToolButton::menu-indicator { image: none; width: 0; }
-#Avatar { border-radius: 12px; color: #FFFFFF; font-weight: 600; font-size: 11px;
-          background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #F59E0B, stop:1 #EC4899); }
-BookmarksBar { background: @toolbar; border-bottom: 1px solid @border; }
-BookmarksBar QScrollArea, BookmarksBar QScrollArea > QWidget > QWidget { background: @toolbar; border: none; }
-BookmarksBar QPushButton { background: transparent; border: none; border-radius: 6px; padding: 0 8px;
+#ChromeDivider { background: @border; border: none; min-height: 1px; max-height: 1px; }
+#Avatar { border-radius: 13px; color: #FFFFFF; font-weight: 600; font-size: 11px;
+          background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2DD4BF, stop:1 #3B82F6); }
+BookmarksBar { background: @frame; border: none; }
+BookmarksBar QScrollArea, BookmarksBar QScrollArea > QWidget > QWidget { background: @frame; border: none; }
+BookmarksBar QPushButton { background: transparent; border: none; border-radius: 13px; padding: 0 9px;
           height: 26px; min-height: 26px; max-width: 160px; font-size: 12px; color: @text; text-align: left; }
 BookmarksBar QPushButton:hover { background: @surface; }
-BookmarksBar QPushButton:pressed { background: @surfaceHover; }
-QMenu { background: @toolbar; border: 1px solid @border; border-radius: 12px; padding: 6px; }
-QMenu::item { height: 32px; padding: 0 10px; border-radius: 6px; background: transparent; color: @text; }
+BookmarksBar QPushButton:pressed { background: @pressed; }
+QMenu { background: @toolbar; border: 1px solid @border; border-radius: 14px; padding: 6px; }
+QMenu::item { height: 34px; padding: 0 10px 0 6px; border-radius: 8px; background: transparent; color: @text; }
 QMenu::item:selected { background: @surface; }
+QMenu::item:pressed { background: @pressed; }
 QMenu::item:disabled { color: @disabled; }
 QMenu::icon { padding-left: 10px; }
 QMenu::separator { height: 1px; background: @border; margin: 6px 4px; }
-QMenu QToolButton { background: transparent; border: none; border-radius: 6px; }
-QMenu QToolButton:hover { background: @surface; }
+QMenu QToolButton { background: transparent; border: none; border-radius: 15px; }
+QMenu QToolButton:hover { background: @surfaceHover; }
+QMenu QToolButton:pressed { background: @pressed; }
 QMenu QLabel { background: transparent; }
-QPushButton { background: @toolbar; border: 1px solid @border; border-radius: 8px; padding: 0 16px; min-height: 32px; color: @text; }
+#MenuProfile { background: transparent; border-radius: 8px; }
+#MenuProfile:hover { background: @surface; }
+#MenuProfileName { font-weight: 600; font-size: 13px; }
+#MenuProfileSub { color: @textSecondary; font-size: 12px; }
+#MenuAvatar { border-radius: 18px; color: #FFFFFF; font-weight: 600; font-size: 14px;
+          background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2DD4BF, stop:1 #3B82F6); }
+#ZoomPill { background: @surface; border-radius: 15px; }
+#ZoomPill QLabel { font-weight: 600; font-size: 12px; }
+#InfoBarWrap { background: @page; }
+#InfoBar { background: @toolbar; border: 1px solid @border; border-radius: 10px; }
+#InfoBar QLabel { background: transparent; border: none; font-size: 13px; color: @text; }
+#InfoBar QPushButton { min-height: 32px; max-height: 32px; border-radius: 16px; padding: 0 14px; }
+#InfoBar QToolButton { background: transparent; border: none; border-radius: 15px; }
+#InfoBar QToolButton:hover { background: @surface; }
+#InfoBar QToolButton:pressed { background: @pressed; }
+QPushButton { background: transparent; border: 1px solid @borderStrong; border-radius: 17px; padding: 0 16px; min-height: 32px; color: @text; }
 QPushButton:hover { background: @surface; }
-QPushButton:pressed { background: @surfaceHover; }
-QPushButton:disabled { color: @disabled; }
-QPushButton:default { background: @accent; color: @onAccent; border: none; font-weight: 600; }
+QPushButton:pressed { background: @pressed; }
+QPushButton:disabled { color: @disabled; border-color: @border; }
+QPushButton:default, QPushButton#PrimaryButton { background: @accent; color: @onAccent; border: none; font-weight: 600; }
+QPushButton:default:hover, QPushButton#PrimaryButton:hover { background: @accentHover; }
+QPushButton:default:pressed, QPushButton#PrimaryButton:pressed { background: @accentPressed; }
 QLineEdit, QComboBox, QSpinBox { background: @surface; border: 1px solid transparent; border-radius: 8px; min-height: 30px; padding: 0 10px; color: @text; selection-background-color: @accent; selection-color: @onAccent; }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border: 1px solid @border; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 2px solid @accent; background: @toolbar; }
@@ -116,8 +189,6 @@ QTabWidget#SettingsTabs QTabBar::tab:hover:!selected { background: @surface; }
 #Segmented { background: @surface; border-radius: 8px; }
 #Segmented QPushButton { background: transparent; border: none; border-radius: 6px; min-height: 28px; padding: 0 14px; }
 #Segmented QPushButton:checked { background: @toolbar; font-weight: 600; }
-#PrimaryButton { background: @accent; color: @onAccent; border: none; font-weight: 600; }
-#PrimaryButton:hover { background: @accent; }
 QStatusBar { background: @toolbar; color: @textSecondary; border-top: 1px solid @border; font-size: 12px; }
 QStatusBar QLabel { background: transparent; color: @textSecondary; }
 QToolTip { background: @toolbar; color: @text; border: 1px solid @border; border-radius: 6px; padding: 4px 8px; }
@@ -131,7 +202,8 @@ QListWidget, QTableWidget, QTreeWidget { background: @toolbar; border: 1px solid
 QHeaderView::section { background: @toolbar; color: @textSecondary; border: none; border-bottom: 1px solid @border; padding: 6px; }
 )");
     const QList<QPair<QString, QString>> repl = {
-        {"@surfaceHover", p.surfaceHover}, {"@textSecondary", p.textSecondary}, {"@accentSoft", p.accentSoft},
+        {"@surfaceHover", p.surfaceHover}, {"@borderStrong", p.borderStrong}, {"@textTertiary", p.textTertiary},
+        {"@accentHover", p.accentHover}, {"@accentPressed", p.accentPressed}, {"@pressed", p.pressed}, {"@textSecondary", p.textSecondary}, {"@accentSoft", p.accentSoft},
         {"@onAccent", p.onAccent}, {"@tabHover", p.tabHover}, {"@frame", p.frame}, {"@toolbar", p.toolbar},
         {"@page", p.page}, {"@surface", p.surface}, {"@border", p.border}, {"@text", p.text},
         {"@disabled", p.disabled}, {"@accent", p.accent}, {"@tab", p.tab}};
@@ -179,15 +251,27 @@ QTabBar::close-button:hover { background: %8; }
 
 QString ThemeManager::addressBarStyle() const {
     const auto& p = m_pal;
-    return QStringLiteral(R"(
-#Omnibox { background: %1; border: 1px solid transparent; border-radius: 17px; }
-#Omnibox:hover { border: 1px solid %2; }
-#Omnibox[focused="true"] { background: %3; border: 2px solid %4; }
-#Omnibox QLineEdit { background: transparent; border: none; padding: 0; min-height: 0; font-size: 14px; color: %5;
-                     selection-background-color: %4; selection-color: %6; }
+    QString s = QStringLiteral(R"(
+#Omnibox { background: @omnibox; border: 1px solid @border; border-radius: 19px; }
+#Omnibox:hover { background: @omniboxHover; border: 1px solid @borderStrong; }
+#Omnibox[focused="true"] { background: @omnibox; border: 2px solid @accent; }
+#Omnibox QLineEdit { background: transparent; border: none; padding: 0; min-height: 0; font-size: 14px; color: @text;
+                     selection-background-color: @accent; selection-color: @onAccent; }
+#Omnibox QLineEdit[urlview="true"] { color: transparent; }
 #Omnibox QLineEdit:focus { border: none; background: transparent; }
-#Omnibox QLabel { background: transparent; border: none; }
-#Omnibox QToolButton { background: transparent; border: none; border-radius: 14px; }
-#Omnibox QToolButton:hover { background: %7; }
-)").arg(p.surface, p.border, p.toolbar, p.accent, p.text, p.onAccent, p.surfaceHover);
+#Omnibox QLabel { background: transparent; border: none; font-size: 14px; }
+#Omnibox QToolButton { background: transparent; border: none; border-radius: 15px; }
+#Omnibox QToolButton:hover { background: @surface; }
+#Omnibox QToolButton:pressed { background: @pressed; }
+#OmniChip { border-radius: 14px; padding: 0 6px; font-size: 12px; }
+#OmniChip[kind="danger"] { color: @danger; padding: 0 10px 0 8px; }
+#OmniChip[kind="internal"] { color: @accent; padding: 0 10px 0 8px; }
+#OmniChip:hover { background: @surface; }
+)");
+    const QList<QPair<QString, QString>> repl = {
+        {"@omniboxHover", p.omniboxHover}, {"@omnibox", p.omnibox}, {"@borderStrong", p.borderStrong}, {"@border", p.border},
+        {"@accent", p.accent}, {"@onAccent", p.onAccent}, {"@text", p.text}, {"@surface", p.surface},
+        {"@pressed", p.pressed}, {"@danger", p.danger}};
+    for (auto& r : repl) s.replace(r.first, r.second);
+    return s;
 }

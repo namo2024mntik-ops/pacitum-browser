@@ -1,4 +1,6 @@
 #pragma once
+#include <functional>
+#include <QJsonValue>
 #include <QMainWindow>
 #include <QSplitter>
 #include <QPushButton>
@@ -22,12 +24,15 @@ class BookmarkManager;
 class DownloadManager;
 class SessionManager;
 class ZoomController;
+class FirstRunBridge;
+class QWebChannel;
 class AdBlocker;
 class WindowButton;
 
 class BrowserWindow : public QMainWindow {
     Q_OBJECT
 public:
+    void openUrlInNewTab(const QString& url) { newTab(url); }   // command-line / default-browser launches
     explicit BrowserWindow(QWidget* parent = nullptr);
     ~BrowserWindow() override;
 
@@ -95,6 +100,8 @@ private slots:
     void onSettingChanged(const QString& key);
     void clearBrowsingData(bool history, bool cookies, bool cache);
     void tickSpinner();
+    void showDevTools();
+    void showExtensionsMenu();
 
 private:
     void setupUI();
@@ -117,6 +124,9 @@ private:
     bool isCaptionArea(const QPoint& local) const;
     Qt::Edges edgesAt(const QPoint& global) const;
     void updateTabIcon(BrowserTab* tab);
+    void updateTabAudio(BrowserTab* tab);
+    void updateToolbarOverflow();
+    bool m_downloadsWanted = false;
     void updateNavState();
 
     bool m_darkMode = false;
@@ -155,6 +165,13 @@ private:
     QTimer* m_spinTimer = nullptr;
     int m_spinAngle = 0;
     bool m_animations = true;
+    // First-run welcome flow (firstrun-spec.md)
+    FirstRunBridge* m_firstRun = nullptr;
+    QWebChannel* m_firstRunChannel = nullptr;
+    void openWelcome();
+    void endWelcome();
+    void writeSetting(const QString& key, const QJsonValue& value);
+    void crossFadeTheme(const std::function<void()>& apply);   // 200 ms snapshot fade (spec "Theme change")
     bool m_edgeCursor = false;
     QSet<QWidget*> m_closing;
     QLabel* m_privateBadge = nullptr;

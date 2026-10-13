@@ -31,11 +31,82 @@ jobs:
           Get-ChildItem dist -Recurse -Filter *.pdb | Remove-Item -Force
           "{0:N1} MB in dist" -f ((Get-ChildItem dist -Recurse | Measure-Object Length -Sum).Sum / 1MB)
           if (Test-Path "$env:VCToolsRedistDir\x64") { Get-ChildItem "$env:VCToolsRedistDir\x64" -Recurse -Filter *.dll | Where-Object { $_.FullName -match 'CRT' } | Copy-Item -Destination dist }
+      - name: Smoke test (exe starts and shows a window)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--smoke-test' -PassThru
+          # Poll for the window instead of a fixed 6 s sleep: cold runners sometimes need ~8 s
+          # (QtWebEngine init) and the old check failed although the app reported SMOKE OK.
+          $hwnd = 0; $alive = $true
+          for ($i = 0; $i -lt 50; $i++) {
+            Start-Sleep -Milliseconds 500; $p.Refresh()
+            if ($p.HasExited) { $alive = $false; break }
+            if ($p.MainWindowHandle -ne 0) { $hwnd = $p.MainWindowHandle; break }
+          }
+          Start-Sleep -Seconds 3   # let the first page paint before the screenshot
+          Write-Host "alive=$alive MainWindowHandle=$hwnd title='$($p.MainWindowTitle)'"
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          $bmp.Save("$PWD\smoke\desktop.png"); $g.Dispose(); $bmp.Dispose()
+          if (-not $p.WaitForExit(30000)) { Write-Host "still running after smoke window; killing"; $p.Kill() }
+          Write-Host "exit code: $($p.ExitCode)"
+          Copy-Item "$log\startup.log","$log\crash.log" smoke\ -ErrorAction SilentlyContinue
+          Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-Object -Last 60
+          Get-Content smoke\crash.log -ErrorAction SilentlyContinue
+          Get-ChildItem dist -Name | Out-File smoke\dist-files.txt
+          Get-ChildItem dist -Recurse -Name | Out-File -Append smoke\dist-files.txt
+          if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }
       - name: Installer
         shell: pwsh
         run: |
-          choco install innosetup -y --no-progress
+          # pinned: installer.iss needs 6.6+ (dynamic dark images, PNG wizard images, zircon style)
+          choco install innosetup --version 6.7.1 -y --no-progress
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Installer pages + in-place upgrade check
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms,System.Drawing
+          New-Item -ItemType Directory -Force installer-shots | Out-Null
+          function Shot($name) {
+            $b = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Left, $b.Top, 0, 0, $bmp.Size)
+            $bmp.Save("$PWD\installer-shots\$name.png"); $g.Dispose(); $bmp.Dispose()
+          }
+          $setup = (Get-ChildItem installer -Filter *.exe | Select-Object -First 1).FullName
+          $ws = New-Object -ComObject WScript.Shell
+          function Key($k) { [void]$ws.AppActivate('Setup - Pacitum Browser'); Start-Sleep -Milliseconds 300; $ws.SendKeys($k) }
+          # 1) interactive per-user install, screenshot every page
+          $p = Start-Process $setup -ArgumentList '/CURRENTUSER' -PassThru
+          Start-Sleep 5; Shot '1-welcome'
+          Key '{ENTER}'; Start-Sleep 3; Shot '2-location'
+          Key '{ENTER}'; Start-Sleep -Milliseconds 700; Shot '3-progress'
+          for ($i = 0; $i -lt 90 -and -not (Test-Path "$env:LOCALAPPDATA\Programs\Pacitum Browser\unins000.exe"); $i++) { Start-Sleep 1 }
+          Start-Sleep 4; Shot '4-finish'
+          Key ' '; Start-Sleep 1; Key '{ENTER}'     # untick "Launch", Finish
+          $p.WaitForExit(30000) | Out-Null
+          Get-Process PacitumBrowser -ErrorAction SilentlyContinue | Stop-Process -Force
+          $first = (Get-Item "$env:LOCALAPPDATA\Programs\Pacitum Browser\PacitumBrowser.exe" -ErrorAction SilentlyContinue).LastWriteTime
+          "first install: exe present=$([bool]$first)  desktop shortcut=$(Test-Path "$env:USERPROFILE\Desktop\Pacitum Browser.lnk")" | Tee-Object installer-shots\upgrade-check.txt
+          # 2) run the same installer again silently: must upgrade in place (same AppId → same dir, one uninstall entry)
+          Start-Process $setup -ArgumentList '/VERYSILENT','/CURRENTUSER','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $keys = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { $_.PSChildName -like '*FD3A16C9-4CF0-4B0B-BBEC-A5E3334D7CFE*' }
+          $keys | ForEach-Object { $_ | Get-ItemProperty | Select-Object PSChildName, DisplayName, DisplayVersion, InstallLocation | Format-List | Out-String | Write-Host }
+          "uninstall entries after re-install: $(@($keys).Count)" | Tee-Object -Append installer-shots\upgrade-check.txt
+          Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue | Out-String | Tee-Object -Append installer-shots\upgrade-check.txt
+          if (@($keys).Count -ne 1) { Write-Error "expected exactly one uninstall entry"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: installer-screens, path: installer-shots/, if-no-files-found: ignore }
       - uses: actions/upload-artifact@v4
         with:
           name: PacitumBrowser-Setup

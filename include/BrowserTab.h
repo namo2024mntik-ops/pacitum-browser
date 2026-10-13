@@ -10,6 +10,7 @@
 #include <QUrl>
 #include <QWebEngineFullScreenRequest>
 class QLabel;
+class QTimer;
 class QToolButton;
 
 class FindBar;
@@ -42,6 +43,9 @@ public:
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
     void fadeIn();
+    void ensureActive();                 // thaw a frozen page before touching it
+    void setNoFreeze(bool on);           // e.g. while the page is fullscreen
+    static bool s_freezeEnabled;         // settings: "freeze_background_tabs"
     // Session restore: remember the URL/title but only create the page load when first shown.
     void setLazyUrl(const QString& url, const QString& title);
     bool isLazy() const { return !m_pendingUrl.isEmpty(); }
@@ -79,6 +83,7 @@ private:
     QString m_pendingUrl;
 protected:
     void showEvent(QShowEvent* e) override;
+    void hideEvent(QHideEvent* e) override;
 private:
     static int s_idCounter;
     int m_tabId = 0;
@@ -94,6 +99,11 @@ private:
     QWebEnginePage* m_page = nullptr;
     QProgressBar* m_progress = nullptr;
     FindBar* m_findBar = nullptr;
-    QGraphicsOpacityEffect* m_opacity = nullptr;
-    QPropertyAnimation* m_anim = nullptr;
+    QWidget* m_veil = nullptr;          // page-transition veil (fadeIn)
+    QTimer* m_freezeTimer = nullptr;
+    bool m_noFreeze = false;
+    int m_crashCount = 0;
+    qint64 m_lastCrashMs = 0;
+    static constexpr int kFreezeAfterMs = 10 * 60 * 1000;
+    void maybeFreeze();
 };

@@ -16,6 +16,7 @@
 #include "BrowserWindow.h"
 #include "PacitumScheme.h"
 #include "WebProfile.h"
+#include "AppSettings.h"
 #include <QJsonDocument>
 #include <QJsonObject>
 
@@ -139,7 +140,11 @@ static void setupEnvironment() {
 int main(int argc, char *argv[]) {
     installLogging();
     bool smoke = false;
-    for (int i = 1; i < argc; ++i) if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
+    bool stress = false;
+    for (int i = 1; i < argc; ++i) {
+        if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
+        if (qstrcmp(argv[i], "--stress-test") == 0) stress = true;
+    }
     const QString launchDir = QDir::currentPath();   // before we switch to the data dir (relative file args)
     setupEnvironment();
     PacitumSchemeHandler::registerScheme();
@@ -175,12 +180,9 @@ int main(int argc, char *argv[]) {
         QDir::setCurrent(dataDir);
     }
     {   // web prefs from settings before any page is created
-        QFile f(QStringLiteral("browser_settings.json"));
-        if (f.open(QIODevice::ReadOnly)) {
-            const auto o = QJsonDocument::fromJson(f.readAll()).object();
-            Pacitum::webPrefs().javascript = o.value(QStringLiteral("javascript_enabled")).toBool(true);
-            Pacitum::webPrefs().popups = o.value(QStringLiteral("popups_allowed")).toBool(false);
-        }
+        const auto o = AppSettings::read();
+        Pacitum::webPrefs().javascript = o.value(QStringLiteral("javascript_enabled")).toBool(true);
+        Pacitum::webPrefs().popups = o.value(QStringLiteral("popups_allowed")).toBool(false);
     }
 
     // Persistent profile storage (mirrors main.py:82)
@@ -218,15 +220,26 @@ int main(int argc, char *argv[]) {
         pacitumLog(QStringLiteral("window shown: visible=%1 geometry=%2,%3 %4x%5").arg(w.isVisible())
                    .arg(w.geometry().x()).arg(w.geometry().y()).arg(w.width()).arg(w.height()));
         QTimer::singleShot(0, &app, []{ pacitumLog(QStringLiteral("event loop running (startup time)")); });
-        if (smoke) {
-            // CI smoke test: window must exist and be visible; quit cleanly after a few seconds.
-            QTimer::singleShot(8000, &app, [&w]{
-                const bool ok = w.isVisible() && w.windowHandle() && w.windowHandle()->isExposed() && w.width() > 200 && w.height() > 200;
-                pacitumLog(QStringLiteral("SMOKE %1 visible=%2 exposed=%3 size=%4x%5").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))
-                           .arg(w.isVisible()).arg(w.windowHandle() && w.windowHandle()->isExposed()).arg(w.width()).arg(w.height()));
-                QCoreApplication::exit(ok ? 0 : 3);
-            });
-        }
+        // Time-to-window: first moment the native window is actually exposed (on screen).
+        auto* exposeProbe = new QTimer(&app);
+        exposeProbe->setInterval(15);
+        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress]{
+            if (!w.windowHandle() || !w.windowHandle()->isExposed()) return;
+            exposeProbe->stop(); exposeProbe->deleteLater();
+            pacitumLog(QStringLiteral("window exposed (time-to-window)"));
+            if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
+            else if (smoke) {
+                // CI smoke test: window must stay visible; quit cleanly 5 s after it appeared.
+                QTimer::singleShot(5000, &w, [&w]{
+                    const bool ok = w.isVisible() && w.windowHandle() && w.windowHandle()->isExposed() && w.width() > 200 && w.height() > 200;
+                    pacitumLog(QStringLiteral("SMOKE %1 visible=%2 exposed=%3 size=%4x%5").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))
+                               .arg(w.isVisible()).arg(w.windowHandle() && w.windowHandle()->isExposed()).arg(w.width()).arg(w.height()));
+                    QCoreApplication::exit(ok ? 0 : 3);
+                });
+            }
+        });
+        exposeProbe->start();
+        if (smoke || stress) QTimer::singleShot(stress ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
         const int rc = app.exec();
         pacitumLog(QStringLiteral("exit %1").arg(rc));
         return rc;

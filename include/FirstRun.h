@@ -4,6 +4,7 @@
 #include <QVariantMap>
 #include <QStringList>
 #include <functional>
+#include <QFuture>
 
 class BookmarkManager;
 class HistoryManager;
@@ -33,6 +34,11 @@ public:
     Q_INVOKABLE bool reducedMotion() const;
     Q_INVOKABLE void finish();
 
+    // Blocks until a running background import has finished. The window calls this before it
+    // deletes the HistoryManager the worker is writing to (1.5.1: closing the window during an
+    // import freed the manager under the worker -> crash).
+    void waitForImport();
+
     static bool isFirstRunDone();          // browser_settings.json "first_run_done"
     static void markFirstRunDone();
 
@@ -47,4 +53,5 @@ private:
     HistoryManager* m_hm;
     Hooks m_hooks;
     bool m_importRunning = false;
+    QFuture<void> m_future;
 };

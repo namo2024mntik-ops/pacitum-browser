@@ -26,6 +26,11 @@ protected:
 #include <QUrl>
 #include <QUrlQuery>
 #include <QTimer>
+#include <QDateTime>
+#include <QPointer>
+#include <QHideEvent>
+#include <QGraphicsOpacityEffect>
+#include <QPropertyAnimation>
 #include <QEasingCurve>
 #include <QDesktopServices>
 #include <QHBoxLayout>
@@ -41,8 +46,10 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     : QWidget(parent), m_private(privateMode), m_searchEngine(searchEngine) {
     s_idCounter++; m_tabId = s_idCounter;
 
-    m_opacity = new QGraphicsOpacityEffect(this);
-    setGraphicsEffect(m_opacity); m_opacity->setOpacity(0);
+    // (1.5.0-1.5.1 put a QGraphicsOpacityEffect on the whole tab, i.e. on the QWebEngineView. Graphics
+    // effects re-render the GPU-composited web view offscreen on every frame; Qt documents them as
+    // unsupported for such widgets, and it was a source of black/blank pages, fullscreen glitches
+    // and crashes in the compositor. Page transitions now fade a plain veil widget instead.)
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
@@ -68,16 +75,17 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     connect(m_view->page(), &QWebEnginePage::renderProcessTerminated, this, &BrowserTab::onRenderCrashed);
     // Website fullscreen (YouTube etc.): without a handler Qt rejects every request.
     connect(m_view->page(), &QWebEnginePage::fullScreenRequested, this, &BrowserTab::fullScreenRequested);
-    // Background-tab lifecycle: follow Chromium's recommendation (Active -> Frozen -> Discarded for
-    // hidden tabs; never for tabs playing audio / with DevTools). Frozen tabs stop running JS and
-    // timers; discarded tabs drop their renderer and reload transparently when shown again.
-    m_view->page()->setLifecycleState(QWebEnginePage::LifecycleState::Active);
-    connect(m_view->page(), &QWebEnginePage::recommendedStateChanged, this, [this](QWebEnginePage::LifecycleState st){
-        auto* pg = m_view->page();
-        if (!pg || isVisible()) return;                 // never freeze the tab the user is looking at
-        if (st == QWebEnginePage::LifecycleState::Discarded && pg->isAudioMuted() == false && pg->recentlyAudible()) return;
-        pg->setLifecycleState(st);
-    });
+    // Background-tab lifecycle (1.5.2, conservative). 1.5.1 applied Chromium's recommendedState
+    // directly, including Discarded, on any page whose widget was hidden: pages were frozen while
+    // still loading, discarded tabs were then touched (zoom, theme reload, JavaScript, popups opened
+    // into them), and the welcome tab's web channel could be discarded. Now: no discarding at all;
+    // a tab is only frozen after it has been in the background for kFreezeAfterMs, is fully loaded,
+    // silent, not an internal page, not fullscreen, and Chromium agrees it may be frozen. Any API
+    // call that needs the page (load, reload, history, zoom, show) thaws it first.
+    m_freezeTimer = new QTimer(this);
+    m_freezeTimer->setSingleShot(true);
+    m_freezeTimer->setInterval(kFreezeAfterMs);
+    connect(m_freezeTimer, &QTimer::timeout, this, &BrowserTab::maybeFreeze);
 
     buildSignInBar();
     layout->addWidget(m_signInBar);
@@ -95,7 +103,6 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     connect(m_view, &QWebEngineView::loadFinished, this, &BrowserTab::onLoadFinished);
     connect(m_view, &QWebEngineView::iconChanged, this, &BrowserTab::iconChanged);
 
-    fadeIn();
     if (!url.isEmpty()) loadUrl(url);
 }
 
@@ -118,14 +125,40 @@ void BrowserTab::loadUrl(const QString& raw) {
             url = base + QString(QUrl::toPercentEncoding(url));
         }
     }
+    ensureActive();
     m_view->setUrl(QUrl(url));
+}
+
+bool BrowserTab::s_freezeEnabled = true;
+
+void BrowserTab::ensureActive() {
+    if (m_freezeTimer) m_freezeTimer->stop();
+    auto* pg = m_view ? m_view->page() : nullptr;
+    if (pg && pg->lifecycleState() != QWebEnginePage::LifecycleState::Active)
+        pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+}
+
+void BrowserTab::maybeFreeze() {
+    auto* pg = m_view ? m_view->page() : nullptr;
+    if (!s_freezeEnabled || !pg || isVisible() || m_loading || m_noFreeze || !m_pendingUrl.isEmpty()) return;
+    if (m_url.isEmpty() || m_url.startsWith(QStringLiteral("pacitum")) || m_url.startsWith(QStringLiteral("about:"))) return;
+    if (pg->recentlyAudible() || pg->lifecycleState() != QWebEnginePage::LifecycleState::Active) return;
+    if (pg->recommendedState() == QWebEnginePage::LifecycleState::Active) return;   // Chromium says no (e.g. WebRTC, devtools)
+    pg->setLifecycleState(QWebEnginePage::LifecycleState::Frozen);
+}
+
+void BrowserTab::setNoFreeze(bool on) { m_noFreeze = on; if (on) ensureActive(); }
+
+void BrowserTab::hideEvent(QHideEvent* e) {
+    QWidget::hideEvent(e);
+    if (!e->spontaneous() && s_freezeEnabled && m_freezeTimer) m_freezeTimer->start();   // tab switched away (not window minimize)
 }
 
 void BrowserTab::applyWebSettings() { Pacitum::applyWebSettings(m_view->settings()); }
 
-void BrowserTab::goBack() { if (m_view->history()->canGoBack()) m_view->back(); }
-void BrowserTab::goForward() { if (m_view->history()->canGoForward()) m_view->forward(); }
-void BrowserTab::reload() { m_view->reload(); }
+void BrowserTab::goBack() { if (m_view->history()->canGoBack()) { ensureActive(); m_view->back(); } }
+void BrowserTab::goForward() { if (m_view->history()->canGoForward()) { ensureActive(); m_view->forward(); } }
+void BrowserTab::reload() { ensureActive(); m_view->reload(); }
 void BrowserTab::stop() { m_view->stop(); }
 bool BrowserTab::canGoBack() const { return m_view->history()->canGoBack(); }
 bool BrowserTab::canGoForward() const { return m_view->history()->canGoForward(); }
@@ -149,8 +182,7 @@ void BrowserTab::setLazyUrl(const QString& url, const QString& title) {
 }
 void BrowserTab::showEvent(QShowEvent* e) {
     QWidget::showEvent(e);
-    if (auto* pg = m_view->page(); pg && pg->lifecycleState() != QWebEnginePage::LifecycleState::Active)
-        pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);   // thaw / reload a frozen or discarded tab
+    ensureActive();   // thaw a frozen tab before it paints
     if (!m_pendingUrl.isEmpty()) { const QString u = m_pendingUrl; m_pendingUrl.clear(); loadUrl(u); }
 }
 
@@ -197,15 +229,36 @@ void BrowserTab::onTitleChanged(const QString& t) { m_title = t.isEmpty() ? QStr
 void BrowserTab::onLoadStarted() { m_loading = true; m_loadValue = 0; emit loadingChanged(true); m_progress->setValue(0); }
 void BrowserTab::onLoadProgress(int p) { m_loadValue = p; m_progress->setValue(p); emit progressChanged(p); }
 void BrowserTab::onLoadFinished(bool ok) { checkGoogleSignIn(m_view->url()); m_loading = false; m_loadValue = 100; emit loadingChanged(false); emit loadDone(ok); m_progress->setValue(100); }
-void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus, int) { emit crashed(); QTimer::singleShot(1000, this, &BrowserTab::reload); }
+// Renderer gone: show the crashed state and reload once after a second -- but not in a loop (1.5.1
+// reloaded forever when a page crashed its renderer on load, e.g. after a discard), and not when the
+// renderer exited normally.
+void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus st, int) {
+    emit crashed();
+    if (st == QWebEnginePage::NormalTerminationStatus) return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastCrashMs > 60000) m_crashCount = 0;
+    m_lastCrashMs = now;
+    if (++m_crashCount > 2) return;   // user can reload manually
+    QTimer::singleShot(1000, this, &BrowserTab::reload);
+}
 
+// Page transition (tab switch): a page-coloured veil over the tab fades out (160 ms OutCubic). The
+// web view itself is never wrapped in a graphics effect; only the small veil widget is.
 void BrowserTab::fadeIn() {
-    if (m_anim) { m_anim->stop(); m_anim->deleteLater(); m_anim = nullptr; }
-    if (Pacitum::reducedMotion()) { m_opacity->setEnabled(false); return; }   // no offscreen effect with reduced motion
-    m_opacity->setEnabled(true);
-    m_anim = new QPropertyAnimation(m_opacity, "opacity", this);
-    m_anim->setDuration(200); m_anim->setStartValue(0.0); m_anim->setEndValue(1.0);
-    m_anim->setEasingCurve(QEasingCurve::OutCubic);
-    connect(m_anim, &QPropertyAnimation::finished, this, [this]{ m_opacity->setEnabled(false); });  // no offscreen cost when idle
-    m_anim->start();
+    if (m_veil) { m_veil->deleteLater(); m_veil = nullptr; }
+    const int ms = Pacitum::motionMs(160);
+    if (Pacitum::reducedMotion() || ms <= 0 || !isVisible() || width() < 2) return;
+    auto* veil = new QWidget(this);
+    veil->setAttribute(Qt::WA_TransparentForMouseEvents);
+    veil->setAttribute(Qt::WA_StyledBackground, true);
+    veil->setAutoFillBackground(true);
+    QPalette pal = veil->palette(); pal.setColor(QPalette::Window, QColor(ThemeManager::current().page)); veil->setPalette(pal);
+    veil->setGeometry(rect()); veil->show(); veil->raise();
+    auto* eff = new QGraphicsOpacityEffect(veil); eff->setOpacity(1.0); veil->setGraphicsEffect(eff);
+    auto* a = new QPropertyAnimation(eff, "opacity", veil);
+    a->setDuration(ms); a->setStartValue(0.85); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    QPointer<QWidget> guard(veil);
+    connect(a, &QPropertyAnimation::finished, veil, [this, guard]{ if (guard) { if (m_veil == guard) m_veil = nullptr; guard->deleteLater(); } });
+    m_veil = veil;
+    a->start(QAbstractAnimation::DeleteWhenStopped);
 }

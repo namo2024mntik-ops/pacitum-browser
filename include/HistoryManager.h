@@ -11,6 +11,7 @@ struct HistoryEntry {
     int visitCount = 1;
 };
 
+class QThread;
 class HistoryManager {
 public:
     explicit HistoryManager(const QString& dbPath = QStringLiteral("browser_history.db"));
@@ -29,7 +30,10 @@ public:
 
 private:
     void initDb() const;
+    QString threadConn() const;                       // m_conn on the owner thread, a per-thread one elsewhere
+    void releaseThreadConn(const QString& cn) const;
     QString m_conn;   // one long-lived connection (opening SQLite per call was slow and leaked 'still in use' warnings)
     QString m_dbPath;
+    QThread* m_owner = nullptr;
     mutable QMutex m_mutex;
 };

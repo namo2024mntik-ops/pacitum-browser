@@ -1,3 +1,4 @@
+#include "AppSettings.h"
 #include "Widgets.h"
 #include "DownloadManager.h"
 #include "ThemeManager.h"
@@ -196,11 +197,8 @@ double DownloadManager::aggregateProgress() const {
 }
 
 QString DownloadManager::downloadDir() const {
-    QFile f(QStringLiteral("browser_settings.json"));
-    if (f.open(QIODevice::ReadOnly)) {
-        const QString d = QJsonDocument::fromJson(f.readAll()).object().value(QStringLiteral("download_path")).toString();
-        if (!d.isEmpty()) return d;
-    }
+    const QString d = AppSettings::get(QStringLiteral("download_path")).toString();
+    if (!d.isEmpty()) return d;
     return QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
 }
 

@@ -41,6 +41,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* e) override;
+    void showEvent(QShowEvent* e) override;
     void changeEvent(QEvent* e) override;
     bool eventFilter(QObject* o, QEvent* e) override;
 #ifdef Q_OS_WIN
@@ -53,6 +54,9 @@ private:
     void setNcMaxHover(bool on);
     bool m_ncMaxHover = false;
     bool m_ncMaxPressed = false;
+    bool m_inSizeMove = false;
+    bool moveLocked() const;                       // maximized / fullscreen: no caption drag, no move/size
+    void ensureFullscreenCoversMonitor();
 protected:
 #endif
     void keyPressEvent(QKeyEvent* e) override;
@@ -122,12 +126,23 @@ private:
     BrowserTab* activeTab() const;
     QJsonObject readSettings() const;
     void writeSettingsFile(const QJsonObject& s);
-    mutable QJsonObject m_settingsCache;
-    mutable QDateTime m_settingsStamp;
-    mutable qint64 m_settingsSize = -1;
     // fullscreen (website-requested or F11): chrome hidden, previous state restored on exit
     void enterContentFullscreen(bool fromPage);
     void exitContentFullscreen();
+    void finishExitFullscreen();       // restore chrome + window state now (no page round-trip)
+    bool m_fsTransition = false;       // entering fullscreen: ignore intermediate state reports
+    bool m_shownOnce = false;
+    void fadeInContent();
+    // built-in updater
+    void setupUpdater();
+    void showUpdatePrompt(const struct UpdateInfo& info);
+    class Updater* m_updater = nullptr;
+    QPointer<class UpdateDialog> m_updateDialog;
+    bool m_pendingUpdatePrompt = false;
+    bool m_noBackgroundUpdates = false;
+public:
+    void runStressTest();              // --stress-test (CI): tabs, switching, fullscreen, loads
+private:
     void setChromeHidden(bool hidden);
     bool m_pageFullscreen = false;     // a page (e.g. YouTube) owns fullscreen
     bool m_chromeHidden = false;

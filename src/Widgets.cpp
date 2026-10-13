@@ -6,6 +6,9 @@
 #include <QApplication>
 #include <QMenu>
 #include <QPropertyAnimation>
+#include <QDialog>
+#include <QPointer>
+#include <QTimer>
 #include <QEnterEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -287,17 +290,34 @@ namespace {
 class MenuFader : public QObject {
 public:
     using QObject::QObject;
+    // Menus, popups (downloads popup, omnibox suggestions, tooltips excluded) and dialogs fade in.
+    // Dialogs also rise 8 px. Only plain raster top-levels are animated (never a window that hosts
+    // a web view: layered-window opacity breaks its GPU swap chain). Reduced motion: instant.
     bool eventFilter(QObject* o, QEvent* e) override {
-        if (e->type() == QEvent::Show) {
-            if (auto* m = qobject_cast<QMenu*>(o)) {
-                if (Pacitum::reducedMotion()) return false;
-                m->setWindowOpacity(0.0);
-                auto* a = new QPropertyAnimation(m, "windowOpacity", m);
-                const int ms = Pacitum::motionMs(140);   // spec §5.5: menu open 140 ms OutCubic (opacity only)
-                if (ms == 0) return false;
-                a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
-                a->start(QAbstractAnimation::DeleteWhenStopped);
-            }
+        if (e->type() != QEvent::Show) return false;
+        auto* w = qobject_cast<QWidget*>(o);
+        if (!w || !w->isWindow() || Pacitum::reducedMotion()) return false;
+        const bool menu = qobject_cast<QMenu*>(w) != nullptr;
+        const bool dialog = !menu && qobject_cast<QDialog*>(w) != nullptr && !w->inherits("QFileDialog");
+        const bool popup = !menu && !dialog && (w->windowFlags() & Qt::WindowType_Mask) == Qt::Popup;
+        if (!menu && !dialog && !popup) return false;
+        if (w->property("_pacitumNoFade").toBool()) return false;
+        for (auto* c : w->findChildren<QWidget*>()) if (c->inherits("QWebEngineView")) return false;
+        const int ms = Pacitum::motionMs(menu ? 140 : dialog ? 180 : 150);   // spec §5.5 menu 140 ms OutCubic
+        if (ms <= 0) return false;
+        w->setWindowOpacity(0.0);
+        auto* a = new QPropertyAnimation(w, "windowOpacity", w);
+        a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+        a->start(QAbstractAnimation::DeleteWhenStopped);
+        if (dialog) {
+            QPointer<QWidget> guard(w);
+            QTimer::singleShot(0, w, [guard, ms]{   // after the dialog has been positioned
+                if (!guard) return;
+                const QPoint end = guard->pos();
+                auto* m = new QPropertyAnimation(guard.data(), "pos", guard.data());
+                m->setDuration(ms + 40); m->setStartValue(end + QPoint(0, 8)); m->setEndValue(end); m->setEasingCurve(QEasingCurve::OutCubic);
+                m->start(QAbstractAnimation::DeleteWhenStopped);
+            });
         }
         return false;
     }

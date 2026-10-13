@@ -1,0 +1,11 @@
+build/
+browser_data/
+*.db
+*.json
+!bookmarks.json
+*.exe
+*.o
+*.a
+cmake-build-*/
+build/
+aqtinstall.log

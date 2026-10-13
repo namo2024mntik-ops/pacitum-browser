@@ -1,0 +1,29 @@
+name: Build Windows EXE
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          modules: 'qtwebengine qtwebchannel qtpositioning'
+          cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+      - name: Bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          $exe = Get-ChildItem build -Recurse -Filter SafariBrowser.exe | Select-Object -First 1
+          Copy-Item $exe.FullName dist/
+          windeployqt --release --no-translations dist/SafariBrowser.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SafariBrowser-windows
+          path: dist

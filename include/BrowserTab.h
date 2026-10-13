@@ -84,6 +84,7 @@ private:
 protected:
     void showEvent(QShowEvent* e) override;
     void hideEvent(QHideEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
 private:
     static int s_idCounter;
     int m_tabId = 0;

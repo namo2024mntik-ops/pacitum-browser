@@ -42,6 +42,7 @@ public:
 protected:
     void closeEvent(QCloseEvent* e) override;
     void showEvent(QShowEvent* e) override;
+    void resizeEvent(QResizeEvent* e) override;
     void changeEvent(QEvent* e) override;
     bool eventFilter(QObject* o, QEvent* e) override;
 #ifdef Q_OS_WIN
@@ -55,6 +56,7 @@ private:
     bool m_ncMaxHover = false;
     bool m_ncMaxPressed = false;
     bool m_inSizeMove = false;
+    bool m_sizeMoveLocked = false;                 // move loop started while maximized/fullscreen
     bool moveLocked() const;                       // maximized / fullscreen: no caption drag, no move/size
     void ensureFullscreenCoversMonitor();
 protected:

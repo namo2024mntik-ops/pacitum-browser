@@ -63,9 +63,6 @@ FinishedLabelNoIcons=Setup has finished installing [name] on your computer.
 ClickFinish=Click Finish to close Setup.
 SelectDirDesc=Where should Pacitum Browser be installed?
 
-[Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
-
 [InstallDelete]
 ; stale Qt files from older builds (user data lives in %LOCALAPPDATA%, not here)
 Type: filesandordirs; Name: "{app}\translations"
@@ -77,7 +74,8 @@ Source: "dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createal
 [Icons]
 Name: "{group}\Pacitum Browser"; Filename: "{app}\{#AppExe}"
 Name: "{group}\Uninstall Pacitum Browser"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Pacitum Browser"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; desktop shortcut: checkbox on the location page (installer-spec "Tasks on the directory page")
+Name: "{autodesktop}\Pacitum Browser"; Filename: "{app}\{#AppExe}"; Check: WantDesktopIcon
 
 [Registry]
 ; Register as a web browser so it appears in Settings > Default apps (the welcome flow's
@@ -104,6 +102,12 @@ Filename: "{app}\{#AppExe}"; Description: "Launch Pacitum Browser"; Flags: nowai
 var
   DiskLabel: TNewStaticText;
   DiskBar: TNewProgressBar;
+  DesktopCheck: TNewCheckBox;
+
+function WantDesktopIcon: Boolean;
+begin
+  Result := DesktopCheck.Checked;
+end;
 
 procedure UpdateDiskPanel;
 var
@@ -156,6 +160,19 @@ begin
   DiskBar.Min := 0;
   DiskBar.Max := 100;
   WizardForm.DirEdit.OnChange := @DirChanged;
+
+  DesktopCheck := TNewCheckBox.Create(WizardForm);
+  DesktopCheck.Parent := WizardForm.SelectDirPage;
+  DesktopCheck.Left := WizardForm.DirEdit.Left;
+  DesktopCheck.Top := DiskBar.Top + DiskBar.Height + ScaleY(22);
+  DesktopCheck.Width := WizardForm.DirEdit.Width;
+  DesktopCheck.Height := ScaleY(20);
+  DesktopCheck.Caption := 'Create a desktop shortcut';
+  { Fresh install: on. Upgrade (directory page skipped): keep whatever the user had before. }
+  if WizardForm.PrevAppDir = '' then
+    DesktopCheck.Checked := True
+  else
+    DesktopCheck.Checked := FileExists(ExpandConstant('{autodesktop}\Pacitum Browser.lnk'));
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

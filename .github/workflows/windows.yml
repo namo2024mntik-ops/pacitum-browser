@@ -89,17 +89,19 @@ jobs:
           $p = Start-Process $setup -ArgumentList '/CURRENTUSER' -PassThru
           Start-Sleep 5; Shot '1-welcome'
           Key '{ENTER}'; Start-Sleep 3; Shot '2-location'
-          Key '{ENTER}'; Start-Sleep 1; Shot '3-progress'
+          Key '{ENTER}'; Start-Sleep -Milliseconds 700; Shot '3-progress'
           for ($i = 0; $i -lt 90 -and -not (Test-Path "$env:LOCALAPPDATA\Programs\Pacitum Browser\unins000.exe"); $i++) { Start-Sleep 1 }
           Start-Sleep 4; Shot '4-finish'
           Key ' '; Start-Sleep 1; Key '{ENTER}'     # untick "Launch", Finish
           $p.WaitForExit(30000) | Out-Null
           Get-Process PacitumBrowser -ErrorAction SilentlyContinue | Stop-Process -Force
+          $first = (Get-Item "$env:LOCALAPPDATA\Programs\Pacitum Browser\PacitumBrowser.exe" -ErrorAction SilentlyContinue).LastWriteTime
+          "first install: exe present=$([bool]$first)  desktop shortcut=$(Test-Path "$env:USERPROFILE\Desktop\Pacitum Browser.lnk")" | Tee-Object installer-shots\upgrade-check.txt
           # 2) run the same installer again silently: must upgrade in place (same AppId → same dir, one uninstall entry)
           Start-Process $setup -ArgumentList '/VERYSILENT','/CURRENTUSER','/SUPPRESSMSGBOXES','/NORESTART' -Wait
           $keys = Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' | Where-Object { $_.PSChildName -like '*FD3A16C9-4CF0-4B0B-BBEC-A5E3334D7CFE*' }
           $keys | ForEach-Object { $_ | Get-ItemProperty | Select-Object PSChildName, DisplayName, DisplayVersion, InstallLocation | Format-List | Out-String | Write-Host }
-          "uninstall entries: $(@($keys).Count)" | Tee-Object installer-shots\upgrade-check.txt
+          "uninstall entries after re-install: $(@($keys).Count)" | Tee-Object -Append installer-shots\upgrade-check.txt
           Get-ItemProperty 'HKCU:\Software\RegisteredApplications' -ErrorAction SilentlyContinue | Out-String | Tee-Object -Append installer-shots\upgrade-check.txt
           if (@($keys).Count -ne 1) { Write-Error "expected exactly one uninstall entry"; exit 1 }
       - uses: actions/upload-artifact@v4

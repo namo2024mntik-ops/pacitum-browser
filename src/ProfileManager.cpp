@@ -1,4 +1,5 @@
 #include "ProfileManager.h"
+#include <QThread>
 #include "WebProfile.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -184,6 +185,8 @@ bool ProfileManager::migrateLegacy(const QString& root, QString* log) {
 bool ProfileManager::init(const QString& root) {
     m_root = root; m_cacheStamp = -1;
     QDir().mkpath(root + QStringLiteral("/profiles"));
+    for (const auto& d : QDir(root + QStringLiteral("/profiles")).entryList({QStringLiteral(".deleted-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot))
+        QDir(root + QStringLiteral("/profiles/") + d).removeRecursively();   // leftovers of a delete that hit locked files
     QString log;
     const bool ok = migrateLegacy(root, &log);
     pacitumLog(QStringLiteral("profiles: %1").arg(log.trimmed().replace(QLatin1Char('\n'), QStringLiteral("; "))));
@@ -262,7 +265,17 @@ bool ProfileManager::remove(const QString& id, QString* error) {
     r["profiles"] = arr;
     if (r.value("last_used").toString() == id) r["last_used"] = arr.first().toObject().value("id").toString();
     if (!writeRegistry(r)) { if (error) *error = QStringLiteral("Couldn't update profiles.json."); return false; }
-    QDir(profileDir(id)).removeRecursively();
+    // Chromium may release its files a moment after the last QWebEngineProfile goes away (Windows
+    // keeps them locked), so retry briefly; anything left is moved aside and swept on next start.
+    const QString dir = profileDir(id);
+    for (int i = 0; i < 50 && QFileInfo::exists(dir); ++i) {
+        if (QDir(dir).removeRecursively()) break;
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50); QThread::msleep(100);
+    }
+    if (QFileInfo::exists(dir)) {
+        const QString aside = m_root + QStringLiteral("/profiles/.deleted-") + id + QLatin1Char('-') + QString::number(QDateTime::currentSecsSinceEpoch());
+        if (!QDir().rename(dir, aside)) pacitumLog(QStringLiteral("profiles: couldn't fully remove ") + dir + QStringLiteral(" (will retry on next start)"));
+    }
     emit profilesChanged();
     for (const auto& o : profiles()) if (o.id != m_current) notify(o.id, "reload");
     return true;

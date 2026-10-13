@@ -7,6 +7,7 @@
 #include <QMenu>
 #include <QPropertyAnimation>
 #include <QEnterEvent>
+#include <QKeyEvent>
 
 static QColor mix(const QColor& a, const QColor& b, qreal t) {
     return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
@@ -24,13 +25,13 @@ void AnimatedToolButton::animateTo(qreal v) {
     m_anim.stop(); m_anim.setStartValue(m_level); m_anim.setEndValue(v); m_anim.start();
 }
 void AnimatedToolButton::enterEvent(QEnterEvent* e) { if (isEnabled()) animateTo(1.0); QToolButton::enterEvent(e); }
-void AnimatedToolButton::leaveEvent(QEvent* e) { animateTo(0.0); QToolButton::leaveEvent(e); }
+void AnimatedToolButton::leaveEvent(QEvent* e) { if (!m_forcedHover) animateTo(0.0); QToolButton::leaveEvent(e); }
 
 void AnimatedToolButton::paintBackground(QPainter& p) {
     const auto& pal = ThemeManager::current();
     QColor hover(m_hoverColor.isEmpty() ? pal.surface : m_hoverColor);
     QColor bg = hover; bg.setAlphaF(hover.alphaF() * m_level);
-    if (isDown() || isChecked()) bg = m_hoverColor.isEmpty() ? QColor(pal.surfaceHover) : hover.darker(110);
+    if (isDown() || isChecked() || m_forcedDown) bg = m_hoverColor.isEmpty() ? QColor(pal.surfaceHover) : hover.darker(110);
     if (bg.alpha() == 0) return;
     p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen); p.setBrush(bg);
@@ -60,21 +61,38 @@ void AnimatedToolButton::paintEvent(QPaintEvent*) {
 }
 
 WindowButton::WindowButton(Kind k, QWidget* parent) : AnimatedToolButton(parent), m_kind(k) {
-    setFixedSize(46, 40); setRadius(0); setFocusPolicy(Qt::NoFocus);
-    if (k == Close) setHoverColor(QStringLiteral("#E81123"));
-    setToolTip(k == Minimize ? QStringLiteral("Minimize") : k == Maximize ? QStringLiteral("Maximize") : QStringLiteral("Close"));
+    setFixedSize(46, 40); setRadius(0);
+    setFocusPolicy(Qt::TabFocus);   // reachable with Tab; Space/Enter activates
+    const QString name = k == Minimize ? QStringLiteral("Minimize") : k == Maximize ? QStringLiteral("Maximize") : QStringLiteral("Close");
+    setToolTip(name); setAccessibleName(name);
+}
+void WindowButton::keyPressEvent(QKeyEvent* e) {
+    if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) { animateClick(); return; }
+    AnimatedToolButton::keyPressEvent(e);
 }
 void WindowButton::paintEvent(QPaintEvent*) {
     QPainter p(this);
-    paintBackground(p);
     const auto& pal = ThemeManager::current();
-    QColor fg = (m_kind == Close && (hoverLevel() > 0.5 || isDown())) ? QColor(Qt::white) : QColor(pal.text);
+    const bool down = isDown() || m_forcedDown;
+    const qreal lvl = hoverLevel();
+    // Windows caption-button states: hover = surface / #E81123 (close), pressed = surfaceHover / #F1707A (close)
+    QColor bg;
+    if (m_kind == Close) { bg = down ? QColor(0xF1, 0x70, 0x7A) : QColor(0xE8, 0x11, 0x23); if (!down) bg.setAlphaF(lvl); }
+    else { bg = down ? QColor(pal.surfaceHover) : QColor(pal.surface); if (!down) bg.setAlphaF(bg.alphaF() * lvl); }
+    if (bg.alpha() > 0) p.fillRect(rect(), bg);
+    const bool inactive = window() && !window()->isActiveWindow();
+    QColor fg = (m_kind == Close && (lvl > 0.5 || down)) ? QColor(Qt::white) : QColor(inactive ? pal.textSecondary : pal.text);
     // Icon pack glyphs (window-minimize / window-maximize / window-restore / close), 16 px centred.
     const QString name = m_kind == Minimize ? QStringLiteral("window-minimize")
                        : m_kind == Close ? QStringLiteral("close")
                        : (m_max ? QStringLiteral("window-restore") : QStringLiteral("window-maximize"));
     const QPixmap pm = ThemeManager::icon(name, fg.name(), 16).pixmap(QSize(16, 16), devicePixelRatioF());
     p.drawPixmap(QPointF((width() - 16) / 2.0, (height() - 16) / 2.0), pm);
+    if (hasFocus()) {   // keyboard focus ring (Tab only, see focusPolicy)
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(QColor(pal.accent), 2)); p.setBrush(Qt::NoBrush);
+        p.drawRect(QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5));
+    }
 }
 
 ToggleSwitch::ToggleSwitch(QWidget* parent) : QAbstractButton(parent) {

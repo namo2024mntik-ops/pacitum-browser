@@ -12,7 +12,12 @@ public:
     explicit AnimatedToolButton(QWidget* parent = nullptr);
     void setRadius(int r) { m_radius = r; update(); }
     void setHoverColor(const QString& c) { m_hoverColor = c; }   // empty → palette surface
+    // Driven from native non-client messages (e.g. HTMAXBUTTON for Windows 11 snap layouts).
+    void setForcedHover(bool on) { if (on != m_forcedHover) { m_forcedHover = on; animateTo(on || underMouse() ? 1.0 : 0.0); } }
+    void setForcedDown(bool on) { if (on != m_forcedDown) { m_forcedDown = on; update(); } }
 protected:
+    bool m_forcedHover = false;
+    bool m_forcedDown = false;
     void enterEvent(QEnterEvent* e) override;
     void leaveEvent(QEvent* e) override;
     void paintEvent(QPaintEvent* e) override;
@@ -33,8 +38,10 @@ public:
     enum Kind { Minimize, Maximize, Close };
     WindowButton(Kind k, QWidget* parent = nullptr);
     void setMaximized(bool m) { m_max = m; update(); }
+    Kind kind() const { return m_kind; }
 protected:
     void paintEvent(QPaintEvent* e) override;
+    void keyPressEvent(QKeyEvent* e) override;
 private:
     Kind m_kind;
     bool m_max = false;

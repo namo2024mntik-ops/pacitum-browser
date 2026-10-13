@@ -77,7 +77,7 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Network
 )
 if(WIN32)
-    target_link_libraries(PacitumBrowser PRIVATE user32)
+    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32)
 endif()
 
 # Platform specific

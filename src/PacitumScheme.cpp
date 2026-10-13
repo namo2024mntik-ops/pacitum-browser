@@ -5,6 +5,9 @@
 #include <QBuffer>
 #include <QFile>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 void PacitumSchemeHandler::registerScheme() {
     QWebEngineUrlScheme s("pacitum");
@@ -26,12 +29,44 @@ void PacitumSchemeHandler::requestStarted(QWebEngineUrlRequestJob* job) {
     const QString host = job->requestUrl().host();
     QByteArray body;
     QByteArray mime = "text/html";
+    auto svg = [](const QString& name, const QString& cls) {
+        QFile s(QStringLiteral(":/icons/ui/%1.svg").arg(name));
+        if (!s.open(QIODevice::ReadOnly)) return QString();
+        QString t = QString::fromUtf8(s.readAll()).trimmed();
+        t.replace(QStringLiteral(" width=\"24\" height=\"24\""), QString());
+        t.replace(QStringLiteral("<svg "), QStringLiteral("<svg class=\"%1\" aria-hidden=\"true\" ").arg(cls));
+        return t;
+    };
+    if (host == QStringLiteral("action")) {
+        // Calls from the home page (same-origin fetch). Only a fixed set of names is acted on.
+        const QString name = job->requestUrl().path().mid(1);
+        QMap<QString, QString> args;
+        for (const auto& kv : QUrlQuery(job->requestUrl()).queryItems(QUrl::FullyDecoded)) args.insert(kv.first, kv.second);
+        const QString initiator = job->initiator().toString();
+        if (initiator.isEmpty() || initiator.startsWith(QStringLiteral("pacitum:")) || initiator == QStringLiteral("null"))
+            emit homeAction(name, args);
+        auto* buf = new QBuffer(job); buf->setData("ok");
+        job->reply("text/plain", buf);
+        return;
+    }
     if (host == QStringLiteral("newtab") || host.isEmpty()) {
         QFile f(QStringLiteral(":/pages/newtab.html"));
         if (!f.open(QIODevice::ReadOnly)) { job->fail(QWebEngineUrlRequestJob::UrlNotFound); return; }
         QString html = QString::fromUtf8(f.readAll());
+        static const QList<QPair<const char*, const char*>> icons{
+            {"SEARCH", "search"}, {"WEATHER", "weather-partly"}, {"READING", "reading-list"}, {"DOWNLOAD", "download"},
+            {"CUSTOMIZE", "customize"}, {"CLOSE", "close"}, {"UPLOAD", "upload"}, {"PALETTE", "palette"}, {"GRID", "grid"},
+            {"EDIT", "edit"}, {"CHEV", "chevron-right"}, {"CLOCK", "clock"}, {"SYSTEM", "theme-system"}, {"SUN", "sun"}, {"MOON", "moon"}};
+        for (const auto& ic : icons) html.replace(QStringLiteral("%I_%1%").arg(QLatin1String(ic.first)), svg(QLatin1String(ic.second), QStringLiteral("i")));
+        const QJsonObject js{{"chevd", svg(QStringLiteral("chevron-down"), QStringLiteral("i"))}, {"edit12", svg(QStringLiteral("edit"), QStringLiteral("i"))},
+                             {"weather44", svg(QStringLiteral("weather-partly"), QStringLiteral("i"))}, {"weather16", svg(QStringLiteral("weather-partly"), QStringLiteral("i"))},
+                             {"upload", svg(QStringLiteral("upload"), QStringLiteral("i"))}};
+        html.replace(QStringLiteral("%ICONS%"), QString::fromUtf8(QJsonDocument(js).toJson(QJsonDocument::Compact)).replace(QStringLiteral("</"), QStringLiteral("<\\/")));
+        QString data = m_homeData ? m_homeData() : QStringLiteral("{}");
+        data.replace(QStringLiteral("</"), QStringLiteral("<\\/"));
         for (auto it = m_vars.cbegin(); it != m_vars.cend(); ++it) html.replace(QLatin1Char('%') + it.key() + QLatin1Char('%'), it.value());
         html.replace(QStringLiteral("%SEARCH%"), m_search);
+        html.replace(QStringLiteral("%DATA%"), data);   // last: user data is never re-scanned for tokens
         QFile logo(QStringLiteral(":/pages/logo.png"));
         if (logo.open(QIODevice::ReadOnly))
             html.replace(QStringLiteral("qrc:/pages/logo.png"), QStringLiteral("data:image/png;base64,") + QString::fromLatin1(logo.readAll().toBase64()));
@@ -42,14 +77,6 @@ void PacitumSchemeHandler::requestStarted(QWebEngineUrlRequestJob* job) {
         if (!f.open(QIODevice::ReadOnly)) { job->fail(QWebEngineUrlRequestJob::UrlNotFound); return; }
         QString html = QString::fromUtf8(f.readAll());
         for (auto it = m_vars.cbegin(); it != m_vars.cend(); ++it) html.replace(QLatin1Char('%') + it.key() + QLatin1Char('%'), it.value());
-        auto svg = [](const QString& name, const QString& cls) {
-            QFile s(QStringLiteral(":/icons/ui/%1.svg").arg(name));
-            if (!s.open(QIODevice::ReadOnly)) return QString();
-            QString t = QString::fromUtf8(s.readAll()).trimmed();
-            t.replace(QStringLiteral(" width=\"24\" height=\"24\""), QString());
-            t.replace(QStringLiteral("<svg "), QStringLiteral("<svg class=\"%1\" aria-hidden=\"true\" ").arg(cls));
-            return t;
-        };
         html.replace(QStringLiteral("%ARROW%"), svg(QStringLiteral("arrow-right"), QStringLiteral("i")));
         html.replace(QStringLiteral("%I_IMPORT%"), svg(QStringLiteral("import"), QStringLiteral("i")));
         html.replace(QStringLiteral("%I_DEFAULT%"), svg(QStringLiteral("default-browser"), QStringLiteral("i")));

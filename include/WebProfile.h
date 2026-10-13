@@ -13,6 +13,9 @@ void applyWebSettings(QWebEngineSettings* s);
 
 // Disk-backed main profile (Qt 6's defaultProfile() is off-the-record, so cookies would not persist).
 QWebEngineProfile* mainProfile();
+// Guest window process: mainProfile() is off-the-record. Must be set before the first mainProfile() call.
+void setGuestMode(bool on);
+bool guestMode();
 
 // The unmodified QtWebEngine UA (captured before any change).
 QString defaultUserAgent();

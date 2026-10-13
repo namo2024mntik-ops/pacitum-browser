@@ -17,8 +17,13 @@ namespace Pacitum {
 
 WebPrefs& webPrefs() { static WebPrefs p; return p; }
 
+static bool g_guest = false;
+void setGuestMode(bool on) { g_guest = on; }
+bool guestMode() { return g_guest; }
+
 QWebEngineProfile* mainProfile() {
-    static QWebEngineProfile* p = new QWebEngineProfile(QStringLiteral("Pacitum"));
+    // Guest (1.6 profiles): an off-the-record profile -- nothing is written to disk.
+    static QWebEngineProfile* p = g_guest ? new QWebEngineProfile() : new QWebEngineProfile(QStringLiteral("Pacitum"));
     return p;
 }
 

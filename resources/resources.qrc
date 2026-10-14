@@ -1,29 +1,34 @@
 <RCC>
     <qresource prefix="/">
-        <file>icons/ui/widgets.svg</file>
-        <file>icons/ui/weather-partly.svg</file>
-        <file>icons/ui/wallpaper.svg</file>
-        <file>icons/ui/reading-list.svg</file>
+        <file>icons/ui/accessibility.svg</file>
+        <file>icons/ui/ad-blocked.svg</file>
         <file>icons/ui/add.svg</file>
-        <file>icons/ui/audio-playing.svg</file>
-        <file>icons/ui/customize.svg</file>
-        <file>icons/ui/open-in-browser.svg</file>
-        <file>icons/ui/pin-filled.svg</file>
-        <file>icons/ui/site-controls.svg</file>
-        <file>icons/ui/spinner.svg</file>
-        <file>icons/ui/tab-search.svg</file>
+        <file>icons/ui/address.svg</file>
+        <file>icons/ui/ai-assistant.svg</file>
+        <file>icons/ui/annotate.svg</file>
+        <file>icons/ui/archive.svg</file>
+        <file>icons/ui/arrow-right.svg</file>
         <file>icons/ui/arrow-up.svg</file>
+        <file>icons/ui/audio-playing.svg</file>
+        <file>icons/ui/autofill.svg</file>
         <file>icons/ui/back.svg</file>
+        <file>icons/ui/battery-saver.svg</file>
+        <file>icons/ui/bell-ring.svg</file>
         <file>icons/ui/bookmark-add.svg</file>
         <file>icons/ui/bookmark-filled.svg</file>
         <file>icons/ui/bookmark-folder-open.svg</file>
         <file>icons/ui/bookmark-manager.svg</file>
         <file>icons/ui/bookmarks.svg</file>
         <file>icons/ui/bug.svg</file>
+        <file>icons/ui/calendar.svg</file>
         <file>icons/ui/camera-off.svg</file>
         <file>icons/ui/camera.svg</file>
+        <file>icons/ui/cast-stop.svg</file>
         <file>icons/ui/cast.svg</file>
         <file>icons/ui/certificate.svg</file>
+        <file>icons/ui/chat-ai.svg</file>
+        <file>icons/ui/chat.svg</file>
+        <file>icons/ui/check-circle-filled.svg</file>
         <file>icons/ui/check-circle.svg</file>
         <file>icons/ui/check.svg</file>
         <file>icons/ui/chevron-down.svg</file>
@@ -32,14 +37,25 @@
         <file>icons/ui/chevron-up.svg</file>
         <file>icons/ui/clipboard.svg</file>
         <file>icons/ui/clock.svg</file>
+        <file>icons/ui/close-circle.svg</file>
         <file>icons/ui/close-dark.svg</file>
         <file>icons/ui/close-light.svg</file>
         <file>icons/ui/close.svg</file>
         <file>icons/ui/cloud.svg</file>
+        <file>icons/ui/code.svg</file>
+        <file>icons/ui/collections.svg</file>
         <file>icons/ui/console.svg</file>
+        <file>icons/ui/contrast.svg</file>
+        <file>icons/ui/cookie-blocked.svg</file>
         <file>icons/ui/cookie.svg</file>
         <file>icons/ui/copy.svg</file>
+        <file>icons/ui/credit-card.svg</file>
+        <file>icons/ui/crop.svg</file>
+        <file>icons/ui/customize.svg</file>
+        <file>icons/ui/default-browser.svg</file>
+        <file>icons/ui/desktop.svg</file>
         <file>icons/ui/devtools.svg</file>
+        <file>icons/ui/disk.svg</file>
         <file>icons/ui/download-cancel.svg</file>
         <file>icons/ui/download-dangerous.svg</file>
         <file>icons/ui/download-done.svg</file>
@@ -47,6 +63,7 @@
         <file>icons/ui/download-paused.svg</file>
         <file>icons/ui/download-progress.svg</file>
         <file>icons/ui/download.svg</file>
+        <file>icons/ui/drag-handle.svg</file>
         <file>icons/ui/edit.svg</file>
         <file>icons/ui/error.svg</file>
         <file>icons/ui/exit.svg</file>
@@ -55,6 +72,7 @@
         <file>icons/ui/external-link.svg</file>
         <file>icons/ui/eye-off.svg</file>
         <file>icons/ui/eye.svg</file>
+        <file>icons/ui/feedback.svg</file>
         <file>icons/ui/file-archive.svg</file>
         <file>icons/ui/file-audio.svg</file>
         <file>icons/ui/file-code.svg</file>
@@ -63,63 +81,101 @@
         <file>icons/ui/file-text.svg</file>
         <file>icons/ui/file-video.svg</file>
         <file>icons/ui/file.svg</file>
+        <file>icons/ui/filter-off.svg</file>
         <file>icons/ui/filter.svg</file>
         <file>icons/ui/find-next.svg</file>
         <file>icons/ui/find-previous.svg</file>
         <file>icons/ui/find.svg</file>
         <file>icons/ui/fingerprint.svg</file>
+        <file>icons/ui/folder-add.svg</file>
+        <file>icons/ui/folder-filled.svg</file>
         <file>icons/ui/folder.svg</file>
+        <file>icons/ui/font.svg</file>
         <file>icons/ui/forward.svg</file>
         <file>icons/ui/fullscreen-exit.svg</file>
         <file>icons/ui/fullscreen.svg</file>
         <file>icons/ui/globe.svg</file>
         <file>icons/ui/grid.svg</file>
         <file>icons/ui/hamburger.svg</file>
+        <file>icons/ui/heart-filled.svg</file>
+        <file>icons/ui/heart.svg</file>
         <file>icons/ui/help.svg</file>
+        <file>icons/ui/highlight.svg</file>
         <file>icons/ui/history-clear.svg</file>
+        <file>icons/ui/history-search.svg</file>
         <file>icons/ui/history.svg</file>
+        <file>icons/ui/home-filled.svg</file>
         <file>icons/ui/home.svg</file>
         <file>icons/ui/image.svg</file>
+        <file>icons/ui/import.svg</file>
+        <file>icons/ui/incognito-window.svg</file>
         <file>icons/ui/info.svg</file>
         <file>icons/ui/inspect.svg</file>
         <file>icons/ui/key.svg</file>
+        <file>icons/ui/keyboard-shortcut.svg</file>
         <file>icons/ui/keyboard.svg</file>
         <file>icons/ui/link.svg</file>
+        <file>icons/ui/live-caption.svg</file>
         <file>icons/ui/loading.svg</file>
         <file>icons/ui/location-off.svg</file>
         <file>icons/ui/location.svg</file>
+        <file>icons/ui/lock-filled.svg</file>
         <file>icons/ui/lock-open.svg</file>
         <file>icons/ui/lock.svg</file>
         <file>icons/ui/mail.svg</file>
+        <file>icons/ui/memory-saver.svg</file>
         <file>icons/ui/menu.svg</file>
         <file>icons/ui/microphone-off.svg</file>
         <file>icons/ui/microphone.svg</file>
+        <file>icons/ui/minus-circle.svg</file>
+        <file>icons/ui/mobile.svg</file>
         <file>icons/ui/moon.svg</file>
         <file>icons/ui/more-horizontal.svg</file>
+        <file>icons/ui/mouse.svg</file>
         <file>icons/ui/network.svg</file>
         <file>icons/ui/not-secure.svg</file>
+        <file>icons/ui/notes.svg</file>
+        <file>icons/ui/notification-blocked.svg</file>
+        <file>icons/ui/notifications-filled.svg</file>
         <file>icons/ui/notifications-off.svg</file>
         <file>icons/ui/notifications.svg</file>
         <file>icons/ui/offline.svg</file>
+        <file>icons/ui/open-in-browser.svg</file>
+        <file>icons/ui/open-in-new-window.svg</file>
         <file>icons/ui/palette.svg</file>
+        <file>icons/ui/passkey.svg</file>
+        <file>icons/ui/password-manager.svg</file>
         <file>icons/ui/password.svg</file>
         <file>icons/ui/pause.svg</file>
+        <file>icons/ui/permission.svg</file>
         <file>icons/ui/picture-in-picture.svg</file>
+        <file>icons/ui/pin-filled.svg</file>
+        <file>icons/ui/pin.svg</file>
         <file>icons/ui/play.svg</file>
+        <file>icons/ui/plus-circle.svg</file>
         <file>icons/ui/popup-blocked.svg</file>
         <file>icons/ui/print-preview.svg</file>
         <file>icons/ui/print.svg</file>
         <file>icons/ui/private.svg</file>
         <file>icons/ui/profile-add.svg</file>
+        <file>icons/ui/profile-edit.svg</file>
+        <file>icons/ui/profile-filled.svg</file>
         <file>icons/ui/profile-guest.svg</file>
         <file>icons/ui/profile-switch.svg</file>
         <file>icons/ui/profile.svg</file>
+        <file>icons/ui/profiles.svg</file>
+        <file>icons/ui/puzzle.svg</file>
         <file>icons/ui/qr-code.svg</file>
+        <file>icons/ui/qr-scan.svg</file>
         <file>icons/ui/reader-mode.svg</file>
+        <file>icons/ui/reading-list.svg</file>
+        <file>icons/ui/reading-mode-off.svg</file>
         <file>icons/ui/refresh-hard.svg</file>
         <file>icons/ui/reload.svg</file>
+        <file>icons/ui/restart.svg</file>
         <file>icons/ui/screenshot.svg</file>
         <file>icons/ui/search.svg</file>
+        <file>icons/ui/send-to-device.svg</file>
         <file>icons/ui/settings-accessibility.svg</file>
         <file>icons/ui/settings-appearance.svg</file>
         <file>icons/ui/settings-general.svg</file>
@@ -132,16 +188,28 @@
         <file>icons/ui/settings.svg</file>
         <file>icons/ui/share.svg</file>
         <file>icons/ui/shield-check.svg</file>
+        <file>icons/ui/shield-filled.svg</file>
         <file>icons/ui/shield-off.svg</file>
         <file>icons/ui/shield.svg</file>
         <file>icons/ui/sidebar.svg</file>
+        <file>icons/ui/sign-in.svg</file>
+        <file>icons/ui/sign-out.svg</file>
+        <file>icons/ui/site-controls.svg</file>
         <file>icons/ui/site-info.svg</file>
+        <file>icons/ui/sort-asc.svg</file>
+        <file>icons/ui/sort-desc.svg</file>
         <file>icons/ui/sort.svg</file>
+        <file>icons/ui/sound-off.svg</file>
+        <file>icons/ui/sparkle.svg</file>
+        <file>icons/ui/speed.svg</file>
+        <file>icons/ui/spinner.svg</file>
         <file>icons/ui/split-view.svg</file>
         <file>icons/ui/star-filled.svg</file>
         <file>icons/ui/star.svg</file>
         <file>icons/ui/stop.svg</file>
+        <file>icons/ui/store.svg</file>
         <file>icons/ui/sun.svg</file>
+        <file>icons/ui/sync-devices.svg</file>
         <file>icons/ui/sync-error.svg</file>
         <file>icons/ui/sync-off.svg</file>
         <file>icons/ui/sync.svg</file>
@@ -150,25 +218,42 @@
         <file>icons/ui/tab-duplicate.svg</file>
         <file>icons/ui/tab-group.svg</file>
         <file>icons/ui/tab-list.svg</file>
+        <file>icons/ui/tab-move.svg</file>
         <file>icons/ui/tab-mute.svg</file>
         <file>icons/ui/tab-new.svg</file>
         <file>icons/ui/tab-pin.svg</file>
         <file>icons/ui/tab-restore.svg</file>
+        <file>icons/ui/tab-search.svg</file>
+        <file>icons/ui/tab-sleep.svg</file>
+        <file>icons/ui/tablet.svg</file>
+        <file>icons/ui/terminal.svg</file>
         <file>icons/ui/text-size.svg</file>
+        <file>icons/ui/theme-system.svg</file>
+        <file>icons/ui/theme.svg</file>
         <file>icons/ui/tracker-blocked.svg</file>
         <file>icons/ui/translate.svg</file>
         <file>icons/ui/trash.svg</file>
         <file>icons/ui/tune.svg</file>
         <file>icons/ui/unlock-warning.svg</file>
+        <file>icons/ui/unpin.svg</file>
+        <file>icons/ui/update.svg</file>
         <file>icons/ui/upload.svg</file>
+        <file>icons/ui/vertical-tabs.svg</file>
+        <file>icons/ui/video-call.svg</file>
         <file>icons/ui/view-source.svg</file>
         <file>icons/ui/volume.svg</file>
+        <file>icons/ui/vpn.svg</file>
+        <file>icons/ui/wallet.svg</file>
+        <file>icons/ui/wallpaper.svg</file>
         <file>icons/ui/warning.svg</file>
+        <file>icons/ui/weather-partly.svg</file>
+        <file>icons/ui/widgets.svg</file>
         <file>icons/ui/wifi.svg</file>
         <file>icons/ui/window-maximize.svg</file>
         <file>icons/ui/window-minimize.svg</file>
         <file>icons/ui/window-restore.svg</file>
         <file>icons/ui/window.svg</file>
+        <file>icons/ui/workspace.svg</file>
         <file>icons/ui/zoom-in.svg</file>
         <file>icons/ui/zoom-out.svg</file>
         <file>icons/ui/zoom-reset.svg</file>
@@ -182,12 +267,6 @@
         <file>icons/pacitum-icon-512.png</file>
         <file>pages/newtab.html</file>
         <file>pages/welcome.html</file>
-        <file>icons/ui/arrow-right.svg</file>
-        <file>icons/ui/default-browser.svg</file>
-        <file>icons/ui/disk.svg</file>
-        <file>icons/ui/import.svg</file>
-        <file>icons/ui/sparkle.svg</file>
-        <file>icons/ui/theme-system.svg</file>
         <file>pages/logo.png</file>
     </qresource>
 </RCC>

@@ -96,6 +96,13 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_spinTimer = new QTimer(this);
     m_spinTimer->setInterval(50);   // 20 fps spinner is plenty and halves repaint work
     connect(m_spinTimer, &QTimer::timeout, this, &BrowserWindow::tickSpinner);
+    m_sessionTimer = new QTimer(this);
+    m_sessionTimer->setSingleShot(true);
+    m_sessionTimer->setInterval(3000);   // coalesce bursts of navigations / tab changes into one write
+    connect(m_sessionTimer, &QTimer::timeout, this, [this]{
+        const auto tabs = sessionTabs();
+        if (!tabs.isEmpty()) m_session->saveAsync(tabs);
+    });
     setupAdBlocker();
     setupDownloadHandler();
     setupUI();
@@ -337,6 +344,7 @@ void BrowserWindow::createToolbar() {
 }
 
 void BrowserWindow::refreshIcons() {
+    m_reloadBtn->setProperty("pacitumLoading", QVariant());   // theme changed: re-render the reload icon too
     refreshProfileAvatar();
     auto* tm = m_theme;
     m_backBtn->setIcon(tm->icon(QStringLiteral("back")));
@@ -358,7 +366,14 @@ void BrowserWindow::updateNavState() {
     auto* t = activeTab();
     m_backBtn->setEnabled(t && t->canGoBack());
     m_forwardBtn->setEnabled(t && t->canGoForward());
-    refreshIcons();
+    // Only the reload/stop state depends on the tab. (This used to re-render every toolbar icon and
+    // the profile avatar on each tab switch and each load start/finish.)
+    const bool loading = t && t->isLoading();
+    if (m_reloadBtn->property("pacitumLoading").isValid() && m_reloadBtn->property("pacitumLoading").toBool() == loading) return;
+    m_reloadBtn->setProperty("pacitumLoading", loading);
+    const QIcon ic = m_theme->icon(loading ? QStringLiteral("stop") : QStringLiteral("reload"));
+    if (auto* b = qobject_cast<AnimatedToolButton*>(m_reloadBtn)) b->setIconAnimated(ic); else m_reloadBtn->setIcon(ic);
+    m_reloadBtn->setToolTip(loading ? QStringLiteral("Stop loading") : QStringLiteral("Reload (F5)"));
 }
 
 // Letter tile used when a site has no favicon (spec §5.1: letter fallback with site colour).
@@ -401,8 +416,15 @@ void BrowserWindow::updateTabIcon(BrowserTab* tab) {
 }
 
 void BrowserWindow::tickSpinner() {
+    if (isMinimized()) { m_spinTimer->stop(); return; }
     m_spinAngle = (m_spinAngle + 12) % 360;
-    const QIcon ic = Pacitum::spinnerIcon(m_spinAngle, m_theme->palette().accent);
+    // 30 frames per accent colour, rendered once: the old code painted a new pixmap on every tick.
+    static QHash<QString, QVector<QIcon>> frames;
+    const QString accent = QColor(m_theme->palette().accent).name();
+    auto& f = frames[accent];
+    if (f.isEmpty()) { if (frames.size() > 4) { frames.clear(); frames[accent]; } f.resize(30); }
+    QIcon& ic = frames[accent][m_spinAngle / 12];
+    if (ic.isNull()) ic = Pacitum::spinnerIcon(m_spinAngle, m_theme->palette().accent);
     bool any = false;
     for (auto* tw : {m_tabs, m_splitTabs}) {
         if (tw->hasFloatingStrip()) continue;
@@ -536,8 +558,15 @@ void BrowserWindow::newTab(const QString& url) {
     QString u = lazy ? QString() : url.isEmpty() ? PacitumSchemeHandler::newTabUrl() : url;
     auto* tab = new BrowserTab(u, m_privateMode, m_searchEngine, this);
     tab->setZoomFactor(m_zoom->zoom());
-    connect(tab, &BrowserTab::urlChanged, this, &BrowserWindow::updateAddressBar);
+    // Only the active tab may drive the address bar (background tabs that redirect or finish
+    // loading used to overwrite it with their URL, e.g. "welcome" or a stale page).
+    connect(tab, &BrowserTab::urlChanged, this, [this, tab](const QString& u){
+        if (!tab->isPrivate() && !tab->isLazy() && !u.startsWith(QStringLiteral("pacitum:"))) m_history->addVisit(u, tab->currentTitle());
+        if (tab == activeTab()) updateAddressBar(u);
+        scheduleSessionSave();
+    });
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
+    connect(tab, &BrowserTab::titleChanged, this, [this, tab](const QString& t){ if (!tab->isPrivate() && !tab->isLazy()) m_history->updateTitle(tab->currentUrl(), t); });
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);
     // omnibox progress follows the active tab (animations-spec §7)
     connect(tab, &BrowserTab::loadingChanged, this, [this, tab](bool on){ if (tab == activeTab() && on) m_addressBar->progressStarted(); });
@@ -606,6 +635,7 @@ void BrowserWindow::closeTab(int index) {
             m_recentlyClosed.push_back({t->currentUrl(), t->currentTitle()});
             if (m_recentlyClosed.size() > 20) m_recentlyClosed.pop_front();
         }
+        scheduleSessionSave();
         if (m_tabs->count() > 1) { m_tabs->removeTab(idx); guard->deleteLater(); }
         else if (m_splitActive) { m_tabs->removeTab(idx); guard->deleteLater(); toggleSplitView(); }
         else close();
@@ -621,6 +651,11 @@ void BrowserWindow::closeSplitTab(int index) {
 void BrowserWindow::onTabChanged(int index) {
     auto* sender = qobject_cast<PacitumTabWidget*>(QObject::sender());
     if (!sender || index < 0) return;
+    if (m_restoring) { m_activeWidget = sender; return; }   // session restore: done once at the end
+    tabActivated(sender, index);
+}
+
+void BrowserWindow::tabActivated(PacitumTabWidget* sender, int index) {
     m_activeWidget = sender;
     QWidget* w = sender->widget(index);
     // Switching tabs while a page is fullscreen (Ctrl+Tab, a popup opening a tab): leave fullscreen
@@ -657,9 +692,7 @@ void BrowserWindow::navigateToUrl(const QString& url) {
 
 void BrowserWindow::updateAddressBar(const QString& url) {
     m_addressBar->setUrl(url);
-    if (!url.isEmpty() && !url.startsWith(QStringLiteral("about:")) && !url.startsWith(QStringLiteral("pacitum:"))) {
-        auto* t = activeTab(); m_history->addVisit(url, t ? t->currentTitle() : QString{});
-    }
+    // (History is recorded per tab in newTab(); switching tabs is not a visit.)
     // bookmark indicator
     m_addressBar->setBookmarked(m_bookmarks->isBookmarked(url));
 }
@@ -671,7 +704,7 @@ void BrowserWindow::updateTabTitle(const QString& title) {
         int idx = tw->indexOf(sender);
         if (idx >= 0) {   // full title: the floating tab fades the overflow instead of "…"
             tw->setTabText(idx, title); tw->setTabToolTip(idx, title);
-            if (tw == m_tabs && idx == m_tabs->currentIndex()) setWindowTitle(title + QStringLiteral(" — Pacitum Browser"));
+            if (sender == activeTab()) setWindowTitle(title + QStringLiteral(" — Pacitum Browser"));
             break;
         }
     }
@@ -1195,6 +1228,10 @@ void BrowserWindow::restoreOrNewTab(){
     if (startup == QStringLiteral("restore")) {
         auto tabs = m_session->restore();
         if (!tabs.isEmpty()) {
+            // Restoring N tabs used to run the full tab-switch path (address bar, history, icons,
+            // fade, nav state) N times during startup; it now runs once for the tab that ends up active.
+            m_restoring = true;
+            struct Done { BrowserWindow* w; ~Done(){ w->m_restoring = false; if (w->m_tabs->currentIndex() >= 0) w->tabActivated(w->m_tabs, w->m_tabs->currentIndex()); } } done{this};
             // Only the active (last) tab loads now; the others load on first activation.
             for (int i = 0; i < tabs.size(); ++i) {
                 if (i == tabs.size() - 1) { newTab(tabs[i].url); break; }
@@ -1212,9 +1249,9 @@ void BrowserWindow::restoreOrNewTab(){
 
 void BrowserWindow::closeEvent(QCloseEvent* e){
     if (m_firstRun) FirstRunBridge::markFirstRunDone();   // the welcome flow is shown once
-    QVector<SessionTab> tabs;
-    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i)))
-        if (!t->currentUrl().startsWith(QStringLiteral("pacitum://welcome"))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
+    m_sessionTimer->stop();
+    m_session->waitForPendingSave();
+    const auto tabs = sessionTabs();
     if(!tabs.isEmpty()) m_session->save(tabs);
     auto s=readSettings();
     if(s.value(QStringLiteral("clear_on_exit")).toBool(false)){
@@ -1224,6 +1261,17 @@ void BrowserWindow::closeEvent(QCloseEvent* e){
         Pacitum::mainProfile()->clearAllVisitedLinks();
     }
     QMainWindow::closeEvent(e);
+}
+
+QVector<SessionTab> BrowserWindow::sessionTabs() const {
+    QVector<SessionTab> tabs;
+    for(int i=0;i<m_tabs->count();++i) if(auto* t=qobject_cast<BrowserTab*>(m_tabs->widget(i)))
+        if (!t->isPrivate() && !t->currentUrl().isEmpty() && !t->currentUrl().startsWith(QStringLiteral("pacitum://welcome"))) tabs.push_back({t->currentUrl(), t->currentTitle(), false});
+    return tabs;
+}
+
+void BrowserWindow::scheduleSessionSave() {
+    if (m_sessionTimer && !m_noBackgroundUpdates) m_sessionTimer->start();
 }
 
 void BrowserWindow::keyPressEvent(QKeyEvent* e){
@@ -1242,6 +1290,10 @@ void BrowserWindow::changeEvent(QEvent* e) {
         for (auto* tw : {m_tabs, m_splitTabs})
             if (tw) if (auto* b = qobject_cast<PacitumTabBar*>(tw->stripBar())) b->setSpinnerSuspended(minimized);
         if (minimized) m_spinTimer->stop();
+        // Minimized: hide the visible pages from Chromium (rAF/timers throttled like a background
+        // tab) and let idle background tabs freeze after 1 minute instead of 10.
+        for (auto* tw : {m_tabs, m_splitTabs})
+            if (tw) for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) t->setWindowMinimized(minimized);
         else if (m_tabs) for (int i = 0; i < m_tabs->count(); ++i)
             if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->isLoading()) { updateTabIcon(t); }
         // The OS/user left fullscreen some other way (Win+Down, Win+Shift+arrows, display change):

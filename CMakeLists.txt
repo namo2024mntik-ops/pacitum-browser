@@ -39,6 +39,7 @@ set(SOURCES
     src/AppSettings.cpp
     src/Updater.cpp
     src/StressTest.cpp
+    src/PerfTest.cpp
     src/ResizeTest.cpp
 )
 
@@ -90,7 +91,7 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Concurrent
 )
 if(WIN32)
-    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32)
+    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32 psapi)
 endif()
 
 # Platform specific

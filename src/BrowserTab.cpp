@@ -150,9 +150,21 @@ void BrowserTab::maybeFreeze() {
 
 void BrowserTab::setNoFreeze(bool on) { m_noFreeze = on; if (on) ensureActive(); }
 
+void BrowserTab::setWindowMinimized(bool on) {
+    if (m_windowMinimized == on || !m_page) return;
+    m_windowMinimized = on;
+    if (isVisible()) {
+        // The shown tab of a minimized window: Chromium still treated it as visible and ran
+        // requestAnimationFrame, CSS animations and video at full rate. Hidden pages are throttled.
+        if (!m_noFreeze || !on) m_page->setVisible(!on);
+    } else if (m_freezeTimer && m_freezeTimer->isActive()) {
+        m_freezeTimer->start(on ? kFreezeMinimizedMs : kFreezeAfterMs);   // background tab: freeze sooner while minimized
+    }
+}
+
 void BrowserTab::hideEvent(QHideEvent* e) {
     QWidget::hideEvent(e);
-    if (!e->spontaneous() && s_freezeEnabled && m_freezeTimer) m_freezeTimer->start();   // tab switched away (not window minimize)
+    if (!e->spontaneous() && s_freezeEnabled && m_freezeTimer) m_freezeTimer->start(m_windowMinimized ? kFreezeMinimizedMs : kFreezeAfterMs);   // tab switched away (not window minimize)
 }
 
 void BrowserTab::applyWebSettings() { Pacitum::applyWebSettings(m_view->settings()); }
@@ -184,6 +196,7 @@ void BrowserTab::setLazyUrl(const QString& url, const QString& title) {
 void BrowserTab::showEvent(QShowEvent* e) {
     QWidget::showEvent(e);
     ensureActive();   // thaw a frozen tab before it paints
+    if (m_page && !m_windowMinimized && !m_page->isVisible()) m_page->setVisible(true);
     if (!m_pendingUrl.isEmpty()) { const QString u = m_pendingUrl; m_pendingUrl.clear(); loadUrl(u); }
 }
 

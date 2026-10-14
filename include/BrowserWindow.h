@@ -27,6 +27,7 @@ class HistoryManager;
 class BookmarkManager;
 class DownloadManager;
 class SessionManager;
+struct SessionTab;
 class ZoomController;
 class FirstRunBridge;
 class QWebChannel;
@@ -148,6 +149,7 @@ private:
     void handleHomeAction(const QString& action, const QMap<QString, QString>& args);
     QString homeData();
 public:
+    void runPerfTest();
     void runStressTest();              // --stress-test (CI): tabs, switching, fullscreen, loads
     void runResizeTest();              // --resize-test (CI): window/client/web view geometry after resizes
 private:
@@ -207,6 +209,11 @@ private:
     WindowButton* m_closeBtn = nullptr;
     QTimer* m_spinTimer = nullptr;
     int m_spinAngle = 0;
+    QTimer* m_sessionTimer = nullptr;              // debounced crash-safe session save (worker thread)
+    void scheduleSessionSave();
+    bool m_restoring = false;
+    void tabActivated(class PacitumTabWidget* tw, int index);
+    QVector<SessionTab> sessionTabs() const;
     bool m_animations = true;
     // First-run welcome flow (firstrun-spec.md)
     FirstRunBridge* m_firstRun = nullptr;

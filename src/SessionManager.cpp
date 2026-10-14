@@ -1,5 +1,8 @@
 #include "SessionManager.h"
 #include <QFile>
+#include <QSaveFile>
+#include <QMutex>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -11,11 +14,20 @@ bool SessionManager::save(const QVector<SessionTab>& tabs) {
     QJsonArray arr;
     for (auto &t : tabs) arr.append(QJsonObject{{"url", t.url},{"title", t.title},{"pinned", t.pinned}});
     QJsonObject obj{{"timestamp", QDateTime::currentSecsSinceEpoch()}, {"tabs", arr}};
-    QFile f(m_file);
-    if (!f.open(QIODevice::WriteOnly|QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(obj).toJson(QJsonDocument::Indented));
-    return true;
+    const QByteArray data = QJsonDocument(obj).toJson(QJsonDocument::Indented);
+    // Atomic (temp file + rename): a crash or power loss mid-write no longer leaves an empty session.
+    static QMutex mx; QMutexLocker lk(&mx);
+    QSaveFile f(m_file);
+    if (!f.open(QIODevice::WriteOnly)) return false;
+    f.write(data);
+    return f.commit();
 }
+
+void SessionManager::saveAsync(const QVector<SessionTab>& tabs) {
+    m_last = QtConcurrent::run([file = m_file, tabs]{ SessionManager(file).save(tabs); });
+}
+
+void SessionManager::waitForPendingSave() { m_last.waitForFinished(); }
 
 QVector<SessionTab> SessionManager::restore() {
     QFile f(m_file);

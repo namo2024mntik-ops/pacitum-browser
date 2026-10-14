@@ -61,8 +61,8 @@ jobs:
           Get-Content smoke\crash.log -ErrorAction SilentlyContinue
           Get-ChildItem dist -Name | Out-File smoke\dist-files.txt
           Get-ChildItem dist -Recurse -Name | Out-File -Append smoke\dist-files.txt
-          $tl = Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-String 'window exposed \(time-to-window\)' | Select-Object -First 1
-          "time-to-window: $tl" | Tee-Object smoke\timing.txt
+          $tl = Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-String 'time-to-window|time-to-first-paint|time-to-first-page'
+          "startup timing: $($tl -join ' | ')" | Tee-Object smoke\timing.txt
           if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
       - name: Resize test (Qt resize, SetWindowPos, live drag, maximize/restore)
         shell: pwsh
@@ -117,6 +117,36 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: stress-test, path: stress/, if-no-files-found: ignore }
+      - name: Single-instance handoff test (second launch passes its URL to the running window)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log","$log\handoff.log" -ErrorAction SilentlyContinue
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--handoff-test',"$PWD\tests\resize-test.html" -PassThru
+          if (-not $p.WaitForExit(120000)) { Write-Host "handoff test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          New-Item -ItemType Directory -Force handoff | Out-Null
+          Copy-Item "$log\startup.log","$log\handoff.log","$log\crash.log" handoff\ -ErrorAction SilentlyContinue
+          Get-Content handoff\startup.log -ErrorAction SilentlyContinue | Select-String 'HANDOFF|handoff|WARN|CRITICAL' | ForEach-Object { $_.Line }
+          Get-Content handoff\handoff.log -ErrorAction SilentlyContinue
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path handoff\startup.log -Pattern 'HANDOFF OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path handoff\crash.log)) { Write-Error "HANDOFF TEST FAILED"; exit 1 }
+      - name: Perf test (RSS with 13 tabs, tab switching, CPU while minimized)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--perf-test' -PassThru
+          if (-not $p.WaitForExit(150000)) { Write-Host "perf test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          New-Item -ItemType Directory -Force perf | Out-Null
+          Copy-Item "$log\startup.log","$log\crash.log" perf\ -ErrorAction SilentlyContinue
+          Get-Content perf\startup.log -ErrorAction SilentlyContinue | Select-String 'PERF|time-to|first page' | ForEach-Object { $_.Line } | Tee-Object perf\numbers.txt
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path perf\startup.log -Pattern 'PERF OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path perf\crash.log)) { Write-Error "PERF TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: handoff-perf-test, path: "handoff/\nperf/", if-no-files-found: ignore }
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }

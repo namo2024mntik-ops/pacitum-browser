@@ -12,6 +12,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLocalServer>
+#include <atomic>
+#include <QElapsedTimer>
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QProgressBar>
+#include <QFutureWatcher>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QLocalSocket>
 #include <QLockFile>
 #include <QPainter>
@@ -113,7 +120,10 @@ static QStringList legacyFiles(const QString& root) {
     }
     return out;
 }
-static bool copyVerified(const QString& from, const QString& to, const QStringList& files, QString* log) {
+static bool copyVerified(const QString& from, const QString& to, const QStringList& files, QString* log,
+                         const std::function<void(qint64, qint64)>& progress = {}) {
+    qint64 total = 0, done = 0;
+    if (progress) { for (const QString& rel : files) total += QFileInfo(from + QLatin1Char('/') + rel).size(); progress(0, total); }
     for (const QString& rel : files) {
         const QString s = from + QLatin1Char('/') + rel, d = to + QLatin1Char('/') + rel;
         QDir().mkpath(QFileInfo(d).absolutePath());
@@ -123,6 +133,7 @@ static bool copyVerified(const QString& from, const QString& to, const QStringLi
         if (QFileInfo(s).size() != QFileInfo(d).size() || fileHash(s) != fileHash(d)) {
             if (log) *log += QStringLiteral("verify failed: %1\n").arg(rel); return false;
         }
+        if (progress) { done += QFileInfo(s).size(); progress(done, total); }
     }
     return true;
 }
@@ -138,7 +149,7 @@ static QJsonObject readJson(const QString& path) {
     const auto d = QJsonDocument::fromJson(f.readAll()); return d.isObject() ? d.object() : QJsonObject{};
 }
 
-bool ProfileManager::migrateLegacy(const QString& root, QString* log) {
+bool ProfileManager::migrateLegacy(const QString& root, QString* log, const std::function<void(qint64, qint64)>& progress) {
     const QString regPath = root + QLatin1Char('/') + kRegistry;
     const QJsonObject reg = readJson(regPath);
     if (reg.value("profiles").isArray() && !reg.value("profiles").toArray().isEmpty()) {
@@ -156,9 +167,13 @@ bool ProfileManager::migrateLegacy(const QString& root, QString* log) {
             if (log) *log += QStringLiteral("kept unverified folder as %1\n").arg(aside);
         }
         if (!QFileInfo::exists(target)) {
-            QDir(staging).removeRecursively();      // leftover of an interrupted copy (copy only, never the source)
+            if (QFileInfo::exists(staging)) {       // leftover of an interrupted copy (copy only, never the source)
+                const bool removed = QDir(staging).removeRecursively();
+                pacitumLog(QStringLiteral("profiles: leftover %1 from an interrupted migration %2").arg(staging, removed ? QStringLiteral("removed") : QStringLiteral("could NOT be fully removed")));
+                if (log) *log += QStringLiteral("cleaned up leftover default.migrating\n");
+            }
             QDir().mkpath(staging);
-            if (!copyVerified(root, staging, files, log)) return false;
+            if (!copyVerified(root, staging, files, log, progress)) return false;
             if (!QDir().rename(staging, target)) { if (log) *log += QStringLiteral("rename failed\n"); return false; }
         }
         if (log) *log += QStringLiteral("migrated %1 files into profiles/default (originals kept as backup)\n").arg(files.size());
@@ -188,7 +203,44 @@ bool ProfileManager::init(const QString& root) {
     for (const auto& d : QDir(root + QStringLiteral("/profiles")).entryList({QStringLiteral(".deleted-*")}, QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot))
         QDir(root + QStringLiteral("/profiles/") + d).removeRecursively();   // leftovers of a delete that hit locked files
     QString log;
-    const bool ok = migrateLegacy(root, &log);
+    // Big pre-1.6 profiles (GBs of web storage) take many seconds to copy and verify. Run the copy on
+    // a worker and, once it is clearly not instant, show a small progress window -- a blank 20+ s
+    // startup made people kill the process, which restarted the copy from scratch next time.
+    std::atomic<qint64> done{0}, total{0};
+    QFuture<bool> job = QtConcurrent::run([&]{ return migrateLegacy(root, &log, [&](qint64 d, qint64 t){ done = d; total = t; }); });
+    if (!job.isFinished()) {
+        QEventLoop loop;
+        QFutureWatcher<bool> watch;
+        QObject::connect(&watch, &QFutureWatcher<bool>::finished, &loop, &QEventLoop::quit);
+        watch.setFuture(job);
+        QWidget* win = nullptr; QProgressBar* bar = nullptr; QLabel* detail = nullptr;
+        QTimer tick; tick.setInterval(100);
+        QElapsedTimer since; since.start();
+        QObject::connect(&tick, &QTimer::timeout, &loop, [&]{
+            if (!win && since.elapsed() > 700 && total > 0) {
+                win = new QWidget(nullptr, Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
+                win->setWindowTitle(QStringLiteral("Pacitum Browser"));
+                auto* lay = new QVBoxLayout(win); lay->setContentsMargins(24, 20, 24, 20); lay->setSpacing(10);
+                auto* title = new QLabel(QStringLiteral("Updating your profile\u2026"), win);
+                QFont f = title->font(); f.setPixelSize(15); f.setBold(true); title->setFont(f);
+                auto* sub = new QLabel(QStringLiteral("This happens once. Please don't close Pacitum."), win);
+                bar = new QProgressBar(win); bar->setRange(0, 1000); bar->setTextVisible(false); bar->setFixedHeight(6);
+                detail = new QLabel(win);
+                lay->addWidget(title); lay->addWidget(sub); lay->addWidget(bar); lay->addWidget(detail);
+                win->setFixedWidth(380); win->show();
+                pacitumLog(QStringLiteral("profiles: migration progress window shown (%1 MB)").arg(total / 1048576));
+            }
+            if (win && total > 0) {
+                bar->setValue(int(1000.0 * done / total));
+                detail->setText(QStringLiteral("%1 of %2 MB").arg(done / 1048576).arg(total / 1048576));
+            }
+        });
+        tick.start();
+        if (!job.isFinished()) loop.exec();
+        tick.stop();
+        delete win;
+    }
+    const bool ok = job.result();
     pacitumLog(QStringLiteral("profiles: %1").arg(log.trimmed().replace(QLatin1Char('\n'), QStringLiteral("; "))));
     if (!ok) pacitumLog(QStringLiteral("profiles: MIGRATION FAILED, legacy data untouched"));
     for (const auto& p : profiles()) QDir().mkpath(profileDir(p.id));
@@ -298,8 +350,11 @@ bool ProfileManager::handOff(const QString& id, const QStringList& urls) const {
     if (!s.waitForConnected(500)) return false;
     QByteArray msg = "open\n";
     for (const auto& u : urls) msg += "url " + u.toUtf8() + '\n';
+    msg += "end\n";   // the whole request is in; older instances ignore this line
     s.write(msg); s.waitForBytesWritten(1000);
-    s.waitForReadyRead(1500);   // "ok" from the running instance
+    // "ok" from the running instance. It may still be starting up (no event loop yet): the
+    // request stays queued in the socket and is handled then, so this is not a failure.
+    s.waitForReadyRead(3000);
     s.disconnectFromServer();
     return true;
 }
@@ -315,9 +370,16 @@ void ProfileManager::startServer(const QString& id) {
     connect(m_server, &QLocalServer::newConnection, this, [this]{
         while (auto* c = m_server->nextPendingConnection()) {
             connect(c, &QLocalSocket::disconnected, c, &QObject::deleteLater);
-            connect(c, &QLocalSocket::readyRead, c, [this, c]{
-                if (!c->canReadLine()) return;
-                const QByteArray all = c->readAll();
+            // The request can arrive in several chunks (long URL lists): only handle it once it is
+            // complete ("end" line, or the sender disconnected). It used to be parsed on the first
+            // line, so URLs after the first chunk were dropped.
+            auto handle = [this, c](bool final){
+                QByteArray all = c->property("pacitumBuf").toByteArray() + c->readAll();
+                const bool isOpen = all.startsWith("open\n");
+                const bool complete = isOpen ? (all.contains("\nend\n") || final) : all.endsWith('\n') || final;
+                if (!complete) { c->setProperty("pacitumBuf", all); return; }
+                c->setProperty("pacitumBuf", QByteArray());
+                if (all.isEmpty()) return;
                 QStringList urls; bool open = false;
                 for (const QByteArray& line : all.split('\n')) {
                     if (line == "open") open = true;
@@ -326,7 +388,10 @@ void ProfileManager::startServer(const QString& id) {
                     else if (line == "reload-self") { m_cacheStamp = -1; emit profilesChanged(); emit currentProfileChanged(); }
                 }
                 if (open) { c->write("ok\n"); c->flush(); emit activateRequested(urls); }
-            });
+            };
+            connect(c, &QLocalSocket::readyRead, c, [handle]{ handle(false); });
+            connect(c, &QLocalSocket::disconnected, c, [handle]{ handle(true); });
+            if (c->bytesAvailable()) handle(false);
         }
     });
 }

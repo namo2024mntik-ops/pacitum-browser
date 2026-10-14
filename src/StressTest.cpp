@@ -19,6 +19,8 @@
 #include <memory>
 #include <QPointer>
 #include <QMouseEvent>
+#include <QUrl>
+#include "AddressBar.h"
 
 void pacitumLog(const QString& line);
 
@@ -109,6 +111,11 @@ void BrowserWindow::runStressTest() {
             timer->stop();
             if (m_chromeHidden) finishExitFullscreen();
             st->import.waitForFinished();
+            // 1.6.5: the address bar must show the active tab's URL, never a background tab's.
+            if (auto* t = activeTab(); t && !t->currentUrl().isEmpty() && m_addressBar->currentUrl() != t->currentUrl()) {
+                pacitumLog(QStringLiteral("STRESS FAIL address bar '%1' while active tab is '%2'").arg(m_addressBar->currentUrl().left(80), t->currentUrl().left(80)));
+                QCoreApplication::exit(6); return;
+            }
             // 1.6: the home page (pacitum://newtab) must render and its script must run.
             newTab(QStringLiteral("pacitum://newtab"));
             QPointer<BrowserTab> home = activeTab();

@@ -3,6 +3,7 @@
 #include <QString>
 #include <QVector>
 #include <QMutex>
+#include <QFuture>
 
 struct HistoryEntry {
     QString url;
@@ -12,12 +13,17 @@ struct HistoryEntry {
 };
 
 class QThread;
+class QTimer;
 class HistoryManager {
 public:
     explicit HistoryManager(const QString& dbPath = QStringLiteral("browser_history.db"));
     ~HistoryManager();
 
+    // Visits are queued and written in one transaction on a worker thread (~1.5 s debounce), so
+    // navigation never waits for SQLite on the UI thread. Reads flush the queue first.
     void addVisit(const QString& url, const QString& title = {}, bool typed = false);
+    void updateTitle(const QString& url, const QString& title);   // queued like addVisit
+    void flush();                                                  // write the queue now (blocking)
     QVector<HistoryEntry> search(const QString& query, int limit = 50) const;
     QVector<HistoryEntry> recent(int limit = 30) const;
     QVector<HistoryEntry> topSites(int limit = 10) const;
@@ -36,4 +42,11 @@ private:
     QString m_dbPath;
     QThread* m_owner = nullptr;
     mutable QMutex m_mutex;
+    struct Pending { QString url, title; bool typed = false; bool visit = true; int visits = 0; double at = 0; };
+    mutable QMutex m_queueMutex;
+    mutable QVector<Pending> m_queue;
+    QTimer* m_flushTimer = nullptr;
+    QFuture<void> m_writer;
+    void scheduleFlush();
+    void writeQueue() const;   // drains m_queue (any thread)
 };

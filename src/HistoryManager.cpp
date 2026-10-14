@@ -6,6 +6,8 @@
 #include <QMutexLocker>
 #include <QUuid>
 #include <QThread>
+#include <QTimer>
+#include <QtConcurrent/QtConcurrentRun>
 
 static QString connName() { return QStringLiteral("history_%1").arg(QUuid::createUuid().toString()); }
 
@@ -21,9 +23,20 @@ HistoryManager::HistoryManager(const QString& dbPath) : m_conn(connName()), m_db
     db.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=3000"));
     db.open();
     initDb();
+    m_flushTimer = new QTimer;
+    m_flushTimer->setSingleShot(true);
+    m_flushTimer->setInterval(1500);
+    QObject::connect(m_flushTimer, &QTimer::timeout, m_flushTimer, [this]{
+        // The SQL itself runs on a pool thread (own connection); m_mutex keeps it ordered with reads.
+        if (m_writer.isRunning()) { m_flushTimer->start(); return; }
+        m_writer = QtConcurrent::run([this]{ writeQueue(); });
+    });
 }
 
 HistoryManager::~HistoryManager() {
+    delete m_flushTimer; m_flushTimer = nullptr;
+    m_writer.waitForFinished();
+    writeQueue();                // pending visits are never lost on exit
     QMutexLocker lk(&m_mutex);   // waits for a worker that is still inside a call
     {
         auto db = QSqlDatabase::database(m_conn, false);
@@ -69,27 +82,67 @@ void HistoryManager::initDb() const {
 
 void HistoryManager::addVisit(const QString& url, const QString& title, bool typed) {
     if (url.isEmpty() || url.startsWith(QStringLiteral("about:"))) return;
+    {
+        QMutexLocker q(&m_queueMutex);
+        const double now = QDateTime::currentSecsSinceEpoch();
+        // Coalesce repeats of the last URL (typed visit + its urlChanged, redirects back to the same page).
+        if (!m_queue.isEmpty() && m_queue.last().url == url && m_queue.last().visit) {
+            auto& p = m_queue.last(); p.typed |= typed; p.at = now; if (!title.isEmpty()) p.title = title;
+        } else m_queue.push_back({url, title, typed, true, 1, now});
+    }
+    scheduleFlush();
+}
+
+void HistoryManager::updateTitle(const QString& url, const QString& title) {
+    if (url.isEmpty() || title.isEmpty() || url.startsWith(QStringLiteral("about:"))) return;
+    {
+        QMutexLocker q(&m_queueMutex);
+        for (int i = m_queue.size() - 1; i >= 0; --i)
+            if (m_queue[i].url == url) { m_queue[i].title = title; return; }   // still queued: no extra row
+        m_queue.push_back({url, title, false, false, 0, 0});
+    }
+    scheduleFlush();
+}
+
+void HistoryManager::scheduleFlush() {
+    if (m_flushTimer && QThread::currentThread() == m_owner) { if (!m_flushTimer->isActive()) m_flushTimer->start(); }
+    else writeQueue();   // other threads (or after shutdown started): write directly
+}
+
+void HistoryManager::flush() { writeQueue(); }
+
+void HistoryManager::writeQueue() const {
     QMutexLocker lk(&m_mutex);
+    QVector<Pending> items;
+    { QMutexLocker q(&m_queueMutex); items.swap(m_queue); }
+    if (items.isEmpty()) return;
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
     auto db = QSqlDatabase::database(cn);
-    QSqlQuery q(db);
-    q.prepare(QStringLiteral("SELECT id, visit_count FROM history WHERE url=?"));
-    q.addBindValue(url);
-    q.exec();
-    double now = QDateTime::currentSecsSinceEpoch();
-    if (q.next()) {
-        QSqlQuery u(db);
-        u.prepare(QStringLiteral("UPDATE history SET visit_count=visit_count+1, last_visit_time=?, title=?, visit_time=? WHERE id=?"));
-        u.addBindValue(now); u.addBindValue(title.left(500)); u.addBindValue(now); u.addBindValue(q.value(0).toLongLong());
-        u.exec();
-    } else {
-        QSqlQuery ins(db);
+    db.transaction();
+    {
+        QSqlQuery sel(db), upd(db), ins(db), ttl(db);
+        sel.prepare(QStringLiteral("SELECT id FROM history WHERE url=?"));
+        upd.prepare(QStringLiteral("UPDATE history SET visit_count=visit_count+?, last_visit_time=?, title=CASE WHEN ?='' THEN title ELSE ? END, visit_time=?, typed_count=typed_count+? WHERE id=?"));
         ins.prepare(QStringLiteral("INSERT INTO history (url,title,visit_time,last_visit_time,typed_count) VALUES (?,?,?,?,?)"));
-        ins.addBindValue(url); ins.addBindValue(title.left(500)); ins.addBindValue(now); ins.addBindValue(now); ins.addBindValue(typed?1:0);
-        ins.exec();
+        ttl.prepare(QStringLiteral("UPDATE history SET title=? WHERE id=?"));
+        for (const auto& p : items) {
+            const QString title = p.title.left(500);
+            sel.addBindValue(p.url); sel.exec();
+            const bool found = sel.next();
+            const qlonglong id = found ? sel.value(0).toLongLong() : -1;
+            sel.finish();
+            if (!p.visit) { if (found) { ttl.addBindValue(title); ttl.addBindValue(id); ttl.exec(); } continue; }
+            if (found) {
+                upd.addBindValue(p.visits); upd.addBindValue(p.at); upd.addBindValue(title); upd.addBindValue(title);
+                upd.addBindValue(p.at); upd.addBindValue(p.typed ? 1 : 0); upd.addBindValue(id); upd.exec();
+            } else {
+                ins.addBindValue(p.url); ins.addBindValue(title); ins.addBindValue(p.at); ins.addBindValue(p.at); ins.addBindValue(p.typed ? 1 : 0);
+                ins.exec();
+            }
+        }
     }
-    
+    db.commit();
 }
 
 int HistoryManager::importVisits(const QVector<QPair<QString, QString>>& items) {
@@ -125,6 +178,7 @@ int HistoryManager::importVisits(const QVector<QPair<QString, QString>>& items) 
 }
 
 QVector<HistoryEntry> HistoryManager::search(const QString& query, int limit) const {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
@@ -140,6 +194,7 @@ QVector<HistoryEntry> HistoryManager::search(const QString& query, int limit) co
 }
 
 QVector<HistoryEntry> HistoryManager::recent(int limit) const {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
@@ -152,6 +207,7 @@ QVector<HistoryEntry> HistoryManager::recent(int limit) const {
 }
 
 QVector<HistoryEntry> HistoryManager::topSites(int limit) const {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
@@ -164,6 +220,7 @@ QVector<HistoryEntry> HistoryManager::topSites(int limit) const {
 }
 
 void HistoryManager::clear() {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
@@ -172,6 +229,7 @@ void HistoryManager::clear() {
     
 }
 void HistoryManager::deleteUrl(const QString& url) {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};
@@ -189,6 +247,7 @@ void HistoryManager::cleanupOld(int days) {
     
 }
 int HistoryManager::count() const {
+    writeQueue();
     QMutexLocker lk(&m_mutex);
     const QString cn = threadConn();
     struct Rel { const HistoryManager* h; QString c; ~Rel(){ h->releaseThreadConn(c); } } rel{this, cn};

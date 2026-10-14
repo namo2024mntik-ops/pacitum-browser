@@ -45,6 +45,8 @@ public:
     void fadeIn();
     void ensureActive();                 // thaw a frozen page before touching it
     void setNoFreeze(bool on);           // e.g. while the page is fullscreen
+    void setWindowMinimized(bool on);    // hide the page from Chromium / freeze idle background tabs sooner
+    bool isPrivate() const { return m_private; }
     static bool s_freezeEnabled;         // settings: "freeze_background_tabs"
     // Session restore: remember the URL/title but only create the page load when first shown.
     void setLazyUrl(const QString& url, const QString& title);
@@ -106,5 +108,7 @@ private:
     int m_crashCount = 0;
     qint64 m_lastCrashMs = 0;
     static constexpr int kFreezeAfterMs = 10 * 60 * 1000;
+    static constexpr int kFreezeMinimizedMs = 60 * 1000;
+    bool m_windowMinimized = false;
     void maybeFreeze();
 };

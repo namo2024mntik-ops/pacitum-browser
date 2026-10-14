@@ -298,8 +298,11 @@ bool ProfileManager::handOff(const QString& id, const QStringList& urls) const {
     if (!s.waitForConnected(500)) return false;
     QByteArray msg = "open\n";
     for (const auto& u : urls) msg += "url " + u.toUtf8() + '\n';
+    msg += "end\n";   // the whole request is in; older instances ignore this line
     s.write(msg); s.waitForBytesWritten(1000);
-    s.waitForReadyRead(1500);   // "ok" from the running instance
+    // "ok" from the running instance. It may still be starting up (no event loop yet): the
+    // request stays queued in the socket and is handled then, so this is not a failure.
+    s.waitForReadyRead(3000);
     s.disconnectFromServer();
     return true;
 }
@@ -315,9 +318,16 @@ void ProfileManager::startServer(const QString& id) {
     connect(m_server, &QLocalServer::newConnection, this, [this]{
         while (auto* c = m_server->nextPendingConnection()) {
             connect(c, &QLocalSocket::disconnected, c, &QObject::deleteLater);
-            connect(c, &QLocalSocket::readyRead, c, [this, c]{
-                if (!c->canReadLine()) return;
-                const QByteArray all = c->readAll();
+            // The request can arrive in several chunks (long URL lists): only handle it once it is
+            // complete ("end" line, or the sender disconnected). It used to be parsed on the first
+            // line, so URLs after the first chunk were dropped.
+            auto handle = [this, c](bool final){
+                QByteArray all = c->property("pacitumBuf").toByteArray() + c->readAll();
+                const bool isOpen = all.startsWith("open\n");
+                const bool complete = isOpen ? (all.contains("\nend\n") || final) : all.endsWith('\n') || final;
+                if (!complete) { c->setProperty("pacitumBuf", all); return; }
+                c->setProperty("pacitumBuf", QByteArray());
+                if (all.isEmpty()) return;
                 QStringList urls; bool open = false;
                 for (const QByteArray& line : all.split('\n')) {
                     if (line == "open") open = true;
@@ -326,7 +336,10 @@ void ProfileManager::startServer(const QString& id) {
                     else if (line == "reload-self") { m_cacheStamp = -1; emit profilesChanged(); emit currentProfileChanged(); }
                 }
                 if (open) { c->write("ok\n"); c->flush(); emit activateRequested(urls); }
-            });
+            };
+            connect(c, &QLocalSocket::readyRead, c, [handle]{ handle(false); });
+            connect(c, &QLocalSocket::disconnected, c, [handle]{ handle(true); });
+            if (c->bytesAvailable()) handle(false);
         }
     });
 }

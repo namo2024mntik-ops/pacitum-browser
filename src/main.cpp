@@ -32,6 +32,11 @@
 #include <QUrl>
 #include <QTextStream>
 #include <QWindow>
+#include <QProcess>
+#include <QFileInfo>
+#include "BrowserTab.h"
+#include <ctime>
+#include <memory>
 #include <exception>
 #include <cstdio>
 
@@ -44,6 +49,11 @@
 static QString g_logDir;
 static FILE* g_log = nullptr;
 static QElapsedTimer g_clock;
+// Lines are buffered until we know whether this process is the browser (startup.log) or a second
+// launch that only hands its URLs to the running one (handoff.log). Opening startup.log with "w"
+// right away let every second launch truncate the running browser's log.
+static QByteArray g_pendingLog;
+static std::string g_crashPath;   // precomputed: no Qt allocations needed inside the crash handler
 
 static QString logDir() {
     if (!g_logDir.isEmpty()) return g_logDir;
@@ -59,10 +69,18 @@ static QString logDir() {
 }
 
 void pacitumLog(const QString& line) {
-    if (!g_log) return;
     static QMutex mx; QMutexLocker lock(&mx);
     const QByteArray b = QStringLiteral("[%1 ms] %2\n").arg(g_clock.isValid() ? g_clock.elapsed() : 0, 6).arg(line).toUtf8();
+    if (!g_log) { g_pendingLog += b; return; }
     std::fwrite(b.constData(), 1, size_t(b.size()), g_log); std::fflush(g_log);
+}
+
+static void openLog(const char* name) {
+    if (g_log) return;
+    const QString path = logDir() + QLatin1Char('/') + QLatin1String(name);
+    g_log = std::fopen(path.toLocal8Bit().constData(), "w");
+    if (g_log && !g_pendingLog.isEmpty()) { std::fwrite(g_pendingLog.constData(), 1, size_t(g_pendingLog.size()), g_log); std::fflush(g_log); }
+    g_pendingLog.clear();
 }
 
 static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg) {
@@ -73,13 +91,17 @@ static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const 
 }
 
 static void writeCrash(const char* what) {
-    const QString path = logDir() + QStringLiteral("/crash.log");
-    if (FILE* f = std::fopen(path.toLocal8Bit().constData(), "a")) {
-        std::fprintf(f, "%s Pacitum %s crashed after %lld ms: %s\n", QDateTime::currentDateTime().toString(Qt::ISODate).toUtf8().constData(),
-                     PACITUM_VERSION, g_clock.isValid() ? (long long)g_clock.elapsed() : 0LL, what);
+    // Plain C only: the heap or Qt may be in a broken state here.
+    char stamp[32] = "?";
+    const time_t now = time(nullptr);
+    if (const tm* lt = localtime(&now)) strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", lt);
+    const long long ms = g_clock.isValid() ? (long long)g_clock.elapsed() : 0LL;
+    if (FILE* f = std::fopen(g_crashPath.c_str(), "a")) {
+        std::fprintf(f, "%s Pacitum %s crashed after %lld ms: %s\n", stamp, PACITUM_VERSION, ms, what);
         std::fclose(f);
     }
-    pacitumLog(QStringLiteral("CRASH: %1").arg(QLatin1String(what)));
+    if (!g_log) openLog("startup.log");   // keep the buffered lines next to the crash
+    if (g_log) { std::fprintf(g_log, "[%6lld ms] CRASH: %s\n", ms, what); std::fflush(g_log); }
 }
 
 #ifdef Q_OS_WIN
@@ -91,7 +113,7 @@ static LONG WINAPI crashFilter(EXCEPTION_POINTERS* ep) {
                                    static_cast<LPCSTR>(addr), &mod)) GetModuleFileNameA(mod, modName, MAX_PATH);
     std::snprintf(buf, sizeof(buf), "exception 0x%08lX at %p in %s (+0x%llx)",
                   ep && ep->ExceptionRecord ? ep->ExceptionRecord->ExceptionCode : 0UL, addr, modName,
-                  (unsigned long long)((char*)addr - (char*)mod));
+                  (unsigned long long)(mod ? (char*)addr - (char*)mod : 0));
     writeCrash(buf);
     return EXCEPTION_CONTINUE_SEARCH;
 }
@@ -99,8 +121,7 @@ static LONG WINAPI crashFilter(EXCEPTION_POINTERS* ep) {
 
 static void installLogging() {
     g_clock.start();
-    const QString path = logDir() + QStringLiteral("/startup.log");
-    g_log = std::fopen(path.toLocal8Bit().constData(), "w");
+    g_crashPath = (logDir() + QStringLiteral("/crash.log")).toLocal8Bit().toStdString();
     qInstallMessageHandler(messageHandler);
     std::set_terminate([]{
         const char* what = "std::terminate";
@@ -136,9 +157,58 @@ static void setupEnvironment() {
 #else
     flags += " --enable-features=OverlayScrollbar,ParallelDownloading,VaapiVideoDecoder,VaapiVideoEncoder,WebRTCPipeWireCapturer";
 #endif
+    // Memory: cap renderer processes (Chromium otherwise starts one per site/tab). Tabs beyond the
+    // cap share renderers; PACITUM_RENDERER_LIMIT overrides (0 = Chromium default).
+    {
+        bool ok = false; const int lim = qEnvironmentVariableIntValue("PACITUM_RENDERER_LIMIT", &ok);
+        if (!ok) flags += " --renderer-process-limit=8";
+        else if (lim > 0) flags += " --renderer-process-limit=" + QByteArray::number(lim);
+    }
     if (qEnvironmentVariableIsSet("QTWEBENGINE_CHROMIUM_FLAGS")) flags += ' ' + qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", flags);
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+}
+
+// Time-to-first-paint: the first paint event delivered to any widget of the main window.
+class FirstPaintProbe : public QObject {
+public:
+    explicit FirstPaintProbe(QWidget* w) : m_w(w) {}
+    bool eventFilter(QObject* o, QEvent* e) override {
+        if (e->type() == QEvent::Paint && o->isWidgetType() && static_cast<QWidget*>(o)->window() == m_w) {
+            pacitumLog(QStringLiteral("first paint (time-to-first-paint)"));
+            qApp->removeEventFilter(this); deleteLater();
+        }
+        return false;
+    }
+private:
+    QWidget* m_w;
+};
+
+// --handoff-test <file> (CI): start a second, ordinary launch of this exe with <file>; it must hand
+// the URL to this process (single instance) and exit 0, and the file must open in a tab here.
+static void runHandoffTest(BrowserWindow* w) {
+    QString file;
+    for (const QString& a : qApp->arguments().mid(1)) if (!a.startsWith(QLatin1Char('-'))) file = a;
+    const QString want = QFileInfo(file).fileName();
+    pacitumLog(QStringLiteral("handoff test starting (%1)").arg(want));
+    auto* p = new QProcess(qApp);
+    p->setProgram(QCoreApplication::applicationFilePath());
+    p->setArguments({file});
+    QElapsedTimer* t = new QElapsedTimer; t->start();
+    QObject::connect(p, &QProcess::finished, qApp, [p, t, w, want](int code, QProcess::ExitStatus){
+        pacitumLog(QStringLiteral("handoff: second launch exited %1 after %2 ms").arg(code).arg(t->elapsed()));
+        QTimer::singleShot(1500, qApp, [p, t, w, want, code]{
+            bool found = false;
+            for (QWidget* tw : QApplication::topLevelWidgets())
+                if (auto* b = qobject_cast<BrowserWindow*>(tw)) for (auto* tab : b->findChildren<BrowserTab*>())
+                    if (tab->currentUrl().endsWith(want)) found = true;
+            const bool ok = found && code == 0 && w->isVisible();
+            pacitumLog(QStringLiteral("HANDOFF %1 urlOpened=%2 secondExit=%3").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL")).arg(found).arg(code));
+            delete t; p->deleteLater();
+            QCoreApplication::exit(ok ? 0 : 7);
+        });
+    });
+    p->start();
 }
 
 int main(int argc, char *argv[]) {
@@ -146,12 +216,15 @@ int main(int argc, char *argv[]) {
     bool smoke = false;
     bool stress = false;
     bool resizeTest = false;
+    bool perf = false, handoffTest = false;
     bool profileTest = false, guest = false, forcePicker = false;
     QString profileArg;
     for (int i = 1; i < argc; ++i) {
         if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
         if (qstrcmp(argv[i], "--stress-test") == 0) stress = true;
         if (qstrcmp(argv[i], "--resize-test") == 0) resizeTest = true;
+        if (qstrcmp(argv[i], "--perf-test") == 0) perf = true;
+        if (qstrcmp(argv[i], "--handoff-test") == 0) handoffTest = true;
         if (qstrcmp(argv[i], "--profile-test") == 0) profileTest = true;
         if (qstrcmp(argv[i], "--guest") == 0) guest = true;
         if (qstrcmp(argv[i], "--profile-picker") == 0) forcePicker = true;
@@ -192,7 +265,7 @@ int main(int argc, char *argv[]) {
         }
         // 1.6 profiles: profiles.json + profiles/<id>/. Migrates pre-1.6 data into "default" first.
         auto* pm = ProfileManager::instance();
-        if (profileTest) { QDir::setCurrent(dataDir); return ProfileManager::runProfileTest(); }
+        if (profileTest) { openLog("startup.log"); QDir::setCurrent(dataDir); return ProfileManager::runProfileTest(); }
         pm->init(dataDir);
         QStringList urlArgs;
         for (const QString& a : app.arguments().mid(1)) {
@@ -200,27 +273,38 @@ int main(int argc, char *argv[]) {
             const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
             if (u.isValid()) urlArgs << u.toString();
         }
-        const bool testRun = smoke || stress || resizeTest;
+        const bool testRun = smoke || stress || resizeTest || perf || handoffTest;
+        // Single instance: a plain second launch (taskbar, a link clicked in another app while
+        // Pacitum is open) goes to the running browser before anything else -- the profile picker
+        // used to come up first, and the link was lost. Explicit --profile/--guest/--profile-picker
+        // launches keep their own flow below.
+        if (!guest && profileArg.isEmpty() && !forcePicker && !testRun && pm->handOff(pm->lastUsed(), urlArgs)) {
+            openLog("handoff.log");
+            pacitumLog(QStringLiteral("running instance found; handed off %1 URL(s)").arg(urlArgs.size()));
+            return 0;
+        }
         if (!guest && profileArg.isEmpty() && !testRun && (pm->shouldShowPicker() || forcePicker)) {
             pacitumLog(QStringLiteral("profile picker shown"));
             const QString pick = ProfilePicker::pickAtStartup();
-            if (pick.isEmpty()) { pacitumLog(QStringLiteral("profile picker closed")); return 0; }
+            if (pick.isEmpty()) { openLog("startup.log"); pacitumLog(QStringLiteral("profile picker closed")); return 0; }
             if (pick == QStringLiteral("guest")) guest = true; else profileArg = pick;
         }
         if (guest) pm->activateGuest();
         else {
             QString id = profileArg.isEmpty() || !pm->contains(profileArg) ? pm->lastUsed() : profileArg;
             // Already open in another process: hand the URLs over (it opens a window) and exit.
-            if (pm->handOff(id, urlArgs)) { pacitumLog(QStringLiteral("profile %1 already running; handed off").arg(id)); return 0; }
+            if (pm->handOff(id, urlArgs)) { openLog("handoff.log"); pacitumLog(QStringLiteral("profile %1 already running; handed off").arg(id)); return 0; }
             if (!pm->activate(id)) {
                 QThread::msleep(800);
-                if (pm->handOff(id, urlArgs)) return 0;
+                if (pm->handOff(id, urlArgs)) { openLog("handoff.log"); return 0; }
+                openLog("handoff.log");   // never truncate the running instance's startup.log
                 pacitumLog(QStringLiteral("profile %1 is locked by another process").arg(id));
                 QMessageBox::warning(nullptr, QStringLiteral("Pacitum Browser"), QStringLiteral("This profile is already open in another Pacitum window."));
                 return 6;
             }
         }
     }
+    openLog("startup.log");   // this process is the browser for its profile
     {   // web prefs from settings before any page is created
         const auto o = AppSettings::read();
         Pacitum::webPrefs().javascript = o.value(QStringLiteral("javascript_enabled")).toBool(true);
@@ -244,23 +328,26 @@ int main(int argc, char *argv[]) {
     settings->setAttribute(QWebEngineSettings::AllowRunningInsecureContent, false);
     settings->setAttribute(QWebEngineSettings::JavascriptCanAccessClipboard, false);
     settings->setAttribute(QWebEngineSettings::HyperlinkAuditingEnabled, false);
-    profile->setSpellCheckEnabled(true);
-    profile->setSpellCheckLanguages({QStringLiteral("en-US")});
+    {   // Spell check needs Chromium .bdic dictionaries, which the Windows bundle does not ship: enabling
+        // it anyway only searched the disk at startup and logged "Spellchecking can not be enabled".
+        const QString dictEnv = qEnvironmentVariable("QTWEBENGINE_DICTIONARIES_PATH");
+        const QString appDict = QCoreApplication::applicationDirPath() + QStringLiteral("/qtwebengine_dictionaries");
+        const bool haveDicts = (!dictEnv.isEmpty() && QDir(dictEnv).exists()) || QDir(appDict).exists()
+#ifndef Q_OS_WIN
+            || QDir(QStringLiteral("/usr/share/qt6/qtwebengine_dictionaries")).exists()
+#endif
+            ;
+        if (haveDicts) {
+            profile->setSpellCheckEnabled(true);
+            profile->setSpellCheckLanguages({QStringLiteral("en-US")});
+        } else pacitumLog(QStringLiteral("spell check off: no qtwebengine_dictionaries"));
+    }
     Pacitum::configureProfile(profile, !guest);
     Pacitum::configureProfile(QWebEngineProfile::defaultProfile(), false);
     std::cout << "[Browser] profile off-the-record: " << profile->isOffTheRecord() << " storage: " << profile->persistentStoragePath().toStdString() << std::endl;
 
     pacitumLog(QStringLiteral("profile configured"));
     try {
-        BrowserWindow w;
-        pacitumLog(QStringLiteral("window constructed"));
-        // URLs / files passed on the command line (default-browser handler: "PacitumBrowser.exe" "%1").
-        for (const QString& a : app.arguments().mid(1)) {
-            if (a.startsWith(QLatin1Char('-')) || a.isEmpty()) continue;
-            const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
-            if (u.isValid()) w.openUrlInNewTab(u.toString());
-        }
-        w.show();
         // Another launch of this profile (taskbar, profile switcher, default-browser link): reuse this process.
         QObject::connect(ProfileManager::instance(), &ProfileManager::activateRequested, &app, [](const QStringList& urls){
             BrowserWindow* target = qobject_cast<BrowserWindow*>(QApplication::activeWindow());
@@ -272,18 +359,38 @@ int main(int argc, char *argv[]) {
             } else for (const QString& u : urls) target->openUrlInNewTab(u);
             if (target->isMinimized()) target->showNormal();
             target->raise(); target->activateWindow();
+            pacitumLog(QStringLiteral("handoff: opened %1 URL(s) from another launch").arg(urls.size()));
         });
+        BrowserWindow w;
+        pacitumLog(QStringLiteral("window constructed"));
+        // URLs / files passed on the command line (default-browser handler: "PacitumBrowser.exe" "%1").
+        for (const QString& a : app.arguments().mid(1)) {
+            if (a.startsWith(QLatin1Char('-')) || a.isEmpty()) continue;
+            const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
+            if (u.isValid()) w.openUrlInNewTab(u.toString());
+        }
+        qApp->installEventFilter(new FirstPaintProbe(&w));
+        w.show();
         pacitumLog(QStringLiteral("window shown: visible=%1 geometry=%2,%3 %4x%5").arg(w.isVisible())
                    .arg(w.geometry().x()).arg(w.geometry().y()).arg(w.width()).arg(w.height()));
         QTimer::singleShot(0, &app, []{ pacitumLog(QStringLiteral("event loop running (startup time)")); });
         // Time-to-window: first moment the native window is actually exposed (on screen).
         auto* exposeProbe = new QTimer(&app);
         exposeProbe->setInterval(15);
-        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress, resizeTest]{
+        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress, resizeTest, perf, handoffTest]{
             if (!w.windowHandle() || !w.windowHandle()->isExposed()) return;
             exposeProbe->stop(); exposeProbe->deleteLater();
             pacitumLog(QStringLiteral("window exposed (time-to-window)"));
-            if (resizeTest) QTimer::singleShot(2500, &w, [&w]{ pacitumLog(QStringLiteral("resize test starting")); w.runResizeTest(); });
+            if (auto* t = w.findChild<BrowserTab*>()) {   // first web content of the startup tab
+                auto c = std::make_shared<QMetaObject::Connection>();
+                *c = QObject::connect(t, &BrowserTab::loadDone, &w, [c](bool ok){
+                    QObject::disconnect(*c);
+                    pacitumLog(QStringLiteral("first page loaded ok=%1 (time-to-first-page)").arg(ok));
+                });
+            }
+            if (handoffTest) QTimer::singleShot(1500, &w, [&w]{ runHandoffTest(&w); });
+            else if (perf) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("perf test starting")); w.runPerfTest(); });
+            else if (resizeTest) QTimer::singleShot(2500, &w, [&w]{ pacitumLog(QStringLiteral("resize test starting")); w.runResizeTest(); });
             else if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
             else if (smoke) {
                 // CI smoke test: window must stay visible; quit cleanly 5 s after it appeared.
@@ -296,7 +403,7 @@ int main(int argc, char *argv[]) {
             }
         });
         exposeProbe->start();
-        if (smoke || stress || resizeTest) QTimer::singleShot(stress || resizeTest ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
+        if (smoke || stress || resizeTest || perf || handoffTest) QTimer::singleShot(stress || resizeTest || perf || handoffTest ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
         const int rc = app.exec();
         pacitumLog(QStringLiteral("exit %1").arg(rc));
         return rc;

@@ -21,6 +21,7 @@ public:
     void applyTheme(ThemeManager* tm);
     void setUrl(const QString& url);
     QString url() const;
+    QString currentUrl() const { return m_currentUrl; }   // the URL last set (not the display text)
     void focusUrl();
     void setBookmarked(bool b, bool animate = false);
     // Omnibox progress bar (animations-spec §7)

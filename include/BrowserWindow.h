@@ -197,6 +197,10 @@ private:
     AddressBar* m_addressBar = nullptr;
     QToolButton* m_splitBtn = nullptr;
     QToolButton* m_profileBtn = nullptr;
+    QLabel* m_profileAvatar = nullptr;
+    void refreshProfileAvatar();
+    void showProfileSwitcher();
+    void showProfileManager();
     QWidget* m_tabStrip = nullptr;
     WindowButton* m_minBtn = nullptr;
     WindowButton* m_maxBtn = nullptr;

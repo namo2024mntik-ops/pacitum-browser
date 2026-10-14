@@ -14,6 +14,10 @@
 #include <QCoreApplication>
 #include <QtGlobal>
 #include "BrowserWindow.h"
+#include "ProfileManager.h"
+#include "ProfileUi.h"
+#include <QMessageBox>
+#include <QThread>
 #include "PacitumScheme.h"
 #include "WebProfile.h"
 #include "AppSettings.h"
@@ -142,10 +146,17 @@ int main(int argc, char *argv[]) {
     bool smoke = false;
     bool stress = false;
     bool resizeTest = false;
+    bool profileTest = false, guest = false, forcePicker = false;
+    QString profileArg;
     for (int i = 1; i < argc; ++i) {
         if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
         if (qstrcmp(argv[i], "--stress-test") == 0) stress = true;
         if (qstrcmp(argv[i], "--resize-test") == 0) resizeTest = true;
+        if (qstrcmp(argv[i], "--profile-test") == 0) profileTest = true;
+        if (qstrcmp(argv[i], "--guest") == 0) guest = true;
+        if (qstrcmp(argv[i], "--profile-picker") == 0) forcePicker = true;
+        if (qstrncmp(argv[i], "--profile-directory=", 20) == 0) profileArg = QString::fromLocal8Bit(argv[i] + 20);
+        if (qstrncmp(argv[i], "--profile=", 10) == 0) profileArg = QString::fromLocal8Bit(argv[i] + 10);
     }
     const QString launchDir = QDir::currentPath();   // before we switch to the data dir (relative file args)
     setupEnvironment();
@@ -179,7 +190,36 @@ int main(int argc, char *argv[]) {
             const QString src = oldDir + QLatin1Char('/') + QLatin1String(n), dst = dataDir + QLatin1Char('/') + QLatin1String(n);
             if (QFile::exists(src) && !QFile::exists(dst)) QFile::copy(src, dst);
         }
-        QDir::setCurrent(dataDir);
+        // 1.6 profiles: profiles.json + profiles/<id>/. Migrates pre-1.6 data into "default" first.
+        auto* pm = ProfileManager::instance();
+        if (profileTest) { QDir::setCurrent(dataDir); return ProfileManager::runProfileTest(); }
+        pm->init(dataDir);
+        QStringList urlArgs;
+        for (const QString& a : app.arguments().mid(1)) {
+            if (a.startsWith(QLatin1Char('-')) || a.isEmpty()) continue;
+            const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
+            if (u.isValid()) urlArgs << u.toString();
+        }
+        const bool testRun = smoke || stress || resizeTest;
+        if (!guest && profileArg.isEmpty() && !testRun && (pm->shouldShowPicker() || forcePicker)) {
+            pacitumLog(QStringLiteral("profile picker shown"));
+            const QString pick = ProfilePicker::pickAtStartup();
+            if (pick.isEmpty()) { pacitumLog(QStringLiteral("profile picker closed")); return 0; }
+            if (pick == QStringLiteral("guest")) guest = true; else profileArg = pick;
+        }
+        if (guest) pm->activateGuest();
+        else {
+            QString id = profileArg.isEmpty() || !pm->contains(profileArg) ? pm->lastUsed() : profileArg;
+            // Already open in another process: hand the URLs over (it opens a window) and exit.
+            if (pm->handOff(id, urlArgs)) { pacitumLog(QStringLiteral("profile %1 already running; handed off").arg(id)); return 0; }
+            if (!pm->activate(id)) {
+                QThread::msleep(800);
+                if (pm->handOff(id, urlArgs)) return 0;
+                pacitumLog(QStringLiteral("profile %1 is locked by another process").arg(id));
+                QMessageBox::warning(nullptr, QStringLiteral("Pacitum Browser"), QStringLiteral("This profile is already open in another Pacitum window."));
+                return 6;
+            }
+        }
     }
     {   // web prefs from settings before any page is created
         const auto o = AppSettings::read();
@@ -192,8 +232,10 @@ int main(int argc, char *argv[]) {
     QString storagePath = QDir::currentPath() + QStringLiteral("/browser_data");  // persistent storage incl. cookies
     QDir().mkpath(storagePath + QStringLiteral("/storage"));
     QDir().mkpath(storagePath + QStringLiteral("/cache"));
-    profile->setPersistentStoragePath(storagePath + QStringLiteral("/storage"));
-    profile->setCachePath(storagePath + QStringLiteral("/cache"));
+    if (!guest) {   // Guest is off-the-record: no storage on disk
+        profile->setPersistentStoragePath(storagePath + QStringLiteral("/storage"));
+        profile->setCachePath(storagePath + QStringLiteral("/cache"));
+    }
 
     auto* settings = profile->settings();
     settings->setAttribute(QWebEngineSettings::AutoLoadIconsForPage, true);
@@ -204,7 +246,7 @@ int main(int argc, char *argv[]) {
     settings->setAttribute(QWebEngineSettings::HyperlinkAuditingEnabled, false);
     profile->setSpellCheckEnabled(true);
     profile->setSpellCheckLanguages({QStringLiteral("en-US")});
-    Pacitum::configureProfile(profile, true);
+    Pacitum::configureProfile(profile, !guest);
     Pacitum::configureProfile(QWebEngineProfile::defaultProfile(), false);
     std::cout << "[Browser] profile off-the-record: " << profile->isOffTheRecord() << " storage: " << profile->persistentStoragePath().toStdString() << std::endl;
 
@@ -219,6 +261,18 @@ int main(int argc, char *argv[]) {
             if (u.isValid()) w.openUrlInNewTab(u.toString());
         }
         w.show();
+        // Another launch of this profile (taskbar, profile switcher, default-browser link): reuse this process.
+        QObject::connect(ProfileManager::instance(), &ProfileManager::activateRequested, &app, [](const QStringList& urls){
+            BrowserWindow* target = qobject_cast<BrowserWindow*>(QApplication::activeWindow());
+            if (!target) for (QWidget* tw : QApplication::topLevelWidgets()) if (auto* b = qobject_cast<BrowserWindow*>(tw); b && b->isVisible()) { target = b; break; }
+            if (!target || urls.isEmpty()) {
+                auto* nw = new BrowserWindow(); nw->setAttribute(Qt::WA_DeleteOnClose);
+                for (const QString& u : urls) nw->openUrlInNewTab(u);
+                nw->show(); target = nw;
+            } else for (const QString& u : urls) target->openUrlInNewTab(u);
+            if (target->isMinimized()) target->showNormal();
+            target->raise(); target->activateWindow();
+        });
         pacitumLog(QStringLiteral("window shown: visible=%1 geometry=%2,%3 %4x%5").arg(w.isVisible())
                    .arg(w.geometry().x()).arg(w.geometry().y()).arg(w.width()).arg(w.height()));
         QTimer::singleShot(0, &app, []{ pacitumLog(QStringLiteral("event loop running (startup time)")); });

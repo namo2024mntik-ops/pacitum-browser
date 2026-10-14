@@ -3,6 +3,7 @@
 // check after every step that the Qt widgets and the web view cover exactly the native client
 // area. A screenshot of the window is saved per step to <data dir>/resize-shots/. Exits 0 with
 // "RESIZE OK" in startup.log, 5 with "RESIZE FAIL" on any mismatch.
+#include "ProfileManager.h"
 #include "BrowserWindow.h"
 #include "BrowserTab.h"
 #include <QApplication>
@@ -29,7 +30,7 @@ void BrowserWindow::runResizeTest() {
     struct Step { QString name; std::function<void()> act; int waitMs; QSize expect; };
     struct State { QVector<Step> steps; int i = 0; int fails = 0; };
     auto st = std::make_shared<State>();
-    const QString shotDir = QDir::currentPath() + QStringLiteral("/resize-shots");
+    const QString shotDir = ProfileManager::instance()->root() + QStringLiteral("/resize-shots");
     QDir(shotDir).removeRecursively(); QDir().mkpath(shotDir);
 
 #ifdef Q_OS_WIN

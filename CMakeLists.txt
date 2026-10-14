@@ -30,6 +30,8 @@ set(SOURCES
     src/ZoomController.cpp
     src/SettingsPage.cpp
     src/WebProfile.cpp
+    src/ProfileManager.cpp
+    src/ProfileUi.cpp
     src/Widgets.cpp
     src/ThemeManager.cpp
     src/PacitumScheme.cpp
@@ -55,6 +57,8 @@ set(HEADERS
     include/ZoomController.h
     include/SettingsPage.h
     include/WebProfile.h
+    include/ProfileManager.h
+    include/ProfileUi.h
     include/Widgets.h
     include/ThemeManager.h
     include/PacitumScheme.h

@@ -82,6 +82,23 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: resize-test, path: resize/, if-no-files-found: ignore }
+      - name: Profile test (migration, registry, isolation, guest)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--profile-test' -PassThru
+          if (-not $p.WaitForExit(120000)) { Write-Host "profile test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          New-Item -ItemType Directory -Force profiles | Out-Null
+          Copy-Item "$log\startup.log" profiles\startup.log -ErrorAction SilentlyContinue
+          Copy-Item "$log\crash.log" profiles\crash.log -ErrorAction SilentlyContinue
+          Get-Content profiles\startup.log -ErrorAction SilentlyContinue | Select-String 'PROFILES|profile test|WARN|CRITICAL' | ForEach-Object { $_.Line }
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path profiles\startup.log -Pattern 'PROFILES OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path profiles\crash.log)) { Write-Error "PROFILE TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: profile-test, path: profiles/, if-no-files-found: ignore }
       - name: Stress test (tabs, switching, fullscreen, loads)
         shell: pwsh
         run: |

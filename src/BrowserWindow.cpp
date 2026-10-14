@@ -18,6 +18,8 @@
 #include <QScreen>
 #include <QWindow>
 #include "DownloadManager.h"
+#include "ProfileManager.h"
+#include "ProfileUi.h"
 #include "ThemeManager.h"
 #include "SessionManager.h"
 #include "ZoomController.h"
@@ -316,10 +318,14 @@ void BrowserWindow::createToolbar() {
     m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(34,34); m_privateBadge->setAlignment(Qt::AlignCenter);
     m_privateBadge->setToolTip(QStringLiteral("Private browsing")); m_privateBadge->hide();
     m_profileBtn = makeToolBtn(QStringLiteral("Profile"));
-    auto* avatar = new QLabel(QStringLiteral("P"), m_profileBtn); avatar->setObjectName(QStringLiteral("Avatar"));
-    avatar->setAlignment(Qt::AlignCenter); avatar->setFixedSize(26,26); avatar->move(4,4);
-    avatar->setAttribute(Qt::WA_TransparentForMouseEvents);
-    connect(m_profileBtn, &QToolButton::clicked, this, &BrowserWindow::showSettings);
+    // 1.6 profiles: avatar of this window's profile with a ring in the profile colour (spec §2.2)
+    m_profileAvatar = new QLabel(m_profileBtn); m_profileAvatar->setObjectName(QStringLiteral("ProfileAvatar"));
+    m_profileAvatar->setAttribute(Qt::WA_TransparentForMouseEvents);
+    refreshProfileAvatar();
+    connect(m_profileBtn, &QToolButton::clicked, this, &BrowserWindow::showProfileSwitcher);
+    connect(ProfileManager::instance(), &ProfileManager::profilesChanged, this, &BrowserWindow::refreshProfileAvatar);
+    connect(ProfileManager::instance(), &ProfileManager::currentProfileChanged, this, [this]{ loadSettings(); applyTheme(); refreshProfileAvatar(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+M")), this, [this]{ showProfileManager(); });
     m_menuBtn = makeToolBtn(QStringLiteral("Customize and control Pacitum (Alt+F)")); connect(m_menuBtn, &QToolButton::clicked, this, &BrowserWindow::showMenu);
 
     lay->addWidget(m_backBtn); lay->addWidget(m_forwardBtn); lay->addWidget(m_reloadBtn); lay->addWidget(m_homeBtn);
@@ -331,6 +337,7 @@ void BrowserWindow::createToolbar() {
 }
 
 void BrowserWindow::refreshIcons() {
+    refreshProfileAvatar();
     auto* tm = m_theme;
     m_backBtn->setIcon(tm->icon(QStringLiteral("back")));
     m_forwardBtn->setIcon(tm->icon(QStringLiteral("forward")));
@@ -697,6 +704,33 @@ void BrowserWindow::toggleBookmark() {
     m_bookmarksBar->refresh();
 }
 
+void BrowserWindow::refreshProfileAvatar() {
+    if (!m_profileAvatar) return;
+    paintProfileAvatarLabel(m_profileAvatar, 24, devicePixelRatioF());
+    m_profileAvatar->move((m_profileBtn->width() - m_profileAvatar->width()) / 2, (m_profileBtn->height() - m_profileAvatar->height()) / 2);
+    m_profileBtn->setToolTip(QStringLiteral("%1 — switch profile").arg(ProfileManager::instance()->current().name));
+}
+
+void BrowserWindow::showProfileSwitcher() {
+    auto* sw = new ProfileSwitcher(this);
+    connect(sw, &ProfileSwitcher::settingsRequested, this, &BrowserWindow::showSettings);
+    connect(sw, &ProfileSwitcher::manageRequested, this, &BrowserWindow::showProfileManager);
+    connect(sw, &QObject::destroyed, m_profileBtn, [b = QPointer<QToolButton>(m_profileBtn)]{ if (b) b->setDown(false); });
+    m_profileBtn->setDown(true);
+    sw->showUnder(m_profileBtn);
+}
+
+void BrowserWindow::showProfileManager() {
+    auto* picker = new ProfilePicker(ProfilePicker::Manage, nullptr);
+    picker->setAttribute(Qt::WA_DeleteOnClose);
+    connect(picker, &ProfilePicker::chosen, picker, [picker](const QString& id){
+        if (id == QStringLiteral("guest")) ProfileManager::instance()->launchGuest();
+        else ProfileManager::instance()->launch(id);
+        picker->close();
+    });
+    picker->show(); picker->raise(); picker->activateWindow();
+}
+
 void BrowserWindow::showDownloads() {
     if (m_downloadsPopup) m_downloadsPopup->hide();
     for (int i = 0; i < m_tabs->count(); ++i)
@@ -812,7 +846,7 @@ void BrowserWindow::showMenu() {
         hdr->setAttribute(Qt::WA_StyledBackground, true); hdr->setAttribute(Qt::WA_Hover, true);
         hdr->setFixedHeight(52); hdr->setCursor(Qt::PointingHandCursor);
         auto* hl = new QHBoxLayout(hdr); hl->setContentsMargins(10, 8, 10, 8); hl->setSpacing(12);
-        const QString name = readSettings().value(QStringLiteral("profile_name")).toString(QStringLiteral("Personal"));
+        const QString name = ProfileManager::instance()->current().name;
         auto* av = new QLabel(name.left(1).toUpper(), hdr); av->setObjectName(QStringLiteral("MenuAvatar"));
         av->setFixedSize(36, 36); av->setAlignment(Qt::AlignCenter);
         auto* col = new QVBoxLayout; col->setSpacing(1); col->setContentsMargins(0, 0, 0, 0);
@@ -1698,8 +1732,15 @@ void BrowserWindow::setupHome() {
 
 QString BrowserWindow::homeData() {
     QJsonObject o;
-    // Greeting name hook: "profile_name" in the settings (the profile system can supply it).
-    const QString name = readSettings().value(QStringLiteral("profile_name")).toString();
+    // Greeting name: the active profile's name (per profile); none in Guest/private or for an unnamed "Default".
+    auto* pm = ProfileManager::instance();
+    QString name;
+    if (!pm->isGuest()) {
+        name = pm->current().name.trimmed();
+        if (name.isEmpty() || (pm->current().id == QStringLiteral("default") && name == QStringLiteral("Default")))
+            name = readSettings().value(QStringLiteral("profile_name")).toString().trimmed();
+        if (name == QStringLiteral("Default")) name.clear();
+    }
     o["first"] = m_privateMode ? QString() : name.section(QLatin1Char(' '), 0, 0);
     o["dark"] = m_darkMode;
     o["reduced"] = Pacitum::reducedMotion();

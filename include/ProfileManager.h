@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <QObject>
 #include <QString>
 #include <QStringList>
@@ -74,7 +75,8 @@ public:
 
     // Idempotent, interruption-safe copy of pre-1.6 single-profile data into profiles/default.
     // The old files are left untouched as a backup. Returns false only if copying failed.
-    static bool migrateLegacy(const QString& root, QString* log = nullptr);
+    // progress (optional, any thread): bytes copied so far / total bytes to copy.
+    static bool migrateLegacy(const QString& root, QString* log = nullptr, const std::function<void(qint64, qint64)>& progress = {});
 
     static QPixmap avatarPixmap(const ProfileInfo& p, int size, qreal dpr, int ring = 0, const QString& gapColour = QString());
     static int runProfileTest();              // --profile-test (CI): prints PROFILES OK / PROFILES FAIL

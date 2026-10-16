@@ -43,6 +43,7 @@ public:
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
     void fadeIn();
+    void navTransition(int dir);   // -1 back, +1 forward
     void ensureActive();                 // thaw a frozen page before touching it
     void setNoFreeze(bool on);           // e.g. while the page is fullscreen
     void setWindowMinimized(bool on);    // hide the page from Chromium / freeze idle background tabs sooner
@@ -102,6 +103,7 @@ private:
     QWebEnginePage* m_page = nullptr;
     QProgressBar* m_progress = nullptr;
     FindBar* m_findBar = nullptr;
+    QWidget* m_navShot = nullptr;       // back/forward snapshot (navTransition)
     QWidget* m_veil = nullptr;          // page-transition veil (fadeIn)
     QTimer* m_freezeTimer = nullptr;
     bool m_noFreeze = false;

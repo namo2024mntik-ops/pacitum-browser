@@ -32,6 +32,8 @@ protected:
 #include <QHideEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QParallelAnimationGroup>
+#include "Motion.h"
 #include <QEasingCurve>
 #include <QDesktopServices>
 #include <QHBoxLayout>
@@ -94,7 +96,6 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
 
     m_findBar = new FindBar(this);
     m_findBar->setBrowserView(m_view);
-    connect(m_findBar, &FindBar::closed, m_findBar, &QWidget::hide);
     layout->addWidget(m_findBar);
 
     connect(m_view, &QWebEngineView::urlChanged, this, &BrowserTab::onUrlChanged);
@@ -186,7 +187,7 @@ bool BrowserTab::isMuted() const { return m_view->page()->isAudioMuted(); }
 
 void BrowserTab::refreshTheme() { if (m_signInBar) m_signInBar->refresh(); }
 void BrowserTab::showFindBar() { m_findBar->showFind(); }
-void BrowserTab::hideFindBar() { m_findBar->hide(); }
+void BrowserTab::hideFindBar() { m_findBar->hideFind(); }
 
 void BrowserTab::setLazyUrl(const QString& url, const QString& title) {
     m_pendingUrl = url; m_url = url;
@@ -277,7 +278,36 @@ void BrowserTab::fadeIn() {
     a->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
+// Back / forward (kit #10/#11): a grab() snapshot of the old page slides 32 px towards the
+// direction of travel while fading out (200 ms OutCubic) over the view; the web view itself is
+// never animated. Reduced motion: the snapshot only fades (120 ms). Dropped on resize.
+void BrowserTab::navTransition(int dir) {
+    if (m_navShot) { m_navShot->deleteLater(); m_navShot = nullptr; }
+    if (!m_view || !isVisible() || m_view->width() < 2) return;
+    const int fade = Motion::fadeMs(Motion::Medium);
+    if (fade <= 0) return;
+    const QPixmap pm = m_view->grab();
+    if (pm.isNull()) return;
+    auto* shot = new QLabel(this);
+    shot->setAttribute(Qt::WA_TransparentForMouseEvents);
+    shot->setPixmap(pm); shot->setGeometry(QRect(m_view->mapTo(this, QPoint(0, 0)), m_view->size())); shot->show(); shot->raise();
+    auto* eff = new QGraphicsOpacityEffect(shot); shot->setGraphicsEffect(eff);
+    auto* group = new QParallelAnimationGroup(shot);
+    auto* op = new QPropertyAnimation(eff, "opacity"); op->setDuration(fade); op->setStartValue(1.0); op->setEndValue(0.0); op->setEasingCurve(QEasingCurve::OutCubic);
+    group->addAnimation(op);
+    if (Motion::enabled()) {
+        auto* mv = new QPropertyAnimation(shot, "pos"); mv->setDuration(fade);
+        mv->setStartValue(shot->pos()); mv->setEndValue(shot->pos() + QPoint(dir < 0 ? 32 : -32, 0)); mv->setEasingCurve(QEasingCurve::OutCubic);
+        group->addAnimation(mv);
+    }
+    QPointer<QLabel> g(shot);
+    connect(group, &QAbstractAnimation::finished, shot, [this, g]{ if (g) { if (m_navShot == g) m_navShot = nullptr; g->deleteLater(); } });
+    m_navShot = shot;
+    group->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
 void BrowserTab::resizeEvent(QResizeEvent* e) {
+    if (m_navShot) { m_navShot->deleteLater(); m_navShot = nullptr; }   // snapshot never outlives a resize
     QWidget::resizeEvent(e);
     if (m_veil) m_veil->setGeometry(rect());   // page-transition veil follows the tab size
 }

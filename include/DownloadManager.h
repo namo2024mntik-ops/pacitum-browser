@@ -1,5 +1,6 @@
 #pragma once
 #include <QVariantAnimation>
+#include <QSet>
 #include <QObject>
 #include <QWidget>
 #include <QFrame>
@@ -144,6 +145,7 @@ private:
     void rebuild();
     void showUndo(const QList<DownloadEntry>& removed);
     QLineEdit* m_search; QVBoxLayout* m_list; QWidget* m_listHost; QWidget* m_empty;
+    QSet<qint64> m_shownIds; bool m_listPrimed = false;   // entry add/remove animation
     QPushButton* m_folderBtn; QPushButton* m_clearBtn; QLabel* m_searchIcon; QLabel* m_emptyIcon;
     QFrame* m_toast = nullptr; QTimer* m_toastTimer = nullptr; QList<DownloadEntry> m_undo;
 };

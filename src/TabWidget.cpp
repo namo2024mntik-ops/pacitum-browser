@@ -118,7 +118,21 @@ void PacitumTabBar::setVerticalMode(bool v) {
     setMinimumWidth(v ? 200 : 0);
 }
 void PacitumTabBar::setTabPinned(int index, bool pinned) {
+    if (m_pinned.contains(index) == pinned) return;
+    const int fromW = (index >= 0 && index < count()) ? tabSizeHint(index).width() : 0;
     if (pinned) m_pinned.insert(index); else m_pinned.remove(index);
+    // Pin / unpin: the tab's width morphs between full and pinned (200 ms OutBack) instead of jumping.
+    const int ms = Pacitum::motionMs(200);
+    if (m_floating && animationsEnabled && ms > 0 && fromW > 0 && isVisible()) {
+        const quint64 id = ensureId(index);
+        m_pinMorph[id] = qMakePair(fromW, 0.0);
+        auto* a = new QVariantAnimation(this);
+        a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0);
+        QEasingCurve back(QEasingCurve::OutBack); back.setOvershoot(1.2); a->setEasingCurve(back);   // kit #5: 200 ms OutBack
+        connect(a, &QVariantAnimation::valueChanged, this, [this, id](const QVariant& v){ if (m_pinMorph.contains(id)) { m_pinMorph[id].second = v.toReal(); relayout(); } });
+        connect(a, &QVariantAnimation::finished, this, [this, id]{ m_pinMorph.remove(id); relayout(); updateCloseButtons(); });
+        a->start(QAbstractAnimation::DeleteWhenStopped);
+    }
     if (m_floating) { relayout(); updateCloseButtons(); }
 }
 quint64 PacitumTabBar::idOf(int index) const {
@@ -160,6 +174,8 @@ QSize PacitumTabBar::tabSizeHint(int index) const {
         if (m_pinned.contains(index)) w = 40;
         else if (m_avail > 0 && count() > 0) w = qBound(72, m_avail / count(), 220);
     }
+    if (auto it = m_pinMorph.constFind(idOf(index)); it != m_pinMorph.constEnd())
+        w = int(it->first + (w - it->first) * it->second);
     const qreal prog = m_progress.value(idOf(index), 1.0);
     return QSize(qMax(1, int(w * prog)), m_floating ? kTop * 2 + kTabH : 32);
 }
@@ -308,7 +324,6 @@ void PacitumTabBar::updateSpinner() {
     if (m_spinSuspended) { m_spin->stop(); return; }   // no 60 fps repaints for an invisible window
     bool any = false;
     for (const auto& f : std::as_const(m_flags)) any |= f.loading;
-    if (any && Pacitum::reducedMotion()) { m_spin->stop(); m_spinAngle = 0; m_spinV = 0.5; return; }   // static 270° arc
     if (any && m_spin->state() != QAbstractAnimation::Running) m_spin->start();
     else if (!any) m_spin->stop();
 }
@@ -376,11 +391,21 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
         const QRectF a = iconR.adjusted(1.5, 1.5, -1.5, -1.5);
         p->drawEllipse(a);
         QPen arc(qc(fl.waiting ? pal.textTertiary : pal.accent), 2); arc.setCapStyle(Qt::RoundCap); p->setPen(arc);
+        if (Pacitum::reducedMotion()) {   // kit #7 reduced: no rotation, a static 270° arc whose opacity pulses
+            const qreal pulse = qSin(3.14159265358979 * m_spinV);
+            p->save(); p->setOpacity(0.35 + 0.65 * pulse * pulse);
+            p->drawArc(a, 90 * 16, -270 * 16);
+            p->restore();
+            goto spinnerDone;
+        }
+        {
         const qreal sn = qSin(3.14159265358979 * m_spinV);
         const qreal span = 90.0 + 180.0 * sn * sn;
         // waiting ("connecting"): counter-clockwise, 1000 ms/turn; loading: clockwise, 800 ms/turn
         const qreal ang = fl.waiting ? -m_spinV * 576.0 : m_spinAngle;
         p->drawArc(a, int((90.0 - ang) * 16), int(-span * 16));
+        }
+        spinnerDone:;
     } else if (fl.crashed) {
         p->drawPixmap(iconR.toRect(), ThemeManager::icon(QStringLiteral("warning"), pal.danger, 16).pixmap(QSize(16, 16), devicePixelRatioF()));
     } else if (!opt.icon.isNull()) {
@@ -435,7 +460,7 @@ void PacitumTabBar::animateIn(int index) {
     if (index < 0 || index >= count()) return;
     const quint64 id = m_nextId++;
     setTabData(index, id);
-    const int ms = Pacitum::motionMs(180);
+    const int ms = Pacitum::motionMs(200);   // kit #1: 200 ms OutCubic
     if (!animationsEnabled || ms == 0) return;
     m_progress[id] = 0.0;
     auto* a = new QVariantAnimation(this);
@@ -446,7 +471,7 @@ void PacitumTabBar::animateIn(int index) {
 }
 
 void PacitumTabBar::animateOut(int index, std::function<void()> done) {
-    const int ms = Pacitum::motionMs(140);
+    const int ms = Pacitum::motionMs(180);   // kit #2: 180 ms InCubic
     if (!animationsEnabled || ms == 0 || index < 0 || index >= count()) { done(); return; }
     quint64 id = ensureId(index);
     if (QWidget* b = tabButton(index, QTabBar::RightSide)) b->hide();

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.6.6 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.7.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,6 +33,7 @@ set(SOURCES
     src/ProfileManager.cpp
     src/ProfileUi.cpp
     src/Widgets.cpp
+    src/Motion.cpp
     src/ThemeManager.cpp
     src/PacitumScheme.cpp
     src/FirstRun.cpp
@@ -61,6 +62,7 @@ set(HEADERS
     include/ProfileManager.h
     include/ProfileUi.h
     include/Widgets.h
+    include/Motion.h
     include/ThemeManager.h
     include/PacitumScheme.h
     include/FirstRun.h

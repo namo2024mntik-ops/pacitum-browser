@@ -137,6 +137,9 @@ private:
     bool m_fsTransition = false;       // entering fullscreen: ignore intermediate state reports
     bool m_shownOnce = false;
     void fadeInContent();
+    void fadeVeil(int duration, qreal from, int delay);
+    void showZoomBubble();
+    void flyToDownloads();
     // built-in updater
     void setupUpdater();
     void showUpdatePrompt(const struct UpdateInfo& info);

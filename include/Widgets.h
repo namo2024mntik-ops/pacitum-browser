@@ -18,6 +18,8 @@ public:
     // --- 1.5 micro-animations (animations-spec.md) ---
     // §2 reload spin: +360° in 400 ms OutCubic (extra turns stack when clicked again).
     void spin();
+    void nudge(qreal dx);
+    void bump();             // download-start bump (160 ms)   // back/forward glyph step (200 ms)
     // Cross-fade to a new glyph (120 ms OutCubic, incoming scale 0.8→1); instant with reduced motion.
     void setIconAnimated(const QIcon& icon, int ms = 120);
     // Extra glyph transform driven by owners (download completion arrow): scale / opacity.
@@ -41,7 +43,8 @@ protected:
 private:
     void animateTo(qreal v);
     void animatePress(qreal to, int ms, QEasingCurve::Type ease);
-    QVariantAnimation m_anim, m_pressAnim, m_spinAnim, m_fadeAnim;
+    QVariantAnimation m_anim, m_pressAnim, m_spinAnim, m_fadeAnim, m_nudgeAnim;
+    qreal m_nudge = 0.0, m_nudgeDx = 0.0;
     qreal m_level = 0.0;
     int m_radius = 8;
     QString m_hoverColor;

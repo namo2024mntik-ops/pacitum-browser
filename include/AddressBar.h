@@ -62,7 +62,9 @@ private:
     StarButton* m_star = nullptr;
     void initProgress();
     void repaintProgress();
-    QVariantAnimation m_trickle, m_progAnim, m_fadeAnim;
+    QVariantAnimation m_trickle, m_progAnim, m_fadeAnim, m_glowAnim;
+    qreal m_glow = 0;
+    void animateGlow(qreal to);
     QTimer m_fadeDelay;
     qreal m_prog = 0, m_progOpacity = 0;
     bool m_progLoading = false, m_progError = false;

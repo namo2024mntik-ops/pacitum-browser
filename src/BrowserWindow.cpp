@@ -1,3 +1,4 @@
+#include <QParallelAnimationGroup>
 #include <QPropertyAnimation>
 #include <QGraphicsOpacityEffect>
 #include <QWebChannel>
@@ -19,6 +20,7 @@
 #include <QWindow>
 #include "DownloadManager.h"
 #include "ProfileManager.h"
+#include "Motion.h"
 #include "ProfileUi.h"
 #include "ThemeManager.h"
 #include "SessionManager.h"
@@ -144,9 +146,12 @@ void BrowserWindow::resizeEvent(QResizeEvent* e) {
     for (auto* c : findChildren<QWidget*>(QStringLiteral("PacitumWindowOverlay"), Qt::FindDirectChildrenOnly)) c->setGeometry(rect());
 }
 
-void BrowserWindow::fadeInContent() {
-    const int ms = Pacitum::motionMs(220);
-    if (Pacitum::reducedMotion() || ms <= 0 || !centralWidget()) return;
+void BrowserWindow::fadeInContent() { fadeVeil(Pacitum::guestMode() || m_privateMode ? Motion::Slow : Motion::Medium, 1.0, 30); }   // kit #31 / #41
+// Page-coloured veil over the whole window that fades out (window open, fullscreen enter/exit).
+// It is a direct child named PacitumWindowOverlay, so resizeEvent keeps it at the window size.
+void BrowserWindow::fadeVeil(int duration, qreal from, int delay) {
+    const int ms = Motion::fadeMs(duration);   // opacity only, so it stays (120 ms) with reduced motion
+    if (ms <= 0 || !centralWidget()) return;
     auto* veil = new QWidget(this);
     veil->setObjectName(QStringLiteral("PacitumWindowOverlay"));
     veil->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -155,9 +160,10 @@ void BrowserWindow::fadeInContent() {
     veil->setGeometry(rect()); veil->show(); veil->raise();
     auto* eff = new QGraphicsOpacityEffect(veil); eff->setOpacity(1.0); veil->setGraphicsEffect(eff);
     auto* a = new QPropertyAnimation(eff, "opacity", veil);
-    a->setDuration(ms); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    eff->setOpacity(from);
+    a->setDuration(ms); a->setStartValue(from); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
     connect(a, &QPropertyAnimation::finished, veil, &QObject::deleteLater);
-    QTimer::singleShot(30, veil, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });   // after the first frame
+    QTimer::singleShot(delay, veil, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });   // after the first frame
 }
 
 void BrowserWindow::setupUpdater() {
@@ -320,6 +326,7 @@ void BrowserWindow::createToolbar() {
     });
     connect(m_downloads, &DownloadManager::listChanged, this, &BrowserWindow::updateDownloadsButton);
     connect(m_downloads, &DownloadManager::downloadStarted, this, &BrowserWindow::updateDownloadsButton);
+    connect(m_downloads, &DownloadManager::downloadStarted, this, [this]{ if (isActiveWindow()) QTimer::singleShot(0, this, [this]{ flyToDownloads(); }); });
     // spec issue #6: puzzle "extensions" glyph instead of the unclear window icon
     m_splitBtn = makeToolBtn(QStringLiteral("Extensions")); connect(m_splitBtn, &QToolButton::clicked, this, &BrowserWindow::showExtensionsMenu);
     m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(34,34); m_privateBadge->setAlignment(Qt::AlignCenter);
@@ -331,7 +338,7 @@ void BrowserWindow::createToolbar() {
     refreshProfileAvatar();
     connect(m_profileBtn, &QToolButton::clicked, this, &BrowserWindow::showProfileSwitcher);
     connect(ProfileManager::instance(), &ProfileManager::profilesChanged, this, &BrowserWindow::refreshProfileAvatar);
-    connect(ProfileManager::instance(), &ProfileManager::currentProfileChanged, this, [this]{ loadSettings(); applyTheme(); refreshProfileAvatar(); });
+    connect(ProfileManager::instance(), &ProfileManager::currentProfileChanged, this, [this]{ crossFadeTheme([this]{ loadSettings(); applyTheme(); refreshProfileAvatar(); }); });   // kit #34 accent cross-fade
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+M")), this, [this]{ showProfileManager(); });
     m_menuBtn = makeToolBtn(QStringLiteral("Customize and control Pacitum (Alt+F)")); connect(m_menuBtn, &QToolButton::clicked, this, &BrowserWindow::showMenu);
 
@@ -718,8 +725,8 @@ void BrowserWindow::onTabLoading(bool) {
     updateNavState();
 }
 
-void BrowserWindow::goBack() { if (auto* t=activeTab()) { t->goBack(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_backBtn->setEnabled(tt->canGoBack()); }}); } }
-void BrowserWindow::goForward() { if (auto* t=activeTab()) { t->goForward(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_forwardBtn->setEnabled(tt->canGoForward()); }}); } }
+void BrowserWindow::goBack() { if (auto* t=activeTab()) { if (t->canGoBack()) { if (auto* b = qobject_cast<AnimatedToolButton*>(m_backBtn)) b->nudge(-3); t->navTransition(-1); } t->goBack(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_backBtn->setEnabled(tt->canGoBack()); }}); } }
+void BrowserWindow::goForward() { if (auto* t=activeTab()) { if (t->canGoForward()) { if (auto* b = qobject_cast<AnimatedToolButton*>(m_forwardBtn)) b->nudge(3); t->navTransition(1); } t->goForward(); QTimer::singleShot(200, this, [this]{ if(auto* tt=activeTab()){ m_forwardBtn->setEnabled(tt->canGoForward()); }}); } }
 void BrowserWindow::reloadPage() {
     if (auto* t = activeTab()) {
         if (auto* b = qobject_cast<AnimatedToolButton*>(m_reloadBtn)) b->spin();   // animations-spec §2 (click or F5)
@@ -786,6 +793,33 @@ QIcon BrowserWindow::downloadsTabIcon() const {
     return QIcon(pm);
 }
 
+// Download start (kit #19): a small accent disc with the download glyph flies from the middle of the
+// page to the downloads button (280 ms InOutCubic, shrinking and fading at the end), then the button
+// bumps (160 ms). A tiny click-through child that lives 280 ms. Reduced motion: no flight, no bump.
+void BrowserWindow::flyToDownloads() {
+    if (!Motion::enabled() || !m_downloadsBtn || !m_downloadsBtn->isVisible() || m_chromeHidden) return;
+    const QPoint end = m_downloadsBtn->mapTo(this, m_downloadsBtn->rect().center());
+    QWidget* content = m_tabs ? static_cast<QWidget*>(m_tabs) : centralWidget();
+    const QPoint start = content->mapTo(this, content->rect().center());
+    auto* fly = new QLabel(this);
+    fly->setAttribute(Qt::WA_TransparentForMouseEvents);
+    const qreal dpr = devicePixelRatioF();
+    QPixmap pm(qRound(32 * dpr), qRound(32 * dpr)); pm.setDevicePixelRatio(dpr); pm.fill(Qt::transparent);
+    { QPainter g(&pm); g.setRenderHint(QPainter::Antialiasing); g.setPen(Qt::NoPen); g.setBrush(QColor(m_theme->palette().accent)); g.drawEllipse(QRectF(0, 0, 32, 32));
+      g.drawPixmap(QPointF(7, 7), ThemeManager::icon(QStringLiteral("download"), m_theme->palette().onAccent, 18).pixmap(QSize(18, 18), dpr)); }
+    fly->setPixmap(pm); fly->setScaledContents(true);
+    fly->setGeometry(start.x() - 16, start.y() - 16, 32, 32); fly->show(); fly->raise();
+    auto* eff = new QGraphicsOpacityEffect(fly); fly->setGraphicsEffect(eff);
+    auto* g = new QParallelAnimationGroup(fly);
+    auto* geo = new QPropertyAnimation(fly, "geometry"); geo->setDuration(Motion::Slow); geo->setEasingCurve(QEasingCurve::InOutCubic);
+    geo->setStartValue(fly->geometry()); geo->setEndValue(QRect(end.x() - 7, end.y() - 7, 14, 14)); g->addAnimation(geo);
+    auto* op = new QPropertyAnimation(eff, "opacity"); op->setDuration(Motion::Slow);
+    op->setKeyValueAt(0.0, 0.0); op->setKeyValueAt(0.15, 1.0); op->setKeyValueAt(0.8, 1.0); op->setKeyValueAt(1.0, 0.0); g->addAnimation(op);
+    QPointer<QToolButton> btn = m_downloadsBtn;
+    connect(g, &QAbstractAnimation::finished, fly, [fly, btn]{ fly->deleteLater(); if (auto* b = qobject_cast<AnimatedToolButton*>(btn.data())) b->bump(); });
+    g->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
 void BrowserWindow::toggleDownloadsPopup(bool autoClose) {
     if (!m_downloadsPopup) return;
     if (m_downloadsPopup->isVisible()) { m_downloadsPopup->hide(); return; }
@@ -837,7 +871,7 @@ void BrowserWindow::onSettingChanged(const QString& key) {
     } else if (key == QStringLiteral("do_not_track")) {
         m_adblock->setDoNotTrack(s.value(key).toBool(false));
     } else if (key == QStringLiteral("show_bookmarks_bar")) {
-        m_bookmarksBar->setVisible(s.value(key).toBool(true));
+        Motion::slideVisible(m_bookmarksBar, s.value(key).toBool(true), 0, Motion::Base);
     } else if (key == QStringLiteral("javascript_enabled") || key == QStringLiteral("popups_allowed")) {
         Pacitum::webPrefs().javascript = s.value(QStringLiteral("javascript_enabled")).toBool(true);
         Pacitum::webPrefs().popups = s.value(QStringLiteral("popups_allowed")).toBool(false);
@@ -926,8 +960,8 @@ void BrowserWindow::showMenu() {
         pl->addWidget(zminus); pl->addWidget(zpct); pl->addWidget(zplus);
         auto* fs = mk(isFullScreen() ? QStringLiteral("fullscreen-exit") : QStringLiteral("fullscreen"), QStringLiteral("Full screen (F11)"), zoomRow);
         fs->setFixedSize(30, 30); fs->setIconSize(QSize(18, 18));
-        connect(zminus, &QToolButton::clicked, this, [this, zpct]{ zoomOut(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
-        connect(zplus, &QToolButton::clicked, this, [this, zpct]{ zoomIn(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); });
+        connect(zminus, &QToolButton::clicked, this, [this, zpct]{ zoomOut(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); Motion::pop(zpct); });
+        connect(zplus, &QToolButton::clicked, this, [this, zpct]{ zoomIn(); zpct->setText(QString::number(m_zoom->zoomPercent()) + QStringLiteral("%")); Motion::pop(zpct); });
         connect(fs, &QToolButton::clicked, this, [this, &m]{ m.close(); toggleFullscreen(); });
         zl->addWidget(zi); zl->addSpacing(12); zl->addWidget(zt); zl->addStretch(1); zl->addWidget(pill); zl->addSpacing(10); zl->addWidget(fs);
         zoomRow->setFixedHeight(36);
@@ -990,7 +1024,7 @@ void BrowserWindow::showBookmarksDialog() {
     QStringList lines; for (auto &b: bms) lines << b.title + QStringLiteral(" — ") + b.url;
     QMessageBox::information(this, QStringLiteral("Bookmarks (%1)").arg(bms.size()), lines.join(QStringLiteral("\n")));
 }
-void BrowserWindow::toggleBookmarksBar() { m_bookmarksBar->setVisible(!m_bookmarksBar->isVisible()); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = m_bookmarksBar->isVisible(); writeSettingsFile(s); }
+void BrowserWindow::toggleBookmarksBar() { const bool show = !Motion::targetVisible(m_bookmarksBar); Motion::slideVisible(m_bookmarksBar, show, 0, Motion::Base); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = show; writeSettingsFile(s); }
 void BrowserWindow::toggleVerticalTabs() { m_verticalTabs = !m_verticalTabs; m_tabs->setVertical(m_verticalTabs); m_splitTabs->setVertical(m_verticalTabs); }
 // ---------------- fullscreen ----------------
 // F11 (browser fullscreen) and website fullscreen (QWebEngineFullScreenRequest) share one path:
@@ -1005,6 +1039,10 @@ void BrowserWindow::enterContentFullscreen(bool) {
     if (!m_chromeHidden) {
         m_preFullscreenState = windowState() & ~(Qt::WindowFullScreen | Qt::WindowMinimized);
         setChromeHidden(true);
+        if (!m_pageFullscreen) fadeVeil(Motion::Slow, 0.7, 40);   // F11 enter: soft reveal (not over page video)
+        QTimer::singleShot(120, this, [this]{   // kit #30: exit hint, 2 s total
+            if (m_chromeHidden) Motion::bubble(this, m_pageFullscreen ? QStringLiteral("Press Esc to exit full screen") : QStringLiteral("Press F11 to exit full screen"), 1700, 24);
+        });
     }
     // Transition guard: while Windows moves from maximized to fullscreen it can report an
     // intermediate "restored" state; 1.5.1 took that as "the user left fullscreen" and undid it,
@@ -1042,6 +1080,7 @@ void BrowserWindow::finishExitFullscreen() {
     if (!m_chromeHidden) return;
     setChromeHidden(false);
     if (isFullScreen()) setWindowState(m_preFullscreenState & ~Qt::WindowFullScreen);
+    if (!wasPage) fadeVeil(Motion::Slow, 0.7, 40);   // F11 exit
 #ifdef Q_OS_WIN
     QTimer::singleShot(0, this, [this]{ applyNativeFrame(); });   // Qt's fullscreen code swaps window styles
 #endif
@@ -1068,9 +1107,15 @@ void BrowserWindow::setChromeHidden(bool hidden) {
     }
 }
 void BrowserWindow::focusAddressBar() { m_addressBar->focusUrl(); }
-void BrowserWindow::zoomIn() { if(auto* t=activeTab()){ m_zoom->zoomIn(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000);} }
-void BrowserWindow::zoomOut(){ if(auto* t=activeTab()){ m_zoom->zoomOut(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000);} }
-void BrowserWindow::zoomReset(){ if(auto* t=activeTab()){ m_zoom->zoomReset(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QStringLiteral("100%")); statusBar()->showMessage(QStringLiteral("Zoom: 100%"), 1000);} }
+void BrowserWindow::zoomIn() { if(auto* t=activeTab()){ m_zoom->zoomIn(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000); showZoomBubble();} }
+void BrowserWindow::zoomOut(){ if(auto* t=activeTab()){ m_zoom->zoomOut(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QString::number(m_zoom->zoomPercent())+QStringLiteral("%")); statusBar()->showMessage(QStringLiteral("Zoom: %1%").arg(m_zoom->zoomPercent()), 1000); showZoomBubble();} }
+void BrowserWindow::zoomReset(){ if(auto* t=activeTab()){ m_zoom->zoomReset(); t->setZoomFactor(m_zoom->zoom()); m_zoomIndicator->setText(QStringLiteral("100%")); statusBar()->showMessage(QStringLiteral("Zoom: 100%"), 1000); showZoomBubble();} }
+// Zoom indicator (kit #28/#29): a pill under the toolbar, fade 160 / hold 900 / fade 140. The page
+// zoom itself stays instant (animating setZoomFactor would reflow every frame).
+void BrowserWindow::showZoomBubble() {
+    const int top = (m_chromeHidden || !m_toolbar) ? 16 : m_toolbar->mapTo(this, QPoint(0, m_toolbar->height())).y() + 12;
+    Motion::bubble(this, QString::number(m_zoom->zoomPercent()) + QStringLiteral("%"), 900, top);
+}
 void BrowserWindow::showFind(){ if(auto* t=activeTab()) t->showFindBar(); }
 void BrowserWindow::handleEscape(){
     if (m_chromeHidden) { exitContentFullscreen(); return; }
@@ -1202,6 +1247,7 @@ void BrowserWindow::loadSettings(){
     else Pacitum::clearReducedMotionOverride();
     if (auto* b = qobject_cast<PacitumTabBar*>(m_tabs->stripBar())) b->animationsEnabled = m_animations;
     m_addressBar->setSuggestionsEnabled(s.value(QStringLiteral("show_suggestions")).toBool(true));
+    m_bookmarksBar->setProperty("_pmTarget", QVariant());
     m_bookmarksBar->setVisible(s.value(QStringLiteral("show_bookmarks_bar")).toBool(true));
     if(s.value(QStringLiteral("vertical_tabs")).toBool(false)){ m_verticalTabs=true; m_tabs->setVertical(true); m_splitTabs->setVertical(true); }
     int zoomPct=s.value(QStringLiteral("default_zoom")).toInt(100); m_zoom->setZoom(zoomPct/100.0);
@@ -1694,7 +1740,7 @@ void BrowserWindow::writeSetting(const QString& key, const QJsonValue& value) {
 }
 
 void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {
-    if (Pacitum::reducedMotion() || !isVisible()) { apply(); return; }   // reduced motion: theme change is instant
+    if (!isVisible() || Motion::fadeMs(Motion::Medium) <= 0) { apply(); return; }   // reduced motion: plain 120 ms cross-fade
     auto* shot = new QLabel(this);
     shot->setObjectName(QStringLiteral("PacitumWindowOverlay"));
     shot->setScaledContents(true);
@@ -1705,7 +1751,7 @@ void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {
     apply();
     auto* eff = new QGraphicsOpacityEffect(shot); eff->setOpacity(1.0); shot->setGraphicsEffect(eff);
     auto* a = new QPropertyAnimation(eff, "opacity", shot);
-    a->setDuration(200); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    a->setDuration(Motion::fadeMs(Motion::Medium)); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
     connect(a, &QPropertyAnimation::finished, shot, &QObject::deleteLater);
     a->start();
 }
@@ -1761,7 +1807,7 @@ void BrowserWindow::openWelcome() {
 void BrowserWindow::endWelcome() {
     FirstRunBridge::markFirstRunDone();
     if (m_bookmarksBar && !m_bookmarksBar->isVisible())
-        m_bookmarksBar->setVisible(readSettings().value(QStringLiteral("show_bookmarks_bar")).toBool(true));
+        Motion::slideVisible(m_bookmarksBar, readSettings().value(QStringLiteral("show_bookmarks_bar")).toBool(true), 0, Motion::Base);
 }
 
 

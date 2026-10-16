@@ -1,6 +1,10 @@
 #include "AppSettings.h"
 #include "Widgets.h"
 #include "DownloadManager.h"
+#include <QSet>
+#include <QPropertyAnimation>
+#include <QGraphicsOpacityEffect>
+#include "Motion.h"
 #include "ThemeManager.h"
 #include "WebProfile.h"
 #include <QApplication>
@@ -710,7 +714,27 @@ void DownloadsPage::rebuild() {
     QWidget* focused = QApplication::focusWidget();
     qint64 focusId = -1;
     if (auto* fw = qobject_cast<DownloadItemWidget*>(focused); fw && m_listHost->isAncestorOf(fw)) focusId = fw->id();
+    // Entry removed: its card leaves as a fading snapshot (140 ms) at its old place; new entries fade in.
+    QSet<qint64> nowIds; for (const auto& e : DownloadManager::instance()->entries()) nowIds.insert(e.id);
+    const bool animate = Motion::enabled() && isVisible() && m_listPrimed;
+    QHash<qint64, QRect> oldGeo; QHash<qint64, QPixmap> oldShots;
+    for (int i = 0; i < m_list->count(); ++i)
+        if (auto* c = qobject_cast<DownloadItemWidget*>(m_list->itemAt(i)->widget())) {
+            if (animate && !nowIds.contains(c->id()) && c->isVisible()) { oldGeo[c->id()] = c->geometry(); oldShots[c->id()] = c->grab(); }
+        }
+    const QSet<qint64> before = m_shownIds;
     while (auto* it = m_list->takeAt(0)) { if (auto* w = it->widget()) w->deleteLater(); delete it; }
+    for (auto it = oldShots.cbegin(); it != oldShots.cend(); ++it) {
+        auto* ghost = new QLabel(m_listHost);
+        ghost->setAttribute(Qt::WA_TransparentForMouseEvents);
+        ghost->setPixmap(it.value()); ghost->setGeometry(oldGeo.value(it.key())); ghost->show(); ghost->raise();
+        auto* eff = new QGraphicsOpacityEffect(ghost); ghost->setGraphicsEffect(eff);
+        auto* a = new QPropertyAnimation(eff, "opacity", ghost);
+        a->setDuration(Motion::ms(Motion::Quick)); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::InCubic);
+        connect(a, &QPropertyAnimation::finished, ghost, &QObject::deleteLater);
+        a->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+    m_shownIds.clear();
     const QString q = m_search->text().trimmed();
     QDate last; int shown = 0;
     for (const auto& e : DownloadManager::instance()->entries()) {
@@ -725,9 +749,12 @@ void DownloadsPage::rebuild() {
         auto* card = new DownloadItemWidget(e.id, false, m_listHost);
         connect(card, &DownloadItemWidget::openSourceRequested, this, &DownloadsPage::openUrlRequested);
         m_list->addWidget(card);
+        m_shownIds.insert(e.id);
+        if (animate && !before.contains(e.id)) Motion::fadeIn(card, Motion::Medium);
         if (e.id == focusId) card->setFocus();
         ++shown;
     }
+    m_listPrimed = true;
     m_empty->setVisible(shown == 0);
     m_empty->findChild<QLabel*>(QStringLiteral("DlEmptyTitle"))->setText(q.isEmpty() || DownloadManager::instance()->entries().isEmpty() ? QStringLiteral("No downloads yet") : QStringLiteral("No matching downloads"));
     bool anyFinished = false; for (const auto& e : DownloadManager::instance()->entries()) anyFinished |= e.finished();
@@ -742,14 +769,14 @@ void DownloadsPage::showUndo(const QList<DownloadEntry>& removed) {
         auto* l = new QHBoxLayout(m_toast); l->setContentsMargins(16, 6, 8, 6); l->setSpacing(12);
         auto* t = new QLabel(m_toast); t->setObjectName(QStringLiteral("DlToastText")); l->addWidget(t);
         auto* u = new QPushButton(QStringLiteral("Undo"), m_toast); u->setCursor(Qt::PointingHandCursor); l->addWidget(u);
-        connect(u, &QPushButton::clicked, this, [this]{ DownloadManager::instance()->restore(m_undo); m_undo.clear(); m_toast->hide(); });
+        connect(u, &QPushButton::clicked, this, [this]{ DownloadManager::instance()->restore(m_undo); m_undo.clear(); Motion::toast(m_toast, false); });
         m_toastTimer = new QTimer(this); m_toastTimer->setSingleShot(true); m_toastTimer->setInterval(5000);
-        connect(m_toastTimer, &QTimer::timeout, this, [this]{ m_undo.clear(); m_toast->hide(); });
+        connect(m_toastTimer, &QTimer::timeout, this, [this]{ m_undo.clear(); Motion::toast(m_toast, false); });
     }
     m_toast->findChild<QLabel*>(QStringLiteral("DlToastText"))->setText(QStringLiteral("Cleared %1 download%2").arg(removed.size()).arg(removed.size() == 1 ? "" : "s"));
     m_toast->adjustSize();
     m_toast->move((width() - m_toast->width()) / 2, height() - m_toast->height() - 24);
-    m_toast->show(); m_toast->raise(); m_toastTimer->start();
+    m_toast->raise(); Motion::toast(m_toast, true); m_toastTimer->start();
 }
 
 // ---------- popup ----------

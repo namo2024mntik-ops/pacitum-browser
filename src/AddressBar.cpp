@@ -1,5 +1,6 @@
 #include "AddressBar.h"
 #include "Widgets.h"
+#include "Motion.h"
 #include <QPainter>
 #include <QPainterPath>
 #include "HistoryManager.h"
@@ -56,6 +57,7 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     layout->addWidget(m_star);
 
     m_completer = new QCompleter(this);
+    m_completer->popup()->setProperty("_pmNoSlide", true);   // re-positioned while typing: fade only
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
     m_completer->setMaxVisibleItems(8);
     m_input->setCompleter(m_completer);
@@ -142,10 +144,12 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
             setDisplayMode(false);
             if (!isInternalNewTab(m_currentUrl)) m_input->setText(m_currentUrl);   // full URL on focus
             setProperty("focused", true); style()->unpolish(this); style()->polish(this);
+            animateGlow(1.0);
             m_selectOnClick = true;
             QTimer::singleShot(0, m_input, [this]{ m_input->selectAll(); });
         } else if (e->type() == QEvent::FocusOut) {
             setProperty("focused", false); style()->unpolish(this); style()->polish(this);
+            animateGlow(0.0);
             if (!m_completer->popup()->isVisible()) showBlurred();
         } else if (e->type() == QEvent::MouseButtonRelease && m_selectOnClick) {
             m_selectOnClick = false; m_input->selectAll(); return true;
@@ -200,8 +204,10 @@ void AddressBar::updateSecurityIcon(const QString& url) {
     m_chip->setIcon(ic);
     m_chip->setText(text);
     m_chip->setToolButtonStyle(text.isEmpty() ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextBesideIcon);
+    const QVariant oldKind = m_chip->property("kind");
     m_chip->setProperty("kind", text.isEmpty() ? "icon" : (m_secureHttps ? "secure" : url.startsWith(QStringLiteral("http://")) ? "danger" : "internal"));
     m_chip->style()->unpolish(m_chip); m_chip->style()->polish(m_chip);
+    if (oldKind.isValid() && oldKind != m_chip->property("kind") && m_chip->isVisible()) Motion::fadeIn(m_chip, Motion::Base);   // security badge change
     if (text.isEmpty()) m_chip->setFixedWidth(28); else { m_chip->setMinimumWidth(28); m_chip->setMaximumWidth(200); }
 }
 
@@ -214,6 +220,7 @@ static qreal trickleAt(qreal t) {   // keyframes 0→30 % (300 ms OutCubic) →7
     return qMin(0.90, 0.82 + (t - 1900) / 60000.0);   // slow trickle, max 90 % until real progress
 }
 void AddressBar::initProgress() {
+    connect(&m_glowAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_glow = v.toReal(); update(); });
     m_trickle.setDuration(60000); m_trickle.setStartValue(0.0); m_trickle.setEndValue(60000.0);
     connect(&m_trickle, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){
         const qreal tv = trickleAt(v.toReal());
@@ -226,6 +233,13 @@ void AddressBar::initProgress() {
     connect(&m_fadeAnim, &QVariantAnimation::finished, this, [this]{ m_prog = 0; m_progOpacity = 0; m_progError = false; repaintProgress(); });
     m_fadeDelay.setSingleShot(true); m_fadeDelay.setInterval(100);
     connect(&m_fadeDelay, &QTimer::timeout, this, [this]{ m_fadeAnim.stop(); m_fadeAnim.setDuration(250); m_fadeAnim.setStartValue(m_progOpacity); m_fadeAnim.setEndValue(0.0); m_fadeAnim.start(); });
+}
+void AddressBar::animateGlow(qreal to) {
+    m_glowAnim.stop();
+    const int ms = Motion::fadeMs(Motion::Base);   // kit #13: ring alpha 160 ms (fade kept when reduced)
+    if (ms <= 0) { m_glow = to; update(); return; }
+    m_glowAnim.setDuration(ms); m_glowAnim.setEasingCurve(QEasingCurve::OutCubic);
+    m_glowAnim.setStartValue(m_glow); m_glowAnim.setEndValue(to); m_glowAnim.start();
 }
 void AddressBar::repaintProgress() { update(QRect(0, height() - 4, width(), 4)); }
 void AddressBar::progressStarted() {
@@ -257,6 +271,17 @@ void AddressBar::syncProgress(bool loading, int value) {
 }
 void AddressBar::paintEvent(QPaintEvent* e) {
     QFrame::paintEvent(e);
+    if (m_glow > 0.0) {   // focus glow: a soft accent halo just inside the 2 px focus border
+        QPainter g(this); g.setRenderHint(QPainter::Antialiasing);
+        QColor c(ThemeManager::current().accent);
+        for (int i = 0; i < 3; ++i) {
+            c.setAlphaF(0.16 * m_glow * (3 - i) / 3.0);
+            g.setPen(QPen(c, 1.0)); g.setBrush(Qt::NoBrush);
+            const qreal in = 2.5 + i;
+            const QRectF r = QRectF(rect()).adjusted(in, in, -in, -in);
+            g.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+        }
+    }
     if (m_progOpacity <= 0.0 || m_prog <= 0.0) return;
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
     QPainterPath clip; clip.addRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);

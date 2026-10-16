@@ -1,4 +1,5 @@
 #include "ProfileUi.h"
+#include "Motion.h"
 #include "ThemeManager.h"
 #include <QApplication>
 #include <QCheckBox>
@@ -133,6 +134,7 @@ ProfilePicker::ProfilePicker(Mode mode, QWidget* parent) : QWidget(parent, Qt::W
 QWidget* ProfilePicker::card(const ProfileInfo& p, bool add) {
     auto* c = new ClickFrame(this); c->setObjectName(QStringLiteral("PfCard")); c->setAttribute(Qt::WA_StyledBackground, true); c->setAttribute(Qt::WA_Hover, true);
     c->setFixedSize(156, 216); c->setCursor(Qt::PointingHandCursor); c->setProperty("editAll", m_editAll);
+    Motion::installHoverLift(c, -3);   // card lifts 3 px on hover (160 ms OutCubic)
     if (add || p.isGuest) c->setProperty("dashed", add);
     if (!add && !p.isGuest)   // hover ring in the profile's own colour
         c->setStyleSheet(QStringLiteral("#PfCard:hover { border: 2px solid %1; }").arg(p.colour));
@@ -223,7 +225,7 @@ ProfileEditDialog::ProfileEditDialog(const ProfileInfo& p, bool create, QWidget*
     for (const QString& col : ProfileManager::colours()) {
         auto* b = new QToolButton(form); b->setFixedSize(30, 30); b->setCheckable(true); b->setAutoRaise(true); b->setStyleSheet(QStringLiteral("QToolButton{background:transparent;border:none;padding:0;}")); b->setCursor(Qt::PointingHandCursor);
         b->setProperty("colour", col); b->setToolTip(col);
-        connect(b, &QToolButton::clicked, this, [this, col]{ m_p.colour = col; refreshPreview(); });
+        connect(b, &QToolButton::clicked, this, [this, col]{ m_p.colour = col; refreshPreview(); Motion::pop(m_avatar); });
         crow->addWidget(b); m_colourBtns << b;
     }
     crow->addStretch(); fl->addLayout(crow); fl->addSpacing(16);
@@ -232,7 +234,7 @@ ProfileEditDialog::ProfileEditDialog(const ProfileInfo& p, bool create, QWidget*
     for (const QString& g : ProfileManager::glyphs()) {
         auto* b = new QToolButton(form); b->setFixedSize(52, 52); b->setIconSize(QSize(52, 52)); b->setCheckable(true); b->setAutoRaise(true); b->setStyleSheet(QStringLiteral("QToolButton{background:transparent;border:none;padding:0;}"));
         b->setCursor(Qt::PointingHandCursor); b->setProperty("glyph", g); b->setToolTip(g == QStringLiteral("initial") ? QStringLiteral("Initial") : g);
-        connect(b, &QToolButton::clicked, this, [this, g]{ m_p.avatar = g; refreshPreview(); });
+        connect(b, &QToolButton::clicked, this, [this, g]{ m_p.avatar = g; refreshPreview(); Motion::pop(m_avatar); });
         arow->addWidget(b); m_glyphBtns << b;
     }
     arow->addStretch(); fl->addLayout(arow); fl->addStretch();

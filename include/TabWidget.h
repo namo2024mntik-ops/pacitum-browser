@@ -98,6 +98,7 @@ private:
     int m_avail = 0;
     quint64 m_nextId = 1;
     QHash<quint64, qreal> m_progress;
+    QHash<quint64, QPair<int, qreal>> m_pinMorph;   // pin/unpin width morph: from width, t
 };
 
 // QTabWidget whose (horizontal) tabs can be shown in a separate "TabStrip" widget placed

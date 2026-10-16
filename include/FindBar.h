@@ -12,6 +12,7 @@ public:
     explicit FindBar(QWidget* parent = nullptr);
     void setBrowserView(QWebEngineView* view) { m_view = view; }
     void showFind();
+    void hideFind();
 
 signals:
     void closed();

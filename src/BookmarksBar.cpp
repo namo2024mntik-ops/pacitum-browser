@@ -1,6 +1,9 @@
 #include "BookmarksBar.h"
 #include "BookmarkManager.h"
 #include "ThemeManager.h"
+#include "Motion.h"
+#include <QSet>
+#include <QPropertyAnimation>
 #include <QFontMetrics>
 #include <QPushButton>
 #include <QMenu>
@@ -38,6 +41,7 @@ BookmarksBar::BookmarksBar(BookmarkManager* mgr, QWidget* parent) : QWidget(pare
 }
 
 void BookmarksBar::refresh() {
+    QSet<QString> before = m_shownUrls; m_shownUrls.clear();
     // remove all except stretch
     while (m_innerLayout->count() > 1) {
         auto* item = m_innerLayout->takeAt(0);
@@ -57,7 +61,21 @@ void BookmarksBar::refresh() {
         btn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(btn, &QWidget::customContextMenuRequested, this, [this, url, btn](const QPoint& p){ showContextMenu(p, url, btn); });
         m_innerLayout->insertWidget(m_innerLayout->count()-1, btn);
+        if (m_primed && !before.contains(url) && isVisible()) {   // kit #18: new chip grows in (maxWidth 0→hint, OutBack) + fades
+            Motion::fadeIn(btn, Motion::Medium);
+            if (Motion::enabled()) {
+                const int w = btn->sizeHint().width();
+                btn->setMaximumWidth(0);
+                auto* a = new QPropertyAnimation(btn, "maximumWidth", btn);
+                a->setDuration(Motion::Medium); a->setStartValue(0); a->setEndValue(w);
+                QEasingCurve back(QEasingCurve::OutBack); back.setOvershoot(1.2); a->setEasingCurve(back);
+                connect(a, &QPropertyAnimation::finished, btn, [btn]{ btn->setMaximumWidth(QWIDGETSIZE_MAX); });
+                a->start(QAbstractAnimation::DeleteWhenStopped);
+            }
+        }
+        m_shownUrls.insert(url);
     }
+    m_primed = true;
 }
 
 void BookmarksBar::showContextMenu(const QPoint& pos, const QString& url, QWidget* btn) {

@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QSet>
 #include <QHBoxLayout>
 
 class BookmarkManager;
@@ -22,5 +23,6 @@ private:
     QHBoxLayout* m_innerLayout = nullptr;
     QWidget* m_inner = nullptr;
     ThemeManager* m_theme = nullptr;
+    QSet<QString> m_shownUrls; bool m_primed = false;
     class QPushButton* m_other = nullptr;
 };

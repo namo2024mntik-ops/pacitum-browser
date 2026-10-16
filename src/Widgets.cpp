@@ -1,3 +1,4 @@
+#include <cmath>
 #include "Widgets.h"
 #include "ThemeManager.h"
 #include <QPainter>
@@ -6,6 +7,9 @@
 #include <QApplication>
 #include <QMenu>
 #include <QPropertyAnimation>
+#include <QCursor>
+#include <QGraphicsOpacityEffect>
+#include "Motion.h"
 #include <QDialog>
 #include <QPointer>
 #include <QTimer>
@@ -36,6 +40,8 @@ AnimatedToolButton::AnimatedToolButton(QWidget* parent) : QToolButton(parent) {
     m_spinAnim.setEasingCurve(QEasingCurve::OutCubic);
     m_fadeAnim.setEasingCurve(QEasingCurve::OutCubic);
     connect(&m_fadeAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_fade = v.toReal(); update(); });
+    connect(&m_nudgeAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ const qreal t = v.toReal(); m_nudge = m_nudgeDx * std::sin(t * M_PI) * (1.0 - 0.3 * t); update(); });
+    connect(&m_nudgeAnim, &QVariantAnimation::finished, this, [this]{ m_nudge = 0; update(); });
     connect(&m_fadeAnim, &QVariantAnimation::finished, this, [this]{ m_prevIcon = QIcon(); m_fade = 1.0; update(); });
 }
 void AnimatedToolButton::animatePress(qreal to, int ms, QEasingCurve::Type ease) {
@@ -47,7 +53,7 @@ void AnimatedToolButton::animatePress(qreal to, int ms, QEasingCurve::Type ease)
 void AnimatedToolButton::mousePressEvent(QMouseEvent* e) {
     if (e->button() == Qt::LeftButton && isEnabled()) {
         if (m_anim.state() == QAbstractAnimation::Running) { m_anim.stop(); m_level = 1.0; }   // press during hover-in: bg jumps to 1
-        animatePress(0.92, 60, QEasingCurve::OutCubic);
+        animatePress(0.96, 80, QEasingCurve::OutCubic);   // kit #39: press 80 ms to 0.96
     }
     QToolButton::mousePressEvent(e);
 }
@@ -60,7 +66,21 @@ void AnimatedToolButton::spin() {
     // Interruption: a second click adds another turn, 400 ms from now, starting at the current angle.
     const qreal from = m_spinAnim.state() == QAbstractAnimation::Running ? m_rotation : 0.0;
     const qreal to = m_spinAnim.state() == QAbstractAnimation::Running ? m_spinAnim.endValue().toReal() + 360.0 : 360.0;
-    m_spinAnim.stop(); m_spinAnim.setDuration(400); m_spinAnim.setStartValue(from); m_spinAnim.setEndValue(to); m_spinAnim.start();
+    m_spinAnim.stop(); m_spinAnim.setEasingCurve(QEasingCurve::OutCubic); m_spinAnim.setDuration(280);   // kit #12 m_spinAnim.setStartValue(from); m_spinAnim.setEndValue(to); m_spinAnim.start();
+}
+void AnimatedToolButton::bump() {
+    // Download start (kit #19): glyph scales 1→1.18→1 over 160 ms OutCubic.
+    if (Pacitum::reducedMotion()) return;
+    m_pressAnim.stop(); m_pressAnim.setDuration(Motion::Base); m_pressAnim.setEasingCurve(QEasingCurve::OutCubic);
+    m_pressAnim.setStartValue(1.0); m_pressAnim.setKeyValueAt(0.5, 1.18); m_pressAnim.setEndValue(1.0); m_pressAnim.start();
+    QTimer::singleShot(Motion::Base + 20, this, [this]{ if (m_pressAnim.state() != QAbstractAnimation::Running) m_pressAnim.setKeyValues({}); });
+}
+void AnimatedToolButton::nudge(qreal dx) {
+    // Back / forward feedback: the glyph steps dx px in the direction of travel and settles back.
+    if (Pacitum::reducedMotion()) return;
+    m_nudgeAnim.stop(); m_nudgeDx = dx;
+    m_nudgeAnim.setDuration(Motion::ms(Motion::Medium)); m_nudgeAnim.setStartValue(0.0); m_nudgeAnim.setEndValue(1.0);
+    m_nudgeAnim.start();
 }
 void AnimatedToolButton::setIconAnimated(const QIcon& ic, int ms) {
     if (ic.cacheKey() == icon().cacheKey()) return;
@@ -80,7 +100,7 @@ void AnimatedToolButton::paintGlyph(QPainter& p) {
         p.save();
         p.setRenderHint(QPainter::SmoothPixmapTransform);
         p.setOpacity(p.opacity() * opacity);
-        p.translate(c); if (m_rotation != 0.0) p.rotate(m_rotation); p.scale(scale, scale); p.translate(-c);
+        p.translate(c + QPointF(m_nudge, 0)); if (m_rotation != 0.0) p.rotate(m_rotation); p.scale(scale, scale); p.translate(-c);
         p.drawPixmap(QRectF(c.x() - is.width() / 2.0, c.y() - is.height() / 2.0, is.width(), is.height()), pm, QRectF(pm.rect()));
         p.restore();
     };
@@ -175,13 +195,14 @@ void WindowButton::paintEvent(QPaintEvent*) {
 
 ToggleSwitch::ToggleSwitch(QWidget* parent) : QAbstractButton(parent) {
     setCheckable(true); setCursor(Qt::PointingHandCursor); setFixedSize(36, 20);
-    m_anim.setDuration(120); m_anim.setEasingCurve(QEasingCurve::OutCubic);
+    m_anim.setDuration(160); m_anim.setEasingCurve(QEasingCurve::OutCubic);   // kit #38: knob 160 ms
     connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_pos = v.toReal(); update(); });
 }
 void ToggleSwitch::checkStateSet() { m_anim.stop(); m_pos = isChecked() ? 1.0 : 0.0; update(); }
 void ToggleSwitch::nextCheckState() {
     QAbstractButton::nextCheckState();
-    m_anim.stop(); m_anim.setStartValue(m_pos); m_anim.setEndValue(isChecked() ? 1.0 : 0.0); m_anim.start();
+    m_anim.stop(); m_anim.setDuration(Motion::fadeMs(160));   // reduced: still moves, 120 ms (state must stay visible)
+    m_anim.setStartValue(m_pos); m_anim.setEndValue(isChecked() ? 1.0 : 0.0); m_anim.start();
 }
 void ToggleSwitch::paintEvent(QPaintEvent*) {
     const auto& pal = ThemeManager::current();
@@ -294,32 +315,83 @@ public:
     // Dialogs also rise 8 px. Only plain raster top-levels are animated (never a window that hosts
     // a web view: layered-window opacity breaks its GPU swap chain). Reduced motion: instant.
     bool eventFilter(QObject* o, QEvent* e) override {
-        if (e->type() != QEvent::Show) return false;
+        if (e->type() != QEvent::Show && e->type() != QEvent::Hide) return false;
         auto* w = qobject_cast<QWidget*>(o);
-        if (!w || !w->isWindow() || Pacitum::reducedMotion()) return false;
+        if (!w || !w->isWindow()) return false;
+        // A widget in its QWidget base destructor reports QWidget's meta-object: never touch it.
+        if (w->metaObject() == &QWidget::staticMetaObject) return false;
         const bool menu = qobject_cast<QMenu*>(w) != nullptr;
         const bool dialog = !menu && qobject_cast<QDialog*>(w) != nullptr && !w->inherits("QFileDialog");
         const bool popup = !menu && !dialog && (w->windowFlags() & Qt::WindowType_Mask) == Qt::Popup;
         if (!menu && !dialog && !popup) return false;
         if (w->property("_pacitumNoFade").toBool()) return false;
         for (auto* c : w->findChildren<QWidget*>()) if (c->inherits("QWebEngineView")) return false;
-        const int ms = Pacitum::motionMs(menu ? 140 : dialog ? 180 : 150);   // spec §5.5 menu 140 ms OutCubic
+        const bool reduced = Pacitum::reducedMotion();
+        if (e->type() == QEvent::Hide) {
+            removeScrim(w);
+            // Close: a click-through snapshot fades out (menus/popups 120 ms InCubic, dialogs 120 ms + 0.97).
+            if (w->property("_pmShown").toBool() && !e->spontaneous()) {
+                w->setProperty("_pmShown", false);
+                Motion::ghostOut(w, Motion::Fast, dialog ? 0.97 : 0.98);
+            }
+            return false;
+        }
+        w->setProperty("_pmShown", true);
+        // Context menus open at the cursor: opacity only, 120 ms (kit #23). Menus/popups 140 ms with
+        // a 4 px drop (kit #22); dialogs 200 ms rising 8 px over a scrim (kit #25). Reduced motion:
+        // the fade stays (120 ms), the movement goes.
+        const bool context = menu && !w->parentWidget() ? true
+                             : menu && (QCursor::pos() - w->pos()).manhattanLength() < 24;
+        const int ms = Motion::fadeMs(dialog ? Motion::Medium : context ? Motion::Fast : Motion::Quick);
         if (ms <= 0) return false;
         w->setWindowOpacity(0.0);
         auto* a = new QPropertyAnimation(w, "windowOpacity", w);
         a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
         a->start(QAbstractAnimation::DeleteWhenStopped);
-        if (dialog) {
-            QPointer<QWidget> guard(w);
-            QTimer::singleShot(0, w, [guard, ms]{   // after the dialog has been positioned
-                if (!guard) return;
-                const QPoint end = guard->pos();
-                auto* m = new QPropertyAnimation(guard.data(), "pos", guard.data());
-                m->setDuration(ms + 40); m->setStartValue(end + QPoint(0, 8)); m->setEndValue(end); m->setEasingCurve(QEasingCurve::OutCubic);
-                m->start(QAbstractAnimation::DeleteWhenStopped);
-            });
-        }
+        if (dialog && w->isModal()) addScrim(w);
+        QPointer<QWidget> guard(w);
+        const int dy = (reduced || context || w->property("_pmNoSlide").toBool()) ? 0 : dialog ? 8 : -4;
+        if (dy) QTimer::singleShot(0, w, [guard, ms, dy]{   // after the window has been positioned
+            if (!guard || !guard->isVisible()) return;
+            const QPoint end = guard->pos();
+            auto* m = new QPropertyAnimation(guard.data(), "pos", guard.data());
+            m->setDuration(ms + 40); m->setStartValue(end + QPoint(0, dy)); m->setEndValue(end); m->setEasingCurve(QEasingCurve::OutCubic);
+            m->start(QAbstractAnimation::DeleteWhenStopped);
+        });
         return false;
+    }
+private:
+    // Modal scrim: a dim child over the parent browser window (named like the other transient
+    // window overlays, so BrowserWindow::resizeEvent keeps it at the window size).
+    static void addScrim(QWidget* dlg) {
+        QWidget* host = dlg->parentWidget() ? dlg->parentWidget()->window() : nullptr;
+        if (!host || !host->inherits("BrowserWindow") || !host->isVisible()) return;
+        auto* scrim = new QWidget(host);
+        scrim->setObjectName(QStringLiteral("PacitumWindowOverlay"));
+        scrim->setProperty("_pmScrimFor", QVariant::fromValue<quintptr>(reinterpret_cast<quintptr>(dlg)));
+        scrim->setAttribute(Qt::WA_TransparentForMouseEvents);
+        scrim->setAutoFillBackground(true);
+        QPalette pal = scrim->palette(); pal.setColor(QPalette::Window, QColor(0, 0, 0, 56)); scrim->setPalette(pal);
+        scrim->setGeometry(host->rect()); scrim->show(); scrim->raise();
+        auto* eff = new QGraphicsOpacityEffect(scrim); eff->setOpacity(0.0); scrim->setGraphicsEffect(eff);
+        auto* a = new QPropertyAnimation(eff, "opacity", scrim);
+        a->setDuration(Motion::fadeMs(Motion::Medium)); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+        a->start(QAbstractAnimation::DeleteWhenStopped);
+    }
+    static void removeScrim(QWidget* dlg) {
+        QWidget* host = dlg->parentWidget() ? dlg->parentWidget()->window() : nullptr;
+        if (!host) return;
+        for (auto* c : host->findChildren<QWidget*>(QStringLiteral("PacitumWindowOverlay"), Qt::FindDirectChildrenOnly)) {
+            if (c->property("_pmScrimFor").value<quintptr>() != reinterpret_cast<quintptr>(dlg)) continue;
+            c->setProperty("_pmScrimFor", QVariant());
+            auto* eff = qobject_cast<QGraphicsOpacityEffect*>(c->graphicsEffect());
+            const int d = Motion::fadeMs(Motion::Fast);
+            if (!eff || d <= 0) { c->deleteLater(); continue; }
+            auto* a = new QPropertyAnimation(eff, "opacity", c);
+            a->setDuration(d); a->setStartValue(eff->opacity()); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::InCubic);
+            QObject::connect(a, &QPropertyAnimation::finished, c, &QObject::deleteLater);
+            a->start(QAbstractAnimation::DeleteWhenStopped);
+        }
     }
 };
 }

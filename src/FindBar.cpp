@@ -1,11 +1,12 @@
 #include "FindBar.h"
+#include "Motion.h"
 #include <QWebEngineView>
 #include <QWebEnginePage>
 #include <QWebEngineFindTextResult>
 #include <QHBoxLayout>
 
 FindBar::FindBar(QWidget* parent) : QWidget(parent) {
-    setFixedHeight(48); hide();
+    setMinimumHeight(0); setMaximumHeight(48); setProperty("_pmMax", 48); hide();   // height animated by Motion::slideVisible
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(12,6,12,6); layout->setSpacing(8);
 
@@ -27,7 +28,12 @@ FindBar::FindBar(QWidget* parent) : QWidget(parent) {
     connect(m_close, &QPushButton::clicked, this, &FindBar::closeBar);
 }
 
-void FindBar::showFind() { m_input->clear(); m_input->setFocus(); show(); }
+void FindBar::showFind() {
+    m_input->clear();
+    Motion::slideVisible(this, true, 48, Motion::Base);   // slides down 160 ms OutCubic
+    m_input->setFocus();
+}
+void FindBar::hideFind() { Motion::slideVisible(this, false, 48, Motion::Fast); }
 
 void FindBar::onTextChanged(const QString& t) {
     if (!m_view || t.isEmpty()) { m_result->setText({}); return; }
@@ -47,5 +53,5 @@ void FindBar::doFind(bool forward) {
 
 void FindBar::closeBar() {
     if (m_view) m_view->findText({});
-    hide(); emit closed();
+    hideFind(); emit closed();
 }

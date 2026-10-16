@@ -37,6 +37,7 @@
 #include <QWebEngineHistory>
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <shobjidl.h>
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <shellapi.h>
@@ -54,6 +55,8 @@
 #include <QAction>
 #include <QKeySequence>
 #include <QShortcut>
+#include "PermissionController.h"
+#include "SitePermissions.h"
 #include <QMessageBox>
 #include <QApplication>
 #include <QClipboard>
@@ -114,7 +117,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     updateDownloadsButton();
     installPopupFactory();
     qApp->installEventFilter(this);
-    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test"));
+    m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test")) || qApp->arguments().contains(QStringLiteral("--permissions-test"));
     setupUpdater();
     setupHome();
 #ifdef Q_OS_WIN
@@ -209,6 +212,9 @@ void BrowserWindow::setupDownloadHandler() {
         if (dl->state() != QWebEngineDownloadRequest::DownloadRequested) return;
         auto* aw = qobject_cast<BrowserWindow*>(QApplication::activeWindow());
         if (aw && aw != this) return;
+        // Multiple automatic downloads (§11): held / blocked per origin by the page's controller.
+        for (auto* c : PermissionController::all())
+            if (c->page() && c->page() == dl->page() && !c->filterDownload(dl)) { dl->cancel(); return; }
         onDownloadRequested(dl);
     });
 }
@@ -483,6 +489,10 @@ void BrowserWindow::setupShortcuts() {
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+O")), this, SLOT(toggleBookmarksBar()));
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+E")), this, SLOT(toggleVerticalTabs()));
     new QShortcut(QKeySequence(Qt::Key_Escape), this, SLOT(handleEscape()));
+    // §10: F6 / Alt+Shift+A focus the pending permission prompt (F6 falls back to the omnibox).
+    new QShortcut(QKeySequence(QStringLiteral("Alt+Shift+A")), this, [this]{ if (auto* t = activeTab(); t && t->permissions()) t->permissions()->focusPending(); });
+    new QShortcut(QKeySequence(Qt::Key_F6), this, [this]{
+        if (auto* t = activeTab(); t && t->permissions() && t->permissions()->hasPending()) t->permissions()->focusPending(); else focusAddressBar(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+T")), this, [this]{ newTab(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+W")), this, [this]{ closeTab(m_tabs->currentIndex()); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+D")), this, SLOT(toggleBookmark()));
@@ -593,6 +603,7 @@ void BrowserWindow::newTab(const QString& url) {
         }
     });
     connect(tab, &BrowserTab::crashed, this, [this, tab]{ const int i = m_tabs->indexOf(tab); if (i >= 0) m_tabs->setTabCrashed(i, true); });
+    wirePermissions(tab);
     if (tab->view()) {
         connect(tab->view()->page(), &QWebEnginePage::recentlyAudibleChanged, this, [this, tab]{ updateTabAudio(tab); });
         connect(tab->view()->page(), &QWebEnginePage::audioMutedChanged, this, [this, tab]{ updateTabAudio(tab); });
@@ -661,16 +672,22 @@ void BrowserWindow::tabActivated(PacitumTabWidget* sender, int index) {
     // Switching tabs while a page is fullscreen (Ctrl+Tab, a popup opening a tab): leave fullscreen
     // so the new tab is never shown without chrome.
     if (m_pageFullscreen && m_fullscreenTab && w != m_fullscreenTab && sender == m_tabs) finishExitFullscreen();
+    for (auto* tw : {m_tabs, m_splitTabs}) if (tw) for (int i = 0; i < tw->count(); ++i)   // bubble → chip on tab switch (§1)
+        if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i)); t && t != w && t->permissions()) t->permissions()->collapse();
     if (auto* tab = qobject_cast<BrowserTab*>(w)) {
         updateAddressBar(tab->currentUrl());
+        refreshPermissionUi(tab);
+        if (tab->permissions()) QTimer::singleShot(0, tab->permissions(), [p = QPointer<PermissionController>(tab->permissions())]{ if (p) p->tabActivated(); });
         m_addressBar->syncProgress(tab->isLoading(), tab->loadProgressValue());
         if (m_animations) tab->fadeIn();
         setWindowTitle(tab->currentTitle() + QStringLiteral(" — Pacitum Browser"));
     } else if (qobject_cast<DownloadsPage*>(w)) {
+        m_addressBar->setPermissionChips({});
         m_addressBar->setUrl(QStringLiteral("pacitum://downloads"));
         m_addressBar->setBookmarked(false);
         setWindowTitle(QStringLiteral("Downloads — Pacitum Browser"));
     } else if (qobject_cast<SettingsPage*>(w)) {
+        m_addressBar->setPermissionChips({});
         m_addressBar->setUrl(QStringLiteral("pacitum://settings"));
         m_addressBar->setBookmarked(false);
         setWindowTitle(QStringLiteral("Settings — Pacitum Browser"));
@@ -868,6 +885,8 @@ void BrowserWindow::onSettingChanged(const QString& key) {
     } else if (key == QStringLiteral("javascript_enabled") || key == QStringLiteral("popups_allowed")) {
         Pacitum::webPrefs().javascript = s.value(QStringLiteral("javascript_enabled")).toBool(true);
         Pacitum::webPrefs().popups = s.value(QStringLiteral("popups_allowed")).toBool(false);
+        if (key == QStringLiteral("popups_allowed"))
+            Perm::Store::forProfile(Pacitum::mainProfile())->setDefault(Perm::Kind::Popups, Pacitum::webPrefs().popups ? Perm::Decision::Allow : Perm::Decision::Block);
         Pacitum::applyWebSettings(Pacitum::mainProfile()->settings());
         forTabs([](BrowserTab* t){ t->applyWebSettings(); });
     } else if (key == QStringLiteral("animations")) {
@@ -998,6 +1017,10 @@ void BrowserWindow::showDevTools() {
 
 void BrowserWindow::copyCurrentUrl() { if (auto* t=activeTab()) { QApplication::clipboard()->setText(t->currentUrl()); statusBar()->showMessage(QStringLiteral("Page address copied"), 1800);} }
 void BrowserWindow::showPageInfo() {
+    if (auto* t = activeTab(); t && t->permissions() && !t->permissions()->origin().isEmpty()) {   // site controls panel (§7)
+        t->permissions()->showSiteControls(m_addressBar->bubbleAnchor());
+        return;
+    }
     if (auto* t=activeTab()) {
         QString url=t->currentUrl();
         QString sec = url.startsWith(QStringLiteral("https://")) ? QStringLiteral("Secure HTTPS connection") : QStringLiteral("Unencrypted or local page");
@@ -1320,6 +1343,7 @@ void BrowserWindow::keyPressEvent(QKeyEvent* e){
 }
 
 void BrowserWindow::changeEvent(QEvent* e) {
+    if (e->type() == QEvent::WindowTitleChange && !m_titleGuard) updateRecordingIndicator();
     if (e->type() == QEvent::WindowStateChange && m_maxBtn) {
         m_maxBtn->setMaximized(isMaximized());
         m_maxBtn->setToolTip(isMaximized() ? QStringLiteral("Restore") : QStringLiteral("Maximize"));
@@ -1379,6 +1403,17 @@ Qt::Edges BrowserWindow::edgesAt(const QPoint& global) const {
 }
 
 bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
+    // User activation for pop-up / download / device-chooser gating (permissions-spec §11).
+    if (e->type() == QEvent::MouseButtonPress || e->type() == QEvent::KeyPress || e->type() == QEvent::TouchBegin) {
+        if (auto* w = qobject_cast<QWidget*>(o); w && w->window() == this) {
+            for (QWidget* p = w; p; p = p->parentWidget())
+                if (auto* t = qobject_cast<BrowserTab*>(p)) {
+                    if (t->permissions() && (w == t->view() || t->view()->isAncestorOf(w)) && !(e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() >= Qt::Key_Shift && static_cast<QKeyEvent*>(e)->key() <= Qt::Key_ScrollLock))
+                        t->permissions()->noteUserInput();
+                    break;
+                }
+        }
+    }
     if (m_chromeHidden && (e->type() == QEvent::KeyPress || e->type() == QEvent::ShortcutOverride)) {
         auto* ke = static_cast<QKeyEvent*>(e);
         auto* w = qobject_cast<QWidget*>(o);
@@ -1875,4 +1910,74 @@ void BrowserWindow::handleHomeAction(const QString& name, const QMap<QString, QS
     } else if (name == QStringLiteral("history")) {
         showHistory();
     }
+}
+
+
+// ---------------------------------------------------------------- 1.7.5 site permissions
+void BrowserWindow::wirePermissions(BrowserTab* tab) {
+    auto* pc = tab->permissions();
+    if (!pc) return;
+    QPointer<BrowserTab> guard(tab);
+    pc->anchor = [this]{ return m_addressBar->bubbleAnchor(); };
+    pc->canPrompt = [this, guard]{ return guard && guard == activeTab() && isActiveWindow() && !isMinimized(); };
+    pc->favicon = [guard]{ return guard ? guard->icon() : QIcon(); };
+    pc->shareableTabs = [this, guard]{
+        QList<PermUi::ScreenSharePicker::TabSource> out;
+        for (auto* tw : {m_tabs, m_splitTabs}) if (tw) for (int i = 0; i < tw->count(); ++i) {
+            auto* t = qobject_cast<BrowserTab*>(tw->widget(i));
+            if (!t || t == guard || !t->permissions() || t->isLazy()) continue;
+            if (t->currentUrl().startsWith(QStringLiteral("pacitum"))) continue;
+            QPointer<PermissionController> p(t->permissions());
+            out << PermUi::ScreenSharePicker::TabSource{t->permissions()->tabToken(), t->currentTitle(), t->icon(),
+                                                      [p]{ return p ? p->grabFrame() : QPixmap(); }};
+        }
+        return out;
+    };
+    connect(pc, &PermissionController::stateChanged, this, [this, guard]{ if (guard) refreshPermissionUi(guard); });
+    connect(pc, &PermissionController::openUrlRequested, this, [this](const QString& u){ newTab(u); });
+    connect(pc, &PermissionController::mouseLockHint, this, [this]{ Motion::bubble(this, QStringLiteral("Press Esc to show your cursor"), 1700, 90); });
+    connect(pc, &PermissionController::siteSettingsRequested, this, [this](const QString& origin){
+        showSettings();
+        for (int i = 0; i < m_tabs->count(); ++i) if (auto* sp = qobject_cast<SettingsPage*>(m_tabs->widget(i))) sp->showSiteDetails(origin);
+    });
+}
+
+void BrowserWindow::refreshPermissionUi(BrowserTab* tab) {
+    if (!tab || !tab->permissions()) return;
+    auto* pc = tab->permissions();
+    for (auto* tw : {m_tabs, m_splitTabs}) if (tw) if (int i = tw->indexOf(tab); i >= 0) tw->setTabUsage(i, pc->tabUsage());
+    if (tab == activeTab()) m_addressBar->setPermissionChips(pc->chips());
+    updateRecordingIndicator();
+}
+
+// §5 window level: "● " title prefix and (Windows) a red taskbar overlay while any tab captures.
+void BrowserWindow::updateRecordingIndicator() {
+    bool capturing = false;
+    for (auto* tw : {m_tabs, m_splitTabs}) if (tw) for (int i = 0; i < tw->count(); ++i)
+        if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i)); t && t->permissions() && t->permissions()->capturing()) capturing = true;
+    const QString dot = QStringLiteral("\u25CF ");
+    QString title = windowTitle();
+    const bool has = title.startsWith(dot);
+    if (capturing != has) {
+        m_titleGuard = true;
+        setWindowTitle(capturing ? dot + title : title.mid(dot.size()));
+        m_titleGuard = false;
+    }
+#ifdef Q_OS_WIN
+    if (capturing != m_overlayShown && internalWinId()) {
+        m_overlayShown = capturing;
+        ITaskbarList3* tb = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER, IID_ITaskbarList3, reinterpret_cast<void**>(&tb))) && tb) {
+            tb->HrInit();
+            HICON icon = nullptr;
+            if (capturing) {
+                QPixmap pm = ThemeManager::icon(QStringLiteral("recording-dot"), ThemeManager::current().danger, 16).pixmap(16, 16);
+                icon = pm.toImage().toHICON();
+            }
+            tb->SetOverlayIcon(reinterpret_cast<HWND>(internalWinId()), icon, capturing ? L"Camera or microphone in use" : L"");
+            if (icon) DestroyIcon(icon);
+            tb->Release();
+        }
+    }
+#endif
 }

@@ -71,6 +71,9 @@ private slots:
     void closeTab(int index);
     void closeSplitTab(int index);
     void onTabChanged(int index);
+    void wirePermissions(class BrowserTab* tab);
+    void refreshPermissionUi(class BrowserTab* tab);
+    void updateRecordingIndicator();
     void navigateToUrl(const QString& url);
     void updateAddressBar(const QString& url);
     void updateTabTitle(const QString& title);
@@ -136,6 +139,7 @@ private:
     void finishExitFullscreen();       // restore chrome + window state now (no page round-trip)
     bool m_fsTransition = false;       // entering fullscreen: ignore intermediate state reports
     bool m_shownOnce = false;
+    bool m_titleGuard = false, m_overlayShown = false;
     void fadeInContent();
     void fadeVeil(int duration, qreal from, int delay);
     void showZoomBubble();

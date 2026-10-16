@@ -211,13 +211,15 @@ static void runHandoffTest(BrowserWindow* w) {
     p->start();
 }
 
+void runPermissionTest(BrowserWindow* w);
+
 int main(int argc, char *argv[]) {
     installLogging();
     bool smoke = false;
     bool stress = false;
     bool resizeTest = false;
     bool perf = false, handoffTest = false;
-    bool profileTest = false, guest = false, forcePicker = false;
+    bool profileTest = false, guest = false, forcePicker = false, permTest = false;
     QString profileArg;
     for (int i = 1; i < argc; ++i) {
         if (qstrcmp(argv[i], "--smoke-test") == 0) smoke = true;
@@ -226,6 +228,7 @@ int main(int argc, char *argv[]) {
         if (qstrcmp(argv[i], "--perf-test") == 0) perf = true;
         if (qstrcmp(argv[i], "--handoff-test") == 0) handoffTest = true;
         if (qstrcmp(argv[i], "--profile-test") == 0) profileTest = true;
+        if (qstrcmp(argv[i], "--permissions-test") == 0) permTest = true;
         if (qstrcmp(argv[i], "--guest") == 0) guest = true;
         if (qstrcmp(argv[i], "--profile-picker") == 0) forcePicker = true;
         if (qstrncmp(argv[i], "--profile-directory=", 20) == 0) profileArg = QString::fromLocal8Bit(argv[i] + 20);
@@ -273,7 +276,7 @@ int main(int argc, char *argv[]) {
             const QUrl u = QUrl::fromUserInput(a, launchDir, QUrl::AssumeLocalFile);
             if (u.isValid()) urlArgs << u.toString();
         }
-        const bool testRun = smoke || stress || resizeTest || perf || handoffTest;
+        const bool testRun = smoke || stress || resizeTest || perf || handoffTest || permTest;
         // Single instance: a plain second launch (taskbar, a link clicked in another app while
         // Pacitum is open) goes to the running browser before anything else -- the profile picker
         // used to come up first, and the link was lost. Explicit --profile/--guest/--profile-picker
@@ -377,7 +380,7 @@ int main(int argc, char *argv[]) {
         // Time-to-window: first moment the native window is actually exposed (on screen).
         auto* exposeProbe = new QTimer(&app);
         exposeProbe->setInterval(15);
-        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress, resizeTest, perf, handoffTest]{
+        QObject::connect(exposeProbe, &QTimer::timeout, &app, [&w, exposeProbe, smoke, stress, resizeTest, perf, handoffTest, permTest]{
             if (!w.windowHandle() || !w.windowHandle()->isExposed()) return;
             exposeProbe->stop(); exposeProbe->deleteLater();
             pacitumLog(QStringLiteral("window exposed (time-to-window)"));
@@ -389,6 +392,7 @@ int main(int argc, char *argv[]) {
                 });
             }
             if (handoffTest) QTimer::singleShot(1500, &w, [&w]{ runHandoffTest(&w); });
+            else if (permTest) QTimer::singleShot(1500, &w, [&w]{ runPermissionTest(&w); });
             else if (perf) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("perf test starting")); w.runPerfTest(); });
             else if (resizeTest) QTimer::singleShot(2500, &w, [&w]{ pacitumLog(QStringLiteral("resize test starting")); w.runResizeTest(); });
             else if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
@@ -403,7 +407,7 @@ int main(int argc, char *argv[]) {
             }
         });
         exposeProbe->start();
-        if (smoke || stress || resizeTest || perf || handoffTest) QTimer::singleShot(stress || resizeTest || perf || handoffTest ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
+        if (smoke || stress || resizeTest || perf || handoffTest || permTest) QTimer::singleShot(stress || resizeTest || perf || handoffTest || permTest ? 120000 : 40000, &app, []{ pacitumLog(QStringLiteral("TIMEOUT: window never exposed / test hung")); QCoreApplication::exit(4); });
         const int rc = app.exec();
         pacitumLog(QStringLiteral("exit %1").arg(rc));
         return rc;

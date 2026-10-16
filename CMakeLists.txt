@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.7.0 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.7.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,6 +9,9 @@ set(CMAKE_AUTOUIC ON)
 
 # Find Qt6
 find_package(Qt6 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network Concurrent)
+# 1.7.5 site permissions: Web Serial I/O (QSerialPort) and the Web Bluetooth chooser (QtBluetooth).
+# Optional so a Qt without these modules still builds; the shims then report NotSupportedError.
+find_package(Qt6 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
 
 # Include dirs
 include_directories(${CMAKE_SOURCE_DIR}/include)
@@ -42,6 +45,12 @@ set(SOURCES
     src/StressTest.cpp
     src/PerfTest.cpp
     src/ResizeTest.cpp
+    src/SitePermissions.cpp
+    src/PermissionUi.cpp
+    src/PermissionDevices.cpp
+    src/PermissionController.cpp
+    src/PermissionSettings.cpp
+    src/PermissionTest.cpp
 )
 
 set(HEADERS
@@ -68,6 +77,11 @@ set(HEADERS
     include/FirstRun.h
     include/AppSettings.h
     include/Updater.h
+    include/SitePermissions.h
+    include/PermissionUi.h
+    include/PermissionDevices.h
+    include/PermissionController.h
+    include/PermissionSettings.h
 )
 
 # Resources
@@ -92,8 +106,16 @@ target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Network
     Qt6::Concurrent
 )
+if(TARGET Qt6::SerialPort)
+    target_link_libraries(PacitumBrowser PRIVATE Qt6::SerialPort)
+    target_compile_definitions(PacitumBrowser PRIVATE PACITUM_HAVE_SERIALPORT)
+endif()
+if(TARGET Qt6::Bluetooth)
+    target_link_libraries(PacitumBrowser PRIVATE Qt6::Bluetooth)
+    target_compile_definitions(PacitumBrowser PRIVATE PACITUM_HAVE_BLUETOOTH)
+endif()
 if(WIN32)
-    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32 psapi)
+    target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32 psapi setupapi ole32)
 endif()
 
 # Platform specific

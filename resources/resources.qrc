@@ -1,5 +1,16 @@
 <RCC>
     <qresource prefix="/">
+        <file>icons/ui/bluetooth.svg</file>
+        <file>icons/ui/camera-mic.svg</file>
+        <file>icons/ui/downloads-multiple.svg</file>
+        <file>icons/ui/midi.svg</file>
+        <file>icons/ui/permission-blocked.svg</file>
+        <file>icons/ui/recording-dot.svg</file>
+        <file>icons/ui/screen-share.svg</file>
+        <file>icons/ui/serial-port.svg</file>
+        <file>icons/ui/storage.svg</file>
+        <file>icons/ui/usb.svg</file>
+        <file>permissions/shim.js</file>
         <file>icons/ui/accessibility.svg</file>
         <file>icons/ui/ad-blocked.svg</file>
         <file>icons/ui/add.svg</file>

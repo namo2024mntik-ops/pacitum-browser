@@ -11,7 +11,7 @@ jobs:
         with:
           version: '6.8.*'
           arch: win64_msvc2022_64
-          modules: 'qtwebengine qtwebchannel qtpositioning'
+          modules: 'qtwebengine qtwebchannel qtpositioning qtserialport qtconnectivity'
           cache: true
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Build
@@ -99,6 +99,24 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: profile-test, path: profiles/, if-no-files-found: ignore }
+      - name: Permissions test (store, shims, bridge, prompts, popups, downloads)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          $env:PACITUM_PERM_SHOTS = "$PWD\permissions"
+          New-Item -ItemType Directory -Force permissions | Out-Null
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--permissions-test' -PassThru
+          if (-not $p.WaitForExit(180000)) { Write-Host "permissions test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          Copy-Item "$log\startup.log" permissions\startup.log -ErrorAction SilentlyContinue
+          Copy-Item "$log\crash.log" permissions\crash.log -ErrorAction SilentlyContinue
+          Get-Content permissions\startup.log -ErrorAction SilentlyContinue | Select-String 'PERM|perm test|FAIL|WARN|CRITICAL' | ForEach-Object { $_.Line }
+          Write-Host "exit code: $($p.ExitCode)"
+          $ok = Select-String -Path permissions\startup.log -Pattern 'PERMISSIONS OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path permissions\crash.log)) { Write-Error "PERMISSIONS TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: permissions-test, path: permissions/, if-no-files-found: ignore }
       - name: Stress test (tabs, switching, fullscreen, loads)
         shell: pwsh
         run: |

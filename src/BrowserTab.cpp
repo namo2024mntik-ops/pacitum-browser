@@ -7,6 +7,9 @@
 
 std::function<BrowserTab*()> BrowserTab::s_popupFactory;
 
+#include "PermissionController.h"
+#include <QPointer>
+#include <QTimer>
 namespace {
 class PacitumWebView : public QWebEngineView {
 public:
@@ -16,6 +19,41 @@ protected:
         if (!BrowserTab::s_popupFactory) return nullptr;
         BrowserTab* t = BrowserTab::s_popupFactory();
         return t ? t->view() : nullptr;
+    }
+};
+
+// Blocked pop-up (permissions-spec §11): Chromium gets a detached page that refuses every
+// navigation, so nothing loads, and the first URL is recorded for the "pop-ups blocked" chip.
+class PopupSink : public QWebEnginePage {
+public:
+    PopupSink(QWebEngineProfile* p, PermissionController* c) : QWebEnginePage(p), m_c(c) {
+        QTimer::singleShot(4000, this, [this]{ report(QUrl()); deleteLater(); });
+    }
+protected:
+    bool acceptNavigationRequest(const QUrl& url, NavigationType, bool) override { report(url); return false; }
+    QWebEnginePage* createWindow(WebWindowType) override { return nullptr; }
+private:
+    void report(const QUrl& u) {
+        if (m_done) return;
+        if (u.isEmpty() || u.scheme() == QLatin1String("about")) { if (!u.isEmpty()) return; }   // wait for the real target
+        m_done = true;
+        if (m_c) m_c->popupBlocked(u);
+        QTimer::singleShot(0, this, &QObject::deleteLater);
+    }
+    QPointer<PermissionController> m_c;
+    bool m_done = false;
+};
+
+class PacitumPage : public QWebEnginePage {
+public:
+    using QWebEnginePage::QWebEnginePage;
+    QPointer<PermissionController> perms;
+protected:
+    QWebEnginePage* createWindow(WebWindowType type) override {
+        if (perms && !perms->allowPopup(type)) return new PopupSink(profile(), perms);
+        if (!BrowserTab::s_popupFactory) return nullptr;
+        BrowserTab* t = BrowserTab::s_popupFactory();
+        return t ? t->view()->page() : nullptr;
     }
 };
 }
@@ -67,11 +105,14 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
         m_profile = new QWebEngineProfile(this);   // off-the-record
         m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
         Pacitum::configureProfile(m_profile, false);
-        m_page = new QWebEnginePage(m_profile, m_view);
+        m_page = new PacitumPage(m_profile, m_view);
     } else {
-        m_page = new QWebEnginePage(Pacitum::mainProfile(), m_view);
+        m_page = new PacitumPage(Pacitum::mainProfile(), m_view);
     }
     m_view->setPage(m_page);
+    PermissionController::installProfile(m_page->profile());
+    m_perms = new PermissionController(this, m_view, m_page);
+    static_cast<PacitumPage*>(m_page)->perms = m_perms;
     m_page->setUrlRequestInterceptor(new Pacitum::GoogleSignInInterceptor(m_page));
 
     applyWebSettings();
@@ -139,6 +180,11 @@ void BrowserTab::loadUrl(const QString& raw) {
 bool BrowserTab::s_freezeEnabled = true;
 bool BrowserTab::s_discardEnabled = true;
 
+bool BrowserTab::hasInternalChannel() const {
+    auto* pg = m_view ? m_view->page() : nullptr;
+    return pg && pg->webChannel() && (!m_perms || pg->webChannel() != m_perms->channel());
+}
+
 bool BrowserTab::isDiscarded() const {
     auto* pg = m_view ? m_view->page() : nullptr;
     return pg && pg->lifecycleState() == QWebEnginePage::LifecycleState::Discarded;
@@ -162,7 +208,7 @@ void BrowserTab::maybeDiscard() {
     if (!s_freezeEnabled || !s_discardEnabled || !pg || isVisible() || m_loading || m_noFreeze || !m_pendingUrl.isEmpty()) return;
     if (pg->lifecycleState() != QWebEnginePage::LifecycleState::Frozen || pg->recentlyAudible()) return;
     if (pg->recommendedState() != QWebEnginePage::LifecycleState::Discarded) return;
-    if (pg->webChannel()) return;   // internal pages with a bridge (welcome) are never discarded
+    if (hasInternalChannel()) return;   // internal pages with a bridge (welcome) are never discarded
     pg->setLifecycleState(QWebEnginePage::LifecycleState::Discarded);
 }
 

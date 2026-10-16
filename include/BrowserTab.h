@@ -14,6 +14,7 @@ class QTimer;
 class QToolButton;
 
 class FindBar;
+namespace Motion { class FadeOverlay; }
 
 class BrowserTab : public QWidget {
     Q_OBJECT
@@ -103,14 +104,23 @@ private:
     QWebEnginePage* m_page = nullptr;
     QProgressBar* m_progress = nullptr;
     FindBar* m_findBar = nullptr;
-    QWidget* m_navShot = nullptr;       // back/forward snapshot (navTransition)
-    QWidget* m_veil = nullptr;          // page-transition veil (fadeIn)
+    Motion::FadeOverlay* m_navShot = nullptr;   // back/forward snapshot (navTransition), reused
+    Motion::FadeOverlay* m_veil = nullptr;      // page-transition veil (fadeIn), reused
     QTimer* m_freezeTimer = nullptr;
     bool m_noFreeze = false;
     int m_crashCount = 0;
     qint64 m_lastCrashMs = 0;
     static constexpr int kFreezeAfterMs = 10 * 60 * 1000;
     static constexpr int kFreezeMinimizedMs = 60 * 1000;
+    // Frozen pages still hold their renderer memory. After a long time in the background a frozen
+    // tab is discarded (renderer memory released; reloaded from history when shown again).
+    static constexpr int kDiscardAfterMs = 30 * 60 * 1000;
+    QTimer* m_discardTimer = nullptr;
+    void maybeDiscard();
+public:
+    static bool s_discardEnabled;        // settings: "discard_background_tabs"
+    bool isDiscarded() const;
+private:
     bool m_windowMinimized = false;
     void maybeFreeze();
 };

@@ -42,6 +42,7 @@ protected:
 #include <QToolButton>
 #include "ThemeManager.h"
 #include "Widgets.h"
+#include "Motion.h"
 
 int BrowserTab::s_idCounter = 0;
 
@@ -89,6 +90,10 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     m_freezeTimer->setSingleShot(true);
     m_freezeTimer->setInterval(kFreezeAfterMs);
     connect(m_freezeTimer, &QTimer::timeout, this, &BrowserTab::maybeFreeze);
+    m_discardTimer = new QTimer(this);
+    m_discardTimer->setSingleShot(true);
+    m_discardTimer->setInterval(kDiscardAfterMs);
+    connect(m_discardTimer, &QTimer::timeout, this, &BrowserTab::maybeDiscard);
 
     buildSignInBar();
     layout->addWidget(m_signInBar);
@@ -132,12 +137,33 @@ void BrowserTab::loadUrl(const QString& raw) {
 }
 
 bool BrowserTab::s_freezeEnabled = true;
+bool BrowserTab::s_discardEnabled = true;
+
+bool BrowserTab::isDiscarded() const {
+    auto* pg = m_view ? m_view->page() : nullptr;
+    return pg && pg->lifecycleState() == QWebEnginePage::LifecycleState::Discarded;
+}
 
 void BrowserTab::ensureActive() {
     if (m_freezeTimer) m_freezeTimer->stop();
+    if (m_discardTimer) m_discardTimer->stop();
     auto* pg = m_view ? m_view->page() : nullptr;
-    if (pg && pg->lifecycleState() != QWebEnginePage::LifecycleState::Active)
-        pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);
+    if (pg && pg->lifecycleState() != QWebEnginePage::LifecycleState::Active) {
+        const bool wasDiscarded = pg->lifecycleState() == QWebEnginePage::LifecycleState::Discarded;
+        pg->setLifecycleState(QWebEnginePage::LifecycleState::Active);   // Discarded -> Active reloads the page
+        if (wasDiscarded && !qFuzzyCompare(m_view->zoomFactor(), m_zoom)) m_view->setZoomFactor(m_zoom);
+    }
+}
+
+// Second stage, only for a tab that is already frozen and still in the background: same guards as
+// maybeFreeze, plus Chromium must recommend Discarded. Any call that needs the page thaws it first.
+void BrowserTab::maybeDiscard() {
+    auto* pg = m_view ? m_view->page() : nullptr;
+    if (!s_freezeEnabled || !s_discardEnabled || !pg || isVisible() || m_loading || m_noFreeze || !m_pendingUrl.isEmpty()) return;
+    if (pg->lifecycleState() != QWebEnginePage::LifecycleState::Frozen || pg->recentlyAudible()) return;
+    if (pg->recommendedState() != QWebEnginePage::LifecycleState::Discarded) return;
+    if (pg->webChannel()) return;   // internal pages with a bridge (welcome) are never discarded
+    pg->setLifecycleState(QWebEnginePage::LifecycleState::Discarded);
 }
 
 void BrowserTab::maybeFreeze() {
@@ -147,6 +173,7 @@ void BrowserTab::maybeFreeze() {
     if (pg->recentlyAudible() || pg->lifecycleState() != QWebEnginePage::LifecycleState::Active) return;
     if (pg->recommendedState() == QWebEnginePage::LifecycleState::Active) return;   // Chromium says no (e.g. WebRTC, devtools)
     pg->setLifecycleState(QWebEnginePage::LifecycleState::Frozen);
+    if (s_discardEnabled && m_discardTimer) m_discardTimer->start();
 }
 
 void BrowserTab::setNoFreeze(bool on) { m_noFreeze = on; if (on) ensureActive(); }
@@ -165,6 +192,7 @@ void BrowserTab::setWindowMinimized(bool on) {
 
 void BrowserTab::hideEvent(QHideEvent* e) {
     QWidget::hideEvent(e);
+    if (!e->spontaneous()) { if (m_veil) m_veil->stop(); if (m_navShot) m_navShot->stop(); }   // drop overlays/snapshots of background tabs
     if (!e->spontaneous() && s_freezeEnabled && m_freezeTimer) m_freezeTimer->start(m_windowMinimized ? kFreezeMinimizedMs : kFreezeAfterMs);   // tab switched away (not window minimize)
 }
 
@@ -179,7 +207,7 @@ bool BrowserTab::canGoForward() const { return m_view->history()->canGoForward()
 
 void BrowserTab::setZoomFactor(double f) {
     m_zoom = qBound(0.25, f, 5.0);
-    m_view->setZoomFactor(m_zoom);
+    if (!isDiscarded()) m_view->setZoomFactor(m_zoom);   // applied again when the tab is thawed
 }
 
 void BrowserTab::setMuted(bool m) { m_view->page()->setAudioMuted(m); }
@@ -260,54 +288,32 @@ void BrowserTab::onRenderCrashed(QWebEnginePage::RenderProcessTerminationStatus 
 // Page transition (tab switch): a page-coloured veil over the tab fades out (160 ms OutCubic). The
 // web view itself is never wrapped in a graphics effect; only the small veil widget is.
 void BrowserTab::fadeIn() {
-    if (m_veil) { m_veil->deleteLater(); m_veil = nullptr; }
     const int ms = Pacitum::motionMs(160);
-    if (Pacitum::reducedMotion() || ms <= 0 || !isVisible() || width() < 2) return;
-    auto* veil = new QWidget(this);
-    veil->setAttribute(Qt::WA_TransparentForMouseEvents);
-    veil->setAttribute(Qt::WA_StyledBackground, true);
-    veil->setAutoFillBackground(true);
-    QPalette pal = veil->palette(); pal.setColor(QPalette::Window, QColor(ThemeManager::current().page)); veil->setPalette(pal);
-    veil->setGeometry(rect()); veil->show(); veil->raise();
-    auto* eff = new QGraphicsOpacityEffect(veil); eff->setOpacity(1.0); veil->setGraphicsEffect(eff);
-    auto* a = new QPropertyAnimation(eff, "opacity", veil);
-    a->setDuration(ms); a->setStartValue(0.85); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
-    QPointer<QWidget> guard(veil);
-    connect(a, &QPropertyAnimation::finished, veil, [this, guard]{ if (guard) { if (m_veil == guard) m_veil = nullptr; guard->deleteLater(); } });
-    m_veil = veil;
-    a->start(QAbstractAnimation::DeleteWhenStopped);
+    if (Pacitum::reducedMotion() || ms <= 0 || !isVisible() || width() < 2) { if (m_veil) m_veil->stop(); return; }
+    if (!m_veil) m_veil = new Motion::FadeOverlay(this);   // one veil per tab, reused on every switch
+    m_veil->setColor(QColor(ThemeManager::current().page));
+    m_veil->setGeometry(rect());
+    m_veil->fade(0.85, 0.0, ms, QEasingCurve::OutCubic);
 }
 
 // Back / forward (kit #10/#11): a grab() snapshot of the old page slides 32 px towards the
 // direction of travel while fading out (200 ms OutCubic) over the view; the web view itself is
 // never animated. Reduced motion: the snapshot only fades (120 ms). Dropped on resize.
 void BrowserTab::navTransition(int dir) {
-    if (m_navShot) { m_navShot->deleteLater(); m_navShot = nullptr; }
+    if (m_navShot) m_navShot->stop();
     if (!m_view || !isVisible() || m_view->width() < 2) return;
     const int fade = Motion::fadeMs(Motion::Medium);
     if (fade <= 0) return;
-    const QPixmap pm = m_view->grab();
+    const QPixmap pm = m_view->grab();   // one snapshot; the web view itself is never animated
     if (pm.isNull()) return;
-    auto* shot = new QLabel(this);
-    shot->setAttribute(Qt::WA_TransparentForMouseEvents);
-    shot->setPixmap(pm); shot->setGeometry(QRect(m_view->mapTo(this, QPoint(0, 0)), m_view->size())); shot->show(); shot->raise();
-    auto* eff = new QGraphicsOpacityEffect(shot); shot->setGraphicsEffect(eff);
-    auto* group = new QParallelAnimationGroup(shot);
-    auto* op = new QPropertyAnimation(eff, "opacity"); op->setDuration(fade); op->setStartValue(1.0); op->setEndValue(0.0); op->setEasingCurve(QEasingCurve::OutCubic);
-    group->addAnimation(op);
-    if (Motion::enabled()) {
-        auto* mv = new QPropertyAnimation(shot, "pos"); mv->setDuration(fade);
-        mv->setStartValue(shot->pos()); mv->setEndValue(shot->pos() + QPoint(dir < 0 ? 32 : -32, 0)); mv->setEasingCurve(QEasingCurve::OutCubic);
-        group->addAnimation(mv);
-    }
-    QPointer<QLabel> g(shot);
-    connect(group, &QAbstractAnimation::finished, shot, [this, g]{ if (g) { if (m_navShot == g) m_navShot = nullptr; g->deleteLater(); } });
-    m_navShot = shot;
-    group->start(QAbstractAnimation::DeleteWhenStopped);
+    if (!m_navShot) m_navShot = new Motion::FadeOverlay(this);
+    m_navShot->setPixmap(pm);
+    m_navShot->setGeometry(QRect(m_view->mapTo(this, QPoint(0, 0)), m_view->size()));
+    m_navShot->fade(1.0, 0.0, fade, QEasingCurve::OutCubic, 0, Motion::enabled() ? QPoint(dir < 0 ? 32 : -32, 0) : QPoint());
 }
 
 void BrowserTab::resizeEvent(QResizeEvent* e) {
-    if (m_navShot) { m_navShot->deleteLater(); m_navShot = nullptr; }   // snapshot never outlives a resize
+    if (m_navShot) m_navShot->stop();   // snapshot never outlives a resize
     QWidget::resizeEvent(e);
     if (m_veil) m_veil->setGeometry(rect());   // page-transition veil follows the tab size
 }

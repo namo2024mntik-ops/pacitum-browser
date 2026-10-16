@@ -152,18 +152,11 @@ void BrowserWindow::fadeInContent() { fadeVeil(Pacitum::guestMode() || m_private
 void BrowserWindow::fadeVeil(int duration, qreal from, int delay) {
     const int ms = Motion::fadeMs(duration);   // opacity only, so it stays (120 ms) with reduced motion
     if (ms <= 0 || !centralWidget()) return;
-    auto* veil = new QWidget(this);
+    auto* veil = new Motion::FadeOverlay(this);   // painted with opacity, no graphics effect
     veil->setObjectName(QStringLiteral("PacitumWindowOverlay"));
-    veil->setAttribute(Qt::WA_TransparentForMouseEvents);
-    veil->setAutoFillBackground(true);
-    QPalette pal = veil->palette(); pal.setColor(QPalette::Window, QColor(m_theme->palette().page)); veil->setPalette(pal);
-    veil->setGeometry(rect()); veil->show(); veil->raise();
-    auto* eff = new QGraphicsOpacityEffect(veil); eff->setOpacity(1.0); veil->setGraphicsEffect(eff);
-    auto* a = new QPropertyAnimation(eff, "opacity", veil);
-    eff->setOpacity(from);
-    a->setDuration(ms); a->setStartValue(from); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
-    connect(a, &QPropertyAnimation::finished, veil, &QObject::deleteLater);
-    QTimer::singleShot(delay, veil, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });   // after the first frame
+    veil->setColor(QColor(m_theme->palette().page));
+    veil->setGeometry(rect());
+    veil->fade(from, 0.0, ms, QEasingCurve::OutCubic, delay, {}, true);   // starts after the first frame
 }
 
 void BrowserWindow::setupUpdater() {
@@ -1241,6 +1234,7 @@ void BrowserWindow::loadSettings(){
     m_adblock->setDoNotTrack(s.value(QStringLiteral("do_not_track")).toBool(false));
     m_animations = s.value(QStringLiteral("animations")).toBool(true);
     BrowserTab::s_freezeEnabled = s.value(QStringLiteral("freeze_background_tabs")).toBool(true);
+    BrowserTab::s_discardEnabled = s.value(QStringLiteral("discard_background_tabs")).toBool(true);
     // "reduce_motion" (or animations off) -> every spec duration becomes 0 (spec §6)
     // (was: only ever switched *on*, so turning the setting off again needed a restart)
     if (!m_animations || s.value(QStringLiteral("reduce_motion")).toBool(false)) Pacitum::setReducedMotion(true);
@@ -1741,19 +1735,13 @@ void BrowserWindow::writeSetting(const QString& key, const QJsonValue& value) {
 
 void BrowserWindow::crossFadeTheme(const std::function<void()>& apply) {
     if (!isVisible() || Motion::fadeMs(Motion::Medium) <= 0) { apply(); return; }   // reduced motion: plain 120 ms cross-fade
-    auto* shot = new QLabel(this);
+    auto* shot = new Motion::FadeOverlay(this);   // grab() snapshot faded with QPainter opacity
     shot->setObjectName(QStringLiteral("PacitumWindowOverlay"));
-    shot->setScaledContents(true);
     shot->setPixmap(grab());
     shot->setGeometry(rect());
-    shot->setAttribute(Qt::WA_TransparentForMouseEvents);
-    shot->show(); shot->raise();
+    shot->setOpacity(1.0); shot->show(); shot->raise();
     apply();
-    auto* eff = new QGraphicsOpacityEffect(shot); eff->setOpacity(1.0); shot->setGraphicsEffect(eff);
-    auto* a = new QPropertyAnimation(eff, "opacity", shot);
-    a->setDuration(Motion::fadeMs(Motion::Medium)); a->setStartValue(1.0); a->setEndValue(0.0); a->setEasingCurve(QEasingCurve::OutCubic);
-    connect(a, &QPropertyAnimation::finished, shot, &QObject::deleteLater);
-    a->start();
+    shot->fade(1.0, 0.0, Motion::fadeMs(Motion::Medium), QEasingCurve::OutCubic, 0, {}, true);
 }
 
 void BrowserWindow::openWelcome() {

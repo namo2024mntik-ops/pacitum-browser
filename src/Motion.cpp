@@ -2,6 +2,7 @@
 #include "ThemeManager.h"
 #include <QApplication>
 #include <QEvent>
+#include <QPaintEvent>
 #include <QGraphicsOpacityEffect>
 #include <QPainter>
 #include <QParallelAnimationGroup>
@@ -11,6 +12,7 @@
 #include <QScreen>
 #include <QVariantAnimation>
 #include <QWidget>
+#include <QTimer>
 
 namespace Motion {
 int ms(int token) { return Pacitum::motionMs(token); }
@@ -214,4 +216,40 @@ void toast(QWidget* w, bool show) {
     });
     g->start(QAbstractAnimation::DeleteWhenStopped);
 }
+
+FadeOverlay::FadeOverlay(QWidget* parent) : QWidget(parent) {
+    setAttribute(Qt::WA_TransparentForMouseEvents);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setFocusPolicy(Qt::NoFocus);
+    connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
+        const qreal t = v.toReal();
+        m_opacity = m_from + (m_to - m_from) * t;
+        if (!m_drift.isNull()) move(m_origin + QPoint(qRound(m_drift.x() * t), qRound(m_drift.y() * t)));
+        update();
+    });
+    connect(&m_anim, &QVariantAnimation::finished, this, [this] {
+        if (m_deleteWhenDone) { hide(); deleteLater(); return; }
+        if (m_to <= 0.0) { hide(); m_pm = QPixmap(); }   // release the snapshot right away
+    });
 }
+void FadeOverlay::fade(qreal from, qreal to, int ms, QEasingCurve::Type curve, int delayMs, QPoint drift, bool deleteWhenDone) {
+    m_anim.stop();
+    m_from = from; m_to = to; m_drift = drift; m_origin = pos(); m_deleteWhenDone = deleteWhenDone;
+    m_opacity = from;
+    show(); raise(); update();
+    m_anim.setDuration(qMax(1, ms)); m_anim.setStartValue(0.0); m_anim.setEndValue(1.0); m_anim.setEasingCurve(curve);
+    if (delayMs <= 0) { m_anim.start(); return; }
+    m_pendingStart = true;
+    QPointer<FadeOverlay> g(this);
+    QTimer::singleShot(delayMs, this, [g] { if (g && g->m_pendingStart) { g->m_pendingStart = false; g->m_anim.start(); } });
+}
+void FadeOverlay::stop() { m_pendingStart = false; m_anim.stop(); hide(); m_pm = QPixmap(); }
+void FadeOverlay::paintEvent(QPaintEvent* e) {
+    if (m_opacity <= 0.0) return;
+    QPainter p(this);
+    p.setOpacity(m_opacity);
+    if (!m_pm.isNull()) p.drawPixmap(rect(), m_pm);
+    else p.fillRect(e->rect(), m_color);
+}
+}
+

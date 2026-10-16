@@ -126,7 +126,7 @@ void configureProfile(QWebEngineProfile* profile, bool persistent) {
 void applyWebSettings(QWebEngineSettings* s) {
     if (!s) return;
     s->setAttribute(QWebEngineSettings::JavascriptEnabled, webPrefs().javascript);
-    // 1.7.1: Chromium always hands window.open to Pacitum (PacitumPage::createWindow), which applies the
+    // 1.7.5: Chromium always hands window.open to Pacitum (PacitumPage::createWindow), which applies the
     // per-site pop-up decision and records blocked pop-ups; "popups_allowed" is now the default.
     s->setAttribute(QWebEngineSettings::JavascriptCanOpenWindows, true);
 }

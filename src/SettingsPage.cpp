@@ -254,7 +254,7 @@ QWidget* SettingsPage::privacyPage() {
 }
 
 QWidget* SettingsPage::contentPage() {
-    // 1.7.1: Site settings (permissions-spec §8) with its own list / permission / site-details pages.
+    // 1.7.5: Site settings (permissions-spec §8) with its own list / permission / site-details pages.
     auto* wrap = new QWidget(this);
     auto* l = new QVBoxLayout(wrap); l->setContentsMargins(0, 0, 0, 0); l->setSpacing(0);
     auto* title = new QLabel(QStringLiteral("Site settings"), wrap); title->setObjectName(QStringLiteral("SettingsH1"));

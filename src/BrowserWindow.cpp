@@ -1913,7 +1913,7 @@ void BrowserWindow::handleHomeAction(const QString& name, const QMap<QString, QS
 }
 
 
-// ---------------------------------------------------------------- 1.7.1 site permissions
+// ---------------------------------------------------------------- 1.7.5 site permissions
 void BrowserWindow::wirePermissions(BrowserTab* tab) {
     auto* pc = tab->permissions();
     if (!pc) return;

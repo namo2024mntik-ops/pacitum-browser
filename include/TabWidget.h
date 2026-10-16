@@ -40,7 +40,7 @@ public:
     void setTabWaiting(int index, bool on);   // before first byte: reversed, tertiary arc (spec §6)
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
-    // 1.7.1 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
+    // 1.7.5 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
     void setTabUsage(int index, int usage);
     void paintFloatingTab(QPainter* p, const class QStyleOptionTab& opt) const;
     QRect closeButtonRect(const QRect& tabRect) const;
@@ -125,7 +125,7 @@ public:
     void setTabWaiting(int index, bool on);
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
-    // 1.7.1 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
+    // 1.7.5 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
     void setTabUsage(int index, int usage);
     void showTabSearch() { showTabList(); }
     bool hasFloatingStrip() const { return m_ext && !m_vertical; }

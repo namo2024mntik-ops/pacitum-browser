@@ -1,5 +1,5 @@
 #pragma once
-// Pacitum 1.7.1 permission UI (permissions-spec.md §1-§9): the prompt bubble, device chooser
+// Pacitum 1.7.5 permission UI (permissions-spec.md §1-§9): the prompt bubble, device chooser
 // list, screen-share picker and the site controls panel.
 #include <QWidget>
 #include <QPointer>

@@ -1,5 +1,5 @@
 #pragma once
-// Pacitum 1.7.1 site permissions: the per-profile decision store (permissions-spec.md §11).
+// Pacitum 1.7.5 site permissions: the per-profile decision store (permissions-spec.md §11).
 //
 // Qt WebEngine only persists Notifications / Geolocation / Clipboard / LocalFonts and forgets
 // media + desktop capture on every navigation. Pacitum therefore runs its profiles with

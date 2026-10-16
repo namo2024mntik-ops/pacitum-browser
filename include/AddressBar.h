@@ -32,7 +32,7 @@ public:
     void progressFinished(bool ok);
     void syncProgress(bool loading, int value);   // tab switch: jump to that tab's state
     void setSuggestionsEnabled(bool e) { m_suggest = e; }
-    // 1.7.1 permission chips (permissions-spec §1/§4/§5/§6/§9)
+    // 1.7.5 permission chips (permissions-spec §1/§4/§5/§6/§9)
     void setPermissionChips(const QList<OmniChip>& chips);
     QPoint bubbleAnchor() const;   // global: omnibox left − 2, toolbar bottom + 6
 

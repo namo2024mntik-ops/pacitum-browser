@@ -945,7 +945,7 @@ void PermissionController::installProfile(QWebEngineProfile* profile) {
     // so "Allow this time" never leaks to disk and Settings can always change a decision.
     profile->setPersistentPermissionsPolicy(QWebEngineProfile::PersistentPermissionsPolicy::StoreInMemory);
     auto* st = Perm::Store::forProfile(profile);
-    // Pre-1.7.1 "Pop-ups and redirects" switch becomes the pop-up default once.
+    // Pre-1.7.5 "Pop-ups and redirects" switch becomes the pop-up default once.
     if (!st->hasExplicitDefault(Kind::Popups) && Pacitum::webPrefs().popups) st->setDefault(Kind::Popups, Decision::Allow);
     syncQtPermissions(profile);
     QObject::connect(st, &Perm::Store::changed, profile, [profile](const QString& o){

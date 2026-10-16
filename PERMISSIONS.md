@@ -1,4 +1,4 @@
-# Site permissions (Pacitum 1.7.1)
+# Site permissions (Pacitum 1.7.5)
 
 All grants are scoped per origin and per profile (`<profile>/pacitum-site-permissions.json`; in-memory for guest/off-the-record). Nothing is granted without an explicit user decision; a dismissed/timed-out prompt is not a grant.
 

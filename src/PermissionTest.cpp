@@ -1,4 +1,4 @@
-// --permissions-test (CI, 1.7.1): exercises the site-permission plumbing end to end on a local
+// --permissions-test (CI, 1.7.5): exercises the site-permission plumbing end to end on a local
 // HTTP server: store scoping/persistence, the JS shims + QWebChannel bridge (origin-scoped device
 // grants, gesture gating), pop-up blocking in createWindow, multiple-download throttling in
 // downloadRequested, and Qt permission requests answered through the Pacitum queue.

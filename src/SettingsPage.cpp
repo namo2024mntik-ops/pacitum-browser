@@ -28,6 +28,8 @@
 #include <algorithm>
 
 #include "AppSettings.h"
+#include "PermissionSettings.h"
+#include "SitePermissions.h"
 
 QJsonObject SettingsPage::read() { return AppSettings::read(); }
 void SettingsPage::write(const QString& key, const QJsonValue& v) { AppSettings::set(key, v); }
@@ -252,11 +254,23 @@ QWidget* SettingsPage::privacyPage() {
 }
 
 QWidget* SettingsPage::contentPage() {
-    QVBoxLayout* l; QWidget* page = section(QStringLiteral("Site settings"), &l);
-    auto* c = card(l, QString());
-    addRow(c, QStringLiteral("JavaScript"), QStringLiteral("Sites can use JavaScript (most sites need it)"), makeSwitch(QStringLiteral("javascript_enabled"), true));
-    addRow(c, QStringLiteral("Pop-ups and redirects"), QStringLiteral("Allow sites to open new windows from scripts (links with target=_blank always open in a new tab)"), makeSwitch(QStringLiteral("popups_allowed"), false));
-    return page;
+    // 1.7.1: Site settings (permissions-spec §8) with its own list / permission / site-details pages.
+    auto* wrap = new QWidget(this);
+    auto* l = new QVBoxLayout(wrap); l->setContentsMargins(0, 0, 0, 0); l->setSpacing(0);
+    auto* title = new QLabel(QStringLiteral("Site settings"), wrap); title->setObjectName(QStringLiteral("SettingsH1"));
+    auto* tw = new QWidget(wrap); tw->setObjectName(QStringLiteral("SettingsContent")); tw->setAttribute(Qt::WA_StyledBackground, true);
+    auto* tl = new QHBoxLayout(tw); tl->setContentsMargins(48, 24, 48, 0); tl->addWidget(title); tl->addStretch(1);
+    l->addWidget(tw);
+    m_sitePerms = new SitePermissionsPage(Perm::Store::forProfile(Pacitum::mainProfile()), wrap);
+    connect(m_sitePerms, &SitePermissionsPage::settingChanged, this, &SettingsPage::settingChanged);
+    l->addWidget(m_sitePerms, 1);
+    return wrap;
+}
+
+void SettingsPage::showSiteDetails(const QString& origin) {
+    showSection(QStringLiteral("Site settings"));
+    if (!m_sitePerms) return;
+    if (origin.isEmpty()) m_sitePerms->showList(); else m_sitePerms->showSite(origin);
 }
 
 QWidget* SettingsPage::downloadsPage() {

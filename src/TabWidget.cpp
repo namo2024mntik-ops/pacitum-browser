@@ -1,3 +1,6 @@
+#include <QDateTime>
+#include <QTimer>
+#include <QtMath>
 #include "TabWidget.h"
 #include "ThemeManager.h"
 #include <QMenu>
@@ -314,6 +317,27 @@ void PacitumTabBar::setTabCrashed(int index, bool on) {
     if (index < 0 || index >= count()) return;
     m_flags[ensureId(index)].crashed = on; update(tabRect(index));
 }
+void PacitumTabBar::setTabUsage(int index, int usage) {
+    if (index < 0 || index >= count()) return;
+    auto& f = m_flags[ensureId(index)];
+    if (f.usage == usage) return;
+    if (usage == 3 && f.usage != 3) f.usageSince = QDateTime::currentMSecsSinceEpoch();
+    f.usage = usage;
+    update(tabRect(index));
+    // §5: the recording halo pulses (2 s InOutSine) for the first 5 s only; never with reduced motion.
+    if (usage == 3 && !Pacitum::reducedMotion()) {
+        if (!m_usagePulse) {
+            m_usagePulse = new QTimer(this); m_usagePulse->setInterval(50);
+            connect(m_usagePulse, &QTimer::timeout, this, [this]{
+                const qint64 now = QDateTime::currentMSecsSinceEpoch(); bool any = false;
+                for (const auto& fl : std::as_const(m_flags)) any |= fl.usage == 3 && now - fl.usageSince < 5200;
+                update();
+                if (!any) m_usagePulse->stop();
+            });
+        }
+        m_usagePulse->start();
+    }
+}
 void PacitumTabBar::setSpinnerSuspended(bool on) {
     if (m_spinSuspended == on) return;
     m_spinSuspended = on;
@@ -425,7 +449,22 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
     // trailing items: [audio] [close]
     int right = int(body.right()) - 6;
     if (closeVisible) right = closeButtonRect(r).left() - 4;
-    if (fl.audible || fl.muted) {
+    if (fl.usage > 0) {   // in-use slot (§5): recording > screen share > location > audio
+        const QRect ar(right - 16, r.y() + kTop + 8, 16, 16);
+        if (fl.usage == 3) {
+            const QPointF c = QRectF(ar).center();
+            qreal halo = 0.25;
+            const qint64 age = QDateTime::currentMSecsSinceEpoch() - fl.usageSince;
+            if (!Pacitum::reducedMotion() && age < 5000) halo = 0.15 + 0.10 * qCos(2 * 3.14159265358979 * age / 2000.0);
+            QColor d(pal.danger); p->save(); p->setRenderHint(QPainter::Antialiasing); p->setPen(Qt::NoPen);
+            QColor h = d; h.setAlphaF(halo); p->setBrush(h); p->drawEllipse(c, 7, 7);
+            p->setBrush(d); p->drawEllipse(c, 4, 4); p->restore();
+        } else {
+            const QPixmap pm = ThemeManager::icon(fl.usage == 2 ? QStringLiteral("screen-share") : QStringLiteral("location"), pal.accent, 14).pixmap(QSize(14, 14), devicePixelRatioF());
+            p->drawPixmap(ar.topLeft() + QPoint(1, 1), pm);
+        }
+        right = ar.left() - 4;
+    } else if (fl.audible || fl.muted) {
         const QRect ar(right - 16, r.y() + kTop + 8, 16, 16);
         const QPixmap pm = fl.muted ? ThemeManager::icon(QStringLiteral("tab-mute"), pal.textSecondary, 15).pixmap(QSize(15, 15), devicePixelRatioF())
                                     : ThemeManager::icon(QStringLiteral("audio-playing"), pal.accent, 16).pixmap(QSize(16, 16), devicePixelRatioF());
@@ -494,7 +533,7 @@ void PacitumTabBar::mousePressEvent(QMouseEvent* e) {
         const int idx = tabAt(e->pos());
         if (idx >= 0) {
             const TabFlags f = m_flags.value(idOf(idx));
-            if ((f.audible || f.muted) && audioRect(idx).adjusted(-3, -3, 3, 3).contains(e->pos())) { emit tabMuteToggled(idx, !f.muted); return; }
+            if (f.usage == 0 && (f.audible || f.muted) && audioRect(idx).adjusted(-3, -3, 3, 3).contains(e->pos())) { emit tabMuteToggled(idx, !f.muted); return; }
         }
     }
     QTabBar::mousePressEvent(e);
@@ -511,6 +550,7 @@ void PacitumTabWidget::setTabLoading(int i, bool on) { if (m_ext) m_ext->setTabL
 void PacitumTabWidget::setTabWaiting(int i, bool on) { if (m_ext) m_ext->setTabWaiting(i, on); }
 void PacitumTabWidget::setTabAudio(int i, bool a, bool m) { if (m_ext) m_ext->setTabAudio(i, a, m); }
 void PacitumTabWidget::setTabCrashed(int i, bool on) { if (m_ext) m_ext->setTabCrashed(i, on); }
+void PacitumTabWidget::setTabUsage(int i, int u) { if (m_ext) m_ext->setTabUsage(i, u); }
 
 // PacitumTabWidget
 PacitumTabWidget::PacitumTabWidget(bool vertical, QWidget* parent) : QTabWidget(parent), m_vertical(vertical) {

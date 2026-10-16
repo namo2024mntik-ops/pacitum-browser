@@ -8,6 +8,8 @@
 #include <QTimer>
 #include <QVariantAnimation>
 class StarButton;
+#include "PermissionUi.h"
+class QHBoxLayout;
 
 class HistoryManager;
 class ThemeManager;
@@ -30,11 +32,15 @@ public:
     void progressFinished(bool ok);
     void syncProgress(bool loading, int value);   // tab switch: jump to that tab's state
     void setSuggestionsEnabled(bool e) { m_suggest = e; }
+    // 1.7.1 permission chips (permissions-spec §1/§4/§5/§6/§9)
+    void setPermissionChips(const QList<OmniChip>& chips);
+    QPoint bubbleAnchor() const;   // global: omnibox left − 2, toolbar bottom + 6
 
 signals:
     void returnPressed(const QString& url);
     void starClicked();
     void securityIconClicked();
+    void permissionChipClicked(const QString& id);
 
 protected:
     void paintEvent(QPaintEvent* e) override;
@@ -52,6 +58,8 @@ private:
     void showBlurred();
     void setDisplayMode(bool on);
     QToolButton* m_chip = nullptr;
+    QHBoxLayout* m_permLeft = nullptr; QHBoxLayout* m_permRight = nullptr;
+    QHash<QString, QWidget*> m_permChips;
     QLabel* m_display = nullptr;
     bool m_secureHttps = false;
 

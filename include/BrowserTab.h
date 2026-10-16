@@ -14,6 +14,7 @@ class QTimer;
 class QToolButton;
 
 class FindBar;
+class PermissionController;
 namespace Motion { class FadeOverlay; }
 
 class BrowserTab : public QWidget {
@@ -57,6 +58,9 @@ public:
     void showFindBar();
     void refreshTheme();   // re-tint native chrome inside the tab (info bar)
     void hideFindBar();
+    PermissionController* permissions() const { return m_perms; }
+    int tabId() const { return m_tabId; }
+    bool hasInternalChannel() const;
 
 signals:
     void urlChanged(const QString& url);
@@ -102,6 +106,7 @@ private:
     QWebEngineView* m_view = nullptr;
     QWebEngineProfile* m_profile = nullptr;
     QWebEnginePage* m_page = nullptr;
+    PermissionController* m_perms = nullptr;
     QProgressBar* m_progress = nullptr;
     FindBar* m_findBar = nullptr;
     Motion::FadeOverlay* m_navShot = nullptr;   // back/forward snapshot (navTransition), reused

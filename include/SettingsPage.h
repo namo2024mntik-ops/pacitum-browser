@@ -16,6 +16,7 @@ public:
     static QJsonObject read();
     static void write(const QString& key, const QJsonValue& v);
     void showSection(const QString& name);
+    void showSiteDetails(const QString& origin);   // "" = site settings list
 
 signals:
     void settingChanged(const QString& key);
@@ -36,6 +37,7 @@ private:
     QWidget* downloadsPage();
     QWidget* aboutPage();
 
+    class SitePermissionsPage* m_sitePerms = nullptr;
     QListWidget* m_nav = nullptr;
     QStackedWidget* m_stack = nullptr;
     QJsonObject m_s;

@@ -11,6 +11,18 @@
 #include <QStyle>
 #include <QAbstractItemView>
 #include <QUrl>
+#include <QTimer>
+#include <QVariantAnimation>
+#include <QRegularExpression>
+
+static QColor cssColor(const QString& s) {
+    static const QRegularExpression re(QStringLiteral("rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*(?:,\\s*([\\d.]+))?\\s*\\)"));
+    auto m = re.match(s);
+    if (!m.hasMatch()) return QColor(s);
+    QColor c(m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).toInt());
+    if (!m.captured(4).isEmpty()) c.setAlphaF(m.captured(4).toDouble());
+    return c;
+}
 
 static bool isInternalNewTab(const QString& url) {
     return url.isEmpty() || url.startsWith(QStringLiteral("pacitum://newtab")) || url == QStringLiteral("about:blank");
@@ -37,6 +49,8 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     connect(m_chip, &QToolButton::clicked, this, [this]{ if (!isInternalNewTab(m_currentUrl)) emit securityIconClicked(); });
     layout->addWidget(m_chip);
     m_securityIcon = nullptr;
+    m_permLeft = new QHBoxLayout(); m_permLeft->setContentsMargins(0, 0, 0, 0); m_permLeft->setSpacing(4);
+    layout->addLayout(m_permLeft);
 
     m_input = new QLineEdit(this);
     m_input->setPlaceholderText(QStringLiteral("Search or enter address"));
@@ -54,6 +68,8 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     m_star = new StarButton(this);
     m_star->setToolTip(QStringLiteral("Bookmark this tab (Ctrl+D)"));
     connect(m_star, &QToolButton::clicked, this, &AddressBar::starClicked);
+    m_permRight = new QHBoxLayout(); m_permRight->setContentsMargins(0, 0, 0, 0); m_permRight->setSpacing(4);
+    layout->addLayout(m_permRight);
     layout->addWidget(m_star);
 
     m_completer = new QCompleter(this);
@@ -289,4 +305,120 @@ void AddressBar::paintEvent(QPaintEvent* e) {
     QColor c(m_progError ? ThemeManager::current().danger : ThemeManager::current().accent);
     c.setAlphaF(c.alphaF() * m_progOpacity);
     p.fillRect(QRectF(0, height() - 2, width() * m_prog, 2), c);
+}
+
+
+// ---------------------------------------------------------------- permission chips
+namespace {
+class PermChip : public QToolButton {
+public:
+    explicit PermChip(QWidget* parent) : QToolButton(parent) {
+        setFixedHeight(28); setCursor(Qt::PointingHandCursor); setFocusPolicy(Qt::TabFocus);
+        connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_t = v.toReal(); updateGeometry(); update(); });
+        connect(&m_pulse, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_p = v.toReal(); update(); });
+        connect(&m_collapse, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_labelT = v.toReal(); updateGeometry(); update(); });
+    }
+    void setChip(const OmniChip& c, bool fresh) {
+        const bool attention = fresh || (c.id == m_chip.id && c.badge != m_chip.badge);
+        m_chip = c;
+        setAccessibleName(accessible());
+        setToolTip(accessible());
+        if (fresh && Motion::enabled()) {   // §1 chip appear: width 28→auto, icon .8→1, 180 ms OutBack
+            m_anim.stop(); m_anim.setDuration(Motion::Exit); m_anim.setEasingCurve(QEasingCurve(QEasingCurve::OutBack));
+            m_anim.setStartValue(0.0); m_anim.setEndValue(1.0); m_anim.start();
+        } else m_t = 1.0;
+        if (c.id == QLatin1String("request") && attention && Motion::enabled()) {   // attention pulse (≤2×)
+            m_pulse.stop(); m_pulse.setDuration(600); m_pulse.setEasingCurve(QEasingCurve::OutCubic);
+            m_pulse.setStartValue(0.0); m_pulse.setEndValue(1.0); m_pulse.setLoopCount(2); m_pulse.start();
+        }
+        if (c.id == QLatin1String("quiet") && fresh) {   // §4: label collapses after 4 s (200 ms OutCubic)
+            m_labelT = 1.0;
+            QTimer::singleShot(4000, this, [this]{
+                if (!Motion::enabled()) { m_labelT = 0; updateGeometry(); return; }
+                m_collapse.stop(); m_collapse.setDuration(Motion::Medium); m_collapse.setEasingCurve(QEasingCurve::OutCubic);
+                m_collapse.setStartValue(1.0); m_collapse.setEndValue(0.0); m_collapse.start();
+            });
+        } else if (c.id != QLatin1String("quiet")) m_labelT = 0;
+        updateGeometry(); update();
+    }
+    QString accessible() const {
+        if (m_chip.id == QLatin1String("request")) return QStringLiteral("Permission request pending%1 (F6)").arg(m_chip.badge ? QStringLiteral(", +%1 more").arg(m_chip.badge) : QString());
+        if (m_chip.id == QLatin1String("quiet")) return QStringLiteral("Notifications blocked");
+        if (m_chip.id == QLatin1String("inuse")) return m_chip.dot ? QStringLiteral("Camera and microphone in use") : QStringLiteral("In use: ") + m_chip.glyphs.join(QStringLiteral(", "));
+        if (m_chip.id == QLatin1String("popups")) return QStringLiteral("Pop-ups blocked");
+        return QStringLiteral("Blocked on this page");
+    }
+    QSize sizeHint() const override {
+        const int glyphs = qMax(1, int(m_chip.glyphs.size()));
+        int w = 10 + glyphs * 15 + (glyphs - 1) * 10 + 10;
+        if (m_chip.badge > 0) w += 20;
+        if (m_labelT > 0 && !m_chip.text.isEmpty()) { QFont f = font(); f.setPixelSize(12); w += int((QFontMetrics(f).horizontalAdvance(m_chip.text) + 6) * m_labelT); }
+        return QSize(28 + int((w - 28) * qBound(0.0, m_t, 1.2)), 28);
+    }
+protected:
+    void paintEvent(QPaintEvent*) override {
+        const auto& pal = ThemeManager::current();
+        QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+        if (m_pulse.state() == QAbstractAnimation::Running) {
+            QColor ring(pal.accent); ring.setAlphaF(0.6 * (1.0 - m_p));
+            p.setPen(QPen(ring, 2)); p.setBrush(Qt::NoBrush);
+            const qreal g = 6 * m_p; p.drawRoundedRect(r.adjusted(-g / 2, -g / 2, g / 2, g / 2), 14 + g / 2, 14 + g / 2);
+        }
+        p.setPen(Qt::NoPen);
+        p.setBrush(m_chip.soft ? cssColor(pal.accentSoft) : QColor(underMouse() ? pal.surfaceHover : pal.surface));
+        if (false) p.setBrush(QColor(m_chip.soft ? pal.accentSoft : underMouse() ? pal.surfaceHover : pal.surface));
+        p.drawRoundedRect(r, 14, 14);
+        const qreal s = 0.8 + 0.2 * qMin(1.0, m_t);
+        qreal x = 10;
+        const QStringList gl = m_chip.glyphs.isEmpty() ? QStringList{m_chip.glyph} : m_chip.glyphs;
+        for (const QString& g : gl) {
+            const QPixmap pm = ThemeManager::icon(g, m_chip.color, 15).pixmap(QSize(15, 15), devicePixelRatioF());
+            p.save(); p.translate(x + 7.5, 14); p.scale(s, s); p.drawPixmap(QPointF(-7.5, -7.5), pm); p.restore();
+            if (m_chip.dot && (g == QLatin1String("camera") || g == QLatin1String("microphone"))) {   // 6 px danger dot, 1.5 px omnibox ring
+                p.setBrush(QColor(pal.danger)); p.setPen(QPen(QColor(pal.omnibox), 1.5)); p.drawEllipse(QPointF(x + 14, 8), 3.5, 3.5); p.setPen(Qt::NoPen);
+            }
+            x += 25;
+        }
+        x -= 10;
+        QFont f = font(); f.setPixelSize(12); f.setWeight(QFont::Medium); p.setFont(f);
+        if (m_labelT > 0.01 && !m_chip.text.isEmpty()) {
+            p.setOpacity(m_labelT); p.setPen(QColor(pal.textSecondary));
+            p.drawText(QRectF(x + 6, 0, width() - x - 6, height()), Qt::AlignVCenter | Qt::AlignLeft, m_chip.text); p.setOpacity(1);
+        }
+        if (m_chip.badge > 0) { p.setPen(QColor(pal.accent)); p.drawText(QRectF(width() - 26, 0, 22, height()), Qt::AlignCenter, QStringLiteral("+%1").arg(m_chip.badge)); }
+    }
+private:
+    OmniChip m_chip; qreal m_t = 1.0, m_p = 0, m_labelT = 0;
+    QVariantAnimation m_anim, m_pulse, m_collapse;
+};
+}
+
+void AddressBar::setPermissionChips(const QList<OmniChip>& chips) {
+    QSet<QString> keep;
+    int li = 0, ri = 0;
+    for (const auto& c : chips) {
+        keep.insert(c.id);
+        auto* w = static_cast<PermChip*>(m_permChips.value(c.id));
+        const bool fresh = !w;
+        if (!w) {
+            w = new PermChip(this);
+            const QString id = c.id;
+            connect(w, &QToolButton::clicked, this, [this, id]{ emit permissionChipClicked(id); });
+            m_permChips.insert(c.id, w);
+        }
+        // in-use / request / blocked chips follow the lock; the quiet chip sits before the star (§4)
+        if (c.id == QLatin1String("quiet")) m_permRight->insertWidget(ri++, w); else m_permLeft->insertWidget(li++, w);
+        w->setChip(c, fresh);
+        w->show();
+    }
+    for (auto it = m_permChips.begin(); it != m_permChips.end();) {
+        if (!keep.contains(it.key())) { it.value()->hide(); it.value()->deleteLater(); it = m_permChips.erase(it); } else ++it;
+    }
+}
+
+QPoint AddressBar::bubbleAnchor() const {
+    const QWidget* tb = parentWidget() ? parentWidget() : this;
+    const int bottom = tb->mapToGlobal(QPoint(0, tb->height())).y();
+    return QPoint(mapToGlobal(QPoint(0, 0)).x() - 2, bottom + 6);
 }

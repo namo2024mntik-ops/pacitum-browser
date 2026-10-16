@@ -40,6 +40,8 @@ public:
     void setTabWaiting(int index, bool on);   // before first byte: reversed, tertiary arc (spec §6)
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
+    // 1.7.1 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
+    void setTabUsage(int index, int usage);
     void paintFloatingTab(QPainter* p, const class QStyleOptionTab& opt) const;
     QRect closeButtonRect(const QRect& tabRect) const;
     int normalTabWidth() const;
@@ -72,7 +74,8 @@ protected:
     void tabLayoutChange() override;
 
 private:
-    struct TabFlags { bool loading = false, waiting = false, audible = false, muted = false, crashed = false; };
+    struct TabFlags { bool loading = false, waiting = false, audible = false, muted = false, crashed = false; int usage = 0; qint64 usageSince = 0; };
+    class QTimer* m_usagePulse = nullptr;
     quint64 ensureId(int index);
     void setHoverIndex(int i);
     void updateCloseButtons();
@@ -122,6 +125,8 @@ public:
     void setTabWaiting(int index, bool on);
     void setTabAudio(int index, bool audible, bool muted);
     void setTabCrashed(int index, bool on);
+    // 1.7.1 in-use indicator (permissions-spec §5): 0 none, 1 location, 2 screen share, 3 recording.
+    void setTabUsage(int index, int usage);
     void showTabSearch() { showTabList(); }
     bool hasFloatingStrip() const { return m_ext && !m_vertical; }
     // Animate the tab closed (if it lives in the strip), then call done().

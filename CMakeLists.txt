@@ -8,10 +8,10 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Find Qt6
-find_package(Qt6 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network Concurrent)
+find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel Sql Network Concurrent)
 # 1.7.6 site permissions: Web Serial I/O (QSerialPort) and the Web Bluetooth chooser (QtBluetooth).
 # Optional so a Qt without these modules still builds; the shims then report NotSupportedError.
-find_package(Qt6 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
+find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
 
 # Include dirs
 include_directories(${CMAKE_SOURCE_DIR}/include)

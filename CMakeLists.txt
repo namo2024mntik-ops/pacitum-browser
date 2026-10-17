@@ -29,6 +29,7 @@ set(SOURCES
     src/DownloadManager.cpp
     src/FindBar.cpp
     src/AdBlocker.cpp
+    src/FilterEngine.cpp
     src/SessionManager.cpp
     src/ZoomController.cpp
     src/SettingsPage.cpp
@@ -64,6 +65,7 @@ set(HEADERS
     include/DownloadManager.h
     include/FindBar.h
     include/AdBlocker.h
+    include/FilterEngine.h
     include/SessionManager.h
     include/ZoomController.h
     include/SettingsPage.h
@@ -128,6 +130,14 @@ endif()
 # Copy resources
 if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
     file(COPY "${CMAKE_SOURCE_DIR}/resources" DESTINATION "${CMAKE_BINARY_DIR}")
+endif()
+
+# Unit tests: cmake -B build -DPACITUM_BUILD_TESTS=ON ... && ctest --test-dir build
+option(PACITUM_BUILD_TESTS "Build unit tests (Qt Test)" OFF)
+if(PACITUM_BUILD_TESTS)
+    enable_testing()
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    add_subdirectory(tests)
 endif()
 
 # Install

@@ -6,7 +6,7 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.*'
@@ -79,7 +79,7 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           $ok = Select-String -Path resize\startup.log -Pattern 'RESIZE OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path resize\crash.log)) { Write-Error "RESIZE TEST FAILED"; exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: resize-test, path: resize/, if-no-files-found: ignore }
       - name: Profile test (migration, registry, isolation, guest)
@@ -96,7 +96,7 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           $ok = Select-String -Path profiles\startup.log -Pattern 'PROFILES OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path profiles\crash.log)) { Write-Error "PROFILE TEST FAILED"; exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: profile-test, path: profiles/, if-no-files-found: ignore }
       - name: Permissions test (store, shims, bridge, prompts, popups, downloads)
@@ -114,7 +114,7 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           $ok = Select-String -Path permissions\startup.log -Pattern 'PERMISSIONS OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path permissions\crash.log)) { Write-Error "PERMISSIONS TEST FAILED"; exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: permissions-test, path: permissions/, if-no-files-found: ignore }
       - name: Stress test (tabs, switching, fullscreen, loads)
@@ -132,7 +132,7 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           $ok = Select-String -Path stress\startup.log -Pattern 'STRESS OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path stress\crash.log)) { Write-Error "STRESS TEST FAILED"; exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: stress-test, path: stress/, if-no-files-found: ignore }
       - name: Single-instance handoff test (second launch passes its URL to the running window)
@@ -162,10 +162,10 @@ jobs:
           Write-Host "exit code: $($p.ExitCode)"
           $ok = Select-String -Path perf\startup.log -Pattern 'PERF OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path perf\crash.log)) { Write-Error "PERF TEST FAILED"; exit 1 }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: handoff-perf-test, path: "handoff/\nperf/", if-no-files-found: ignore }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }
       - name: Installer
@@ -248,10 +248,10 @@ jobs:
           "updater-style silent upgrade relaunched the browser: $relaunched" | Tee-Object -Append installer-shots\upgrade-check.txt
           Start-Sleep 3; Shot '5-relaunched'
           Get-Process PacitumBrowser -ErrorAction SilentlyContinue | Stop-Process -Force
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with: { name: installer-screens, path: installer-shots/, if-no-files-found: ignore }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: PacitumBrowser-Setup
           path: installer/*.exe

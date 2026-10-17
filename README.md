@@ -33,7 +33,7 @@ tab strip above the toolbar, design SVG icon set tinted at runtime, and a built-
 | — | `PacitumScheme.h/cpp` (`pacitum://newtab` internal page) |
 
 ## Prerequisites
-- Qt 6.4+ with **QtWebEngineWidgets** (e.g. Qt 6.9.1)
+- Qt 6.8+ with **QtWebEngineWidgets** (CI builds with Qt 6.8 LTS)
 - CMake 3.16+, Ninja or MSVC/MinGW
 - C++17 compiler (MSVC 2019+, MinGW 13+, GCC 11+)
 
@@ -50,14 +50,11 @@ pacman -S mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-webengine \
           mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 ```
 
-On Ubuntu:
-```
-sudo apt install qt6-base-dev qt6-svg-dev qt6-webengine-dev cmake ninja-build
-```
+On Ubuntu, install Qt 6.8+ with QtWebEngineWidgets using the Qt Online Installer; the distribution packages may be older than the required version. Install CMake and Ninja with `sudo apt install cmake ninja-build`.
 
 ## Build
 ```bash
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.9.1/msvc2022_64" -G Ninja
+cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/<version>/msvc2022_64" -G Ninja
 cmake --build build --config Release
 ./build/PacitumBrowser        # or build/PacitumBrowser.exe on Windows
 ```
@@ -77,4 +74,4 @@ Made by Ai (Grok bot + opencode-BaseApp)
 Stored in `browser_settings.json`, `bookmarks.json`, `browser_session.json`, `browser_history.db` (identical filenames to Python so data migrates).
 
 ## Windows installer
-GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 MSVC, bundles it with windeployqt and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`, 16–256 px) is embedded through `resources/app.rc`.
+GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 LTS MSVC 2022, bundles it with windeployqt and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`, 16–256 px) is embedded through `resources/app.rc`.

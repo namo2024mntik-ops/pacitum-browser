@@ -82,4 +82,5 @@ private:
     bool m_bookmarked = false;
     bool m_suggest = true;
     bool m_selectOnClick = false;
+    bool inlineHintActive() const;
 };

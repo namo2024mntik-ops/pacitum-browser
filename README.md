@@ -1,80 +1,86 @@
 ![Pacitum_Titile](สกรีนช็อต%202026-10-13%20152618.png)
-# Pacitum Browser (Qt6 WebEngine)
+# Pacitum Browser (Qt 6 WebEngine)
 
-A calm, fast web browser written in C++17 on Qt 6 WebEngine.
+A desktop web browser written in C++17 with Qt 6 WebEngine.
+
 Version 1.7.8: omnibox inline hints select only the untyped suffix.
 
 Version 1.7.7: reader mode (Ctrl+Shift+R) and Translate page (Google Translate, language submenu in the ⋮ menu).
 
-Version 1.2.0: merged Chrome-style title bar (frameless window, tabs in caption row, custom min/max/close, Aero Snap via WM_NCHITTEST), animations (tab width, hover, tab fade, loading spinner, menu fade, NTP), full-page Settings (`pacitum://settings`), standard Chrome user agent + persistent disk profile, in-place upgrading installer. User data now lives in `%LOCALAPPDATA%\Pacitum\Pacitum Browser` (migrated automatically from the install folder).
+Version 1.2.0: merged Chrome-style title bar (frameless window, tabs in caption row, custom min/max/close, Aero Snap via WM_NCHITTEST), animations, full-page Settings (`pacitum://settings`), standard Chrome user agent, persistent disk profile, and in-place upgrading installer. User data is stored outside the install folder and migrated from older installs.
 
-Version 1.1.0 implemented the Pacitum design system: graphite/paper surfaces, single teal accent, pill omnibox,
-tab strip above the toolbar, design SVG icon set tinted at runtime, and a built-in `pacitum://newtab` page.
+Version 1.1.0 introduced the Pacitum design system: graphite/paper surfaces, a teal accent, pill omnibox, tab strip above the toolbar, tinted SVG icons, and the built-in `pacitum://newtab` page.
 
-## Architecture (1:1 with Python)
-| Python (`safari_browser/*.py`) | C++ (`safari_browser_cpp/include|src/*.cpp`) |
-|---|---|
-| `main.py` | `src/main.cpp` |
-| `browser_window.py` | `BrowserWindow.h/cpp` |
-| `browser_tab.py` | `BrowserTab.h/cpp` |
-| `tab_widget.py` | `TabWidget.h/cpp` (PacitumTabWidget + PacitumTabBar) |
-| `address_bar.py` | `AddressBar.h/cpp` |
-| `bookmark_manager.py` | `BookmarkManager.h/cpp` |
-| `bookmarks_bar.py` | `BookmarksBar.h/cpp` |
-| `history_manager.py` | `HistoryManager.h/cpp` (SQLite via QtSql) |
-| `download_manager.py` | `DownloadManager.h/cpp` |
-| `find_bar.py` | `FindBar.h/cpp` |
-| `ad_blocker.py` | `AdBlocker.h/cpp` (QWebEngineUrlRequestInterceptor) |
-| `session_manager.py` | `SessionManager.h/cpp` |
-| `zoom_controller.py` | `ZoomController.h/cpp` |
-| `settings_dialog.py` | `SettingsPage.h/cpp` (full-page settings tab) |
-| — | `WebProfile.h/cpp` (UA, Accept-Language, persistent profile) · `Widgets.h/cpp` (animated buttons, switches, spinner) |
-| `theme_manager.py` | `ThemeManager.h/cpp` (Pacitum design tokens → QSS, SVG icon tinting) |
-| — | `PacitumScheme.h/cpp` (`pacitum://newtab` internal page) |
+## Architecture
+
+| Component | Files | Responsibility |
+|---|---|---|
+| Application entry | `src/main.cpp` | Startup, profile selection, single-instance handoff |
+| Browser window and tabs | `BrowserWindow`, `BrowserTab`, `TabWidget` | Window UI, navigation, tab lifecycle |
+| Browser features | `AddressBar`, `BookmarkManager`, `HistoryManager`, `DownloadManager`, `FindBar`, `AdBlocker`, `SessionManager` | Address entry, bookmarks, history, downloads, find, filtering, session restore |
+| Profiles and permissions | `ProfileManager`, `WebProfile`, `PermissionController`, `SitePermissions` | Profile isolation, web settings, site permissions |
+| UI and internal pages | `ThemeManager`, `Widgets`, `SettingsPage`, `PacitumScheme` | Themes, controls, settings, and `pacitum://` pages |
 
 ## Prerequisites
-- Qt 6.4+ with **QtWebEngineWidgets** (e.g. Qt 6.9.1)
-- CMake 3.16+, Ninja or MSVC/MinGW
-- C++17 compiler (MSVC 2019+, MinGW 13+, GCC 11+)
 
-On Windows with MSVC:
-```
-winget install Qt.Qt.6.9
-winget install Kitware.CMake
-winget install Ninja-build.Ninja
-```
+- Qt 6.4 or newer with Qt Widgets, Svg, WebEngineWidgets, WebChannel, Sql, Network, and Concurrent
+- CMake 3.16 or newer
+- C++17 compiler (MSVC 2019+, MinGW 13+, or GCC 11+)
+- Ninja or another supported CMake generator
 
-On MSYS2 UCRT64 (mingw):
-```
-pacman -S mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-webengine \
+SerialPort and Bluetooth support are optional. CMake enables them when the corresponding Qt modules are installed.
+
+On Windows with MSVC, install Qt with the modules above, CMake, and Ninja. The GitHub Actions workflow uses Qt 6.8 with MSVC 2022.
+
+On MSYS2 UCRT64:
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-svg \
+          mingw-w64-ucrt-x86_64-qt6-webengine mingw-w64-ucrt-x86_64-qt6-webchannel \
           mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
 ```
 
 On Ubuntu:
-```
-sudo apt install qt6-base-dev qt6-svg-dev qt6-webengine-dev cmake ninja-build
+
+```bash
+sudo apt install qt6-base-dev qt6-svg-dev qt6-webengine-dev qt6-webchannel-dev cmake ninja-build
 ```
 
 ## Build
+
+For a Qt installation in a custom location, set `CMAKE_PREFIX_PATH` to its installation prefix:
+
 ```bash
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.9.1/msvc2022_64" -G Ninja
+cmake -S . -B build -G Ninja -DCMAKE_PREFIX_PATH="C:/Qt/6.9.1/msvc2022_64"
 cmake --build build --config Release
-./build/PacitumBrowser        # or build/PacitumBrowser.exe on Windows
 ```
 
-Qt Creator: Open `CMakeLists.txt` → Configure → Run.
+For system-installed Qt on Linux or MSYS2, omit `CMAKE_PREFIX_PATH`:
 
-## Features (parity with Python)
-- Pacitum UI: tab strip (40) → toolbar (44) → bookmarks bar (32); pill omnibox with lock/warning/search icon and star; ⋮ main menu with zoom row; System/Light/Dark themes + accent colors
-- Tabs: drag, close others/right, duplicate, split view (two PacitumTabWidgets in QSplitter), pin/mute, vertical mode (Ctrl+Shift+E)
-- Navigation, history (SQLite), bookmarks (JSON), downloads (QWebEngineDownloadRequest), find (Ctrl+F), zoom 25-500%
-- Ad blocker (host + path interceptor), private mode (NoPersistentCookies), session restore, Do Not Track
-- Hardware acceleration, GPU raster, 250MB disk cache, spellcheck, crash auto-reload
+```bash
+cmake -S . -B build -G Ninja
+cmake --build build --config Release
+```
 
-Made by Ai (Grok bot + opencode-BaseApp)
+Run `build/PacitumBrowser` on Linux or `build/PacitumBrowser.exe` on Windows.
 
-## Settings
-Stored in `browser_settings.json`, `bookmarks.json`, `browser_session.json`, `browser_history.db` (identical filenames to Python so data migrates).
+In Qt Creator, open `CMakeLists.txt`, configure the project, and run it.
+
+## Features
+
+- Pacitum UI with tab strip, toolbar, bookmarks bar, pill omnibox, themes, and accent colors
+- Tabs with drag and drop, duplicate, split view, pin and mute controls, and vertical mode (Ctrl+Shift+E)
+- Navigation, SQLite history, JSON bookmarks, downloads, find (Ctrl+F), and zoom from 25% to 500%
+- Ad blocking, private tabs, session restore, and Do Not Track
+- Hardware acceleration, GPU rasterization, and a 250 MB HTTP cache
+- Spellcheck when Qt WebEngine dictionaries are installed; crashed web renderers are automatically reloaded
+
+Made by AI (Grok bot + opencode-BaseApp)
+
+## Settings and user data
+
+Settings and browser data use the filenames `browser_settings.json`, `bookmarks.json`, `browser_session.json`, and `browser_history.db`. They are stored in the active profile's data directory under the application's local data directory. Older installs are migrated into the default profile. Guest browsing uses temporary storage.
 
 ## Windows installer
-GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 MSVC, bundles it with windeployqt and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`, 16–256 px) is embedded through `resources/app.rc`.
+
+GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 MSVC, bundles it with `windeployqt`, and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`) is embedded through `resources/app.rc`.

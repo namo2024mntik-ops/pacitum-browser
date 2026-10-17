@@ -8,6 +8,7 @@
 #include <QHBoxLayout>
 #include <QEvent>
 #include <QMouseEvent>
+#include <QKeyEvent>
 #include <QStyle>
 #include <QAbstractItemView>
 #include <QUrl>
@@ -169,6 +170,18 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
             if (!m_completer->popup()->isVisible()) showBlurred();
         } else if (e->type() == QEvent::MouseButtonRelease && m_selectOnClick) {
             m_selectOnClick = false; m_input->selectAll(); return true;
+        } else if (e->type() == QEvent::KeyPress) {
+            // Inline hint is a selected suffix. Backspace should drop that hint and one typed
+            // character (Chrome), not only the selection — otherwise the same hint returns.
+            auto* ke = static_cast<QKeyEvent*>(e);
+            if (ke->key() == Qt::Key_Backspace && !ke->modifiers() && inlineHintActive()) {
+                const int keep = m_input->selectionStart() - 1;
+                const QString typed = keep > 0 ? m_input->text().left(keep) : QString();
+                m_input->setText(typed);
+                m_input->setCursorPosition(typed.size());
+                onTextChanged(typed);
+                return true;
+            }
         }
     } else if (o == m_chip && m_secureHttps) {
         // hover swaps the lock for the site-controls glyph (click opens site controls / info)
@@ -182,16 +195,42 @@ void AddressBar::onReturn() { emit returnPressed(m_input->text().trimmed()); m_i
 
 void AddressBar::onTextChanged(const QString&) { m_timer.start(); }
 
+bool AddressBar::inlineHintActive() const {
+    if (!m_input->hasSelectedText()) return false;
+    const int start = m_input->selectionStart();
+    return start > 0 && m_input->selectionEnd() == m_input->text().size()
+        && m_input->cursorPosition() == m_input->text().size();
+}
+
 void AddressBar::updateSuggestions() {
-    QString text = m_input->text().trimmed();
+    // The editable text is what the user typed. A selected inline hint is not part of the query.
+    QString text = m_input->text();
+    if (inlineHintActive()) text.truncate(m_input->selectionStart());
+    text = text.trimmed();
     if (text.isEmpty() || !m_history || !m_suggest) { m_completer->setModel(new QStringListModel(m_completer)); return; }
     auto results = m_history->search(text, 10);
     QStringList suggestions; QSet<QString> seen;
+    QString inlineMatch;
     for (auto &r : results) {
-        if (!seen.contains(r.url) && r.url != m_currentUrl) { seen.insert(r.url); suggestions << r.url; }
+        if (seen.contains(r.url) || r.url == m_currentUrl) continue;
+        seen.insert(r.url);
+        suggestions << r.url;
+        if (inlineMatch.isEmpty() && r.url.startsWith(text, Qt::CaseInsensitive) && r.url.size() > text.size())
+            inlineMatch = r.url;
     }
+    // setModel() clears the completion prefix. Restoring it keeps Qt from selecting the
+    // whole suggestion (the typed prefix must stay unselected, like other browsers).
     m_completer->setModel(new QStringListModel(suggestions, m_completer));
+    m_completer->setCompletionPrefix(text);
     if (!suggestions.isEmpty()) m_completer->complete();
+    if (!inlineMatch.isEmpty()) {
+        const QString filled = text + inlineMatch.mid(text.size());
+        m_input->setText(filled);
+        m_input->setSelection(text.size(), filled.size() - text.size());
+    } else if (m_input->text() != text) {
+        m_input->setText(text);
+        m_input->setCursorPosition(text.size());
+    }
 }
 
 void AddressBar::onSuggestionActivated(const QString& v) { m_input->setText(v); emit returnPressed(v); }

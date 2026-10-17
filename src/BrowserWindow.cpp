@@ -68,6 +68,9 @@
 #include <QWebEngineSettings>
 #include <QWebEngineCookieStore>
 #include <QStatusBar>
+#include <QLocale>
+#include <QUrl>
+#include <QUrlQuery>
 #include <QKeyEvent>
 #include <QStyle>
 #include <QTimer>
@@ -76,7 +79,6 @@
 #include <QDateTime>
 #include <QWebEngineFullScreenRequest>
 #include <QtMath>
-#include <QUrl>
 #include <QDir>
 #include <QWebEngineView>
 #include <QRegularExpression>
@@ -508,6 +510,7 @@ void BrowserWindow::setupShortcuts() {
     new QShortcut(QKeySequence(QStringLiteral("Alt+F")), this, SLOT(showMenu()));
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]{ m_tabs->showTabSearch(); });
     new QShortcut(QKeySequence(QStringLiteral("F12")), this, SLOT(showDevTools()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, SLOT(toggleReaderMode()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+Left")), this, SLOT(goBack()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+Right")), this, SLOT(goForward()));
     for (int i = 1; i <= 9; ++i)
@@ -539,6 +542,7 @@ void BrowserWindow::createMenuBar() {
     view->addAction(QStringLiteral("Toggle Vertical Tabs"), QKeySequence(QStringLiteral("Ctrl+Shift+E")), this, &BrowserWindow::toggleVerticalTabs);
     view->addSeparator();
     view->addAction(QStringLiteral("Full Screen"), QKeySequence(QStringLiteral("F11")), this, &BrowserWindow::toggleFullscreen);
+    view->addAction(QStringLiteral("Reader mode"), QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, &BrowserWindow::toggleReaderMode);
 
     auto* hist = mb->addMenu(QStringLiteral("History"));
     hist->addAction(QStringLiteral("Show History"), QKeySequence(QStringLiteral("Ctrl+H")), this, &BrowserWindow::showHistory);
@@ -982,10 +986,28 @@ void BrowserWindow::showMenu() {
     m.addSeparator();
     add(QStringLiteral("print"), QStringLiteral("Print…"), QStringLiteral("Ctrl+P"), [this]{ if (auto* t = activeTab()) if (auto* v = t->findChild<QWebEngineView*>()) { v->printToPdf(QDir::homePath() + QStringLiteral("/page.pdf")); statusBar()->showMessage(QStringLiteral("Saved page.pdf to your home folder"), 2500); } });
     add(QStringLiteral("find"), QStringLiteral("Find in page…"), QStringLiteral("Ctrl+F"), [this]{ showFind(); });
+    add(QStringLiteral("reader-mode"), QStringLiteral("Reader mode"), QStringLiteral("Ctrl+Shift+R"), [this]{ toggleReaderMode(); });
     add(QStringLiteral("share"), QStringLiteral("Share… (copy link)"), QString(), [this]{ copyCurrentUrl(); });
     add(QStringLiteral("devtools"), QStringLiteral("Developer tools"), QStringLiteral("F12"), [this]{ showDevTools(); });
-    auto* tr = add(QStringLiteral("translate"), QStringLiteral("Translate page"), QString(), []{});
-    tr->setEnabled(false);   // not available yet (spec shows it disabled)
+    {
+        auto* sub = m.addMenu(m_theme->secondaryIcon(QStringLiteral("translate"), 18), QStringLiteral("Translate page"));
+        const QString ui = QLocale::system().name().section(QLatin1Char('_'), 0, 0).toLower();
+        struct Lang { const char* code; const char* name; };
+        const Lang langs[] = {
+            {"en", "English"}, {"es", "Spanish"}, {"fr", "French"}, {"de", "German"},
+            {"pt", "Portuguese"}, {"th", "Thai"}, {"ja", "Japanese"}, {"ko", "Korean"},
+            {"zh-CN", "Chinese (Simplified)"}, {"ar", "Arabic"},
+        };
+        for (const Lang& lang : langs) {
+            if (ui == QLatin1String(lang.code)) continue;
+            auto* a = sub->addAction(QString::fromUtf8(lang.name));
+            const QString code = QString::fromLatin1(lang.code);
+            connect(a, &QAction::triggered, this, [this, code]{ translatePage(code); });
+        }
+        sub->addSeparator();
+        auto* sys = sub->addAction(QStringLiteral("System language"));
+        connect(sys, &QAction::triggered, this, [this, ui]{ translatePage(ui.isEmpty() ? QStringLiteral("en") : ui); });
+    }
     m.addSeparator();
     add(QStringLiteral("settings"), QStringLiteral("Settings"), QStringLiteral("Ctrl+,"), [this]{ showSettings(); });
     add(QStringLiteral("help"), QStringLiteral("Help && about"), QString(), [this]{
@@ -1016,6 +1038,88 @@ void BrowserWindow::showDevTools() {
 }
 
 void BrowserWindow::copyCurrentUrl() { if (auto* t=activeTab()) { QApplication::clipboard()->setText(t->currentUrl()); statusBar()->showMessage(QStringLiteral("Page address copied"), 1800);} }
+
+void BrowserWindow::translatePage(const QString& targetLang) {
+    auto* t = activeTab();
+    if (!t) return;
+    const QUrl src(t->currentUrl());
+    if (!src.isValid() || (src.scheme() != QStringLiteral("http") && src.scheme() != QStringLiteral("https"))) {
+        statusBar()->showMessage(QStringLiteral("Only web pages can be translated"), 2200);
+        return;
+    }
+    QUrl dest(QStringLiteral("https://translate.google.com/translate"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("sl"), QStringLiteral("auto"));
+    QString tl = targetLang;
+    if (tl == QStringLiteral("zh")) tl = QStringLiteral("zh-CN");
+    q.addQueryItem(QStringLiteral("tl"), tl);
+    q.addQueryItem(QStringLiteral("u"), src.toString(QUrl::FullyEncoded));
+    dest.setQuery(q);
+    t->loadUrl(dest.toString());
+    statusBar()->showMessage(QStringLiteral("Translating this page…"), 2200);
+}
+
+void BrowserWindow::toggleReaderMode() {
+    auto* t = activeTab();
+    if (!t || !t->view() || !t->view()->page()) return;
+    const QUrl src(t->currentUrl());
+    if (src.scheme() != QStringLiteral("http") && src.scheme() != QStringLiteral("https")) {
+        statusBar()->showMessage(QStringLiteral("Reader mode works on web pages"), 2200);
+        return;
+    }
+    const auto& pal = m_theme->palette();
+    const QString js = QStringLiteral(R"JS(
+(function(){
+  if (window.__pacitumReaderOn) {
+    var st = document.getElementById('pacitum-reader-style'); if (st) st.remove();
+    document.body.className = window.__pacitumReaderClass || '';
+    document.body.innerHTML = window.__pacitumReaderHtml || '';
+    window.__pacitumReaderOn = false;
+    return 'off';
+  }
+  var root = document.querySelector('article') || document.querySelector('main') || document.body;
+  if (!root) return 'empty';
+  var clone = root.cloneNode(true);
+  clone.querySelectorAll('script,style,noscript,iframe,svg,canvas,nav,footer,form,button,aside,[role="navigation"],[role="banner"],[role="contentinfo"]').forEach(function(n){ n.remove(); });
+  var text = (clone.innerText || '').replace(/\s+/g, ' ').trim();
+  var html = clone.innerHTML;
+  if (text.length < 280) {
+    var ps = Array.prototype.slice.call(document.querySelectorAll('p')).filter(function(p){ return (p.innerText || '').trim().length > 40; });
+    html = ps.map(function(p){ return '<p>' + p.innerText.trim().replace(/</g,'') + '</p>'; }).join('');
+    text = ps.map(function(p){ return p.innerText; }).join(' ');
+  }
+  if (!text || text.trim().length < 80) return 'empty';
+  window.__pacitumReaderHtml = document.body.innerHTML;
+  window.__pacitumReaderClass = document.body.className;
+  var title = (document.title || '').replace(/</g, '');
+  var css = 'html,body{margin:0;background:%1;color:%2;}'
+    + '#pacitum-reader{max-width:680px;margin:48px auto 80px;padding:0 24px;font:18px/1.65 Georgia,Cambria,serif;}'
+    + '#pacitum-reader h1{font:600 32px/1.25 sans-serif;margin:0 0 24px;letter-spacing:-0.02em;}'
+    + '#pacitum-reader p{margin:0 0 16px;}'
+    + '#pacitum-reader a{color:%3;}'
+    + '#pacitum-reader img{max-width:100%;height:auto;border-radius:8px;}';
+  var style = document.getElementById('pacitum-reader-style') || document.createElement('style');
+  style.id = 'pacitum-reader-style';
+  style.textContent = css;
+  document.head.appendChild(style);
+  document.body.className = '';
+  document.body.innerHTML = '<article id="pacitum-reader"><h1>' + title + '</h1>' + html + '</article>';
+  window.__pacitumReaderOn = true;
+  return 'on';
+})()
+)JS").arg(pal.page, pal.text, pal.accent);
+    QPointer<BrowserWindow> self(this);
+    t->view()->page()->runJavaScript(js, [self](const QVariant& result) {
+        if (!self) return;
+        const QString state = result.toString();
+        if (state == QStringLiteral("on"))
+            self->statusBar()->showMessage(QStringLiteral("Reader mode on"), 1800);
+        else if (state == QStringLiteral("off"))
+            self->statusBar()->showMessage(QStringLiteral("Reader mode off"), 1800);
+        else
+            self->statusBar()->showMessage(QStringLiteral("This page does not have an article to read"), 2200);
+    });
+}
 void BrowserWindow::showPageInfo() {
     if (auto* t = activeTab(); t && t->permissions() && !t->permissions()->origin().isEmpty()) {   // site controls panel (§7)
         t->permissions()->showSiteControls(m_addressBar->bubbleAnchor());

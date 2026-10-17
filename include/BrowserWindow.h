@@ -116,6 +116,8 @@ private slots:
     void tickSpinner();
     void showDevTools();
     void showExtensionsMenu();
+    void toggleReaderMode();
+    void translatePage(const QString& targetLang);
 
 private:
     void setupUI();

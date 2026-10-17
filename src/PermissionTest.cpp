@@ -30,7 +30,7 @@ struct Http : QTcpServer {
                     QByteArray body, type = "text/html", extra;
                     if (path.startsWith("/file")) { body = "pacitum download test\n"; type = "text/plain"; extra = "Content-Disposition: attachment; filename=\"" + path.mid(1, 6) + ".txt\"\r\n"; }
                     else if (path.startsWith("/popup")) body = "<!doctype html><title>popup</title><script>setTimeout(function(){window.open('/target-popup');},300);</script>";
-                    else if (path.startsWith("/dl")) body = "<!doctype html><title>dl</title><script>addEventListener('load',function(){['/file1','/file2','/file3'].forEach(function(u,i){setTimeout(function(){var a=document.createElement('a');a.href=u;a.download='';document.body.appendChild(a);a.click();},200+i*150);});});</script><body></body>";
+                    else if (path.startsWith("/dl")) body = "<!doctype html><title>dl</title><body>download permission test</body>";
                     else body = "<!doctype html><title>perm</title><body>pacitum permissions test</body>";
                     s->write("HTTP/1.1 200 OK\r\nContent-Type: " + type + "\r\nCache-Control: no-store\r\nConnection: close\r\n" + extra + "Content-Length: "
                              + QByteArray::number(body.size()) + "\r\n\r\n" + body);
@@ -137,13 +137,27 @@ void runPermissionTest(BrowserWindow* w) {
             t->permissions()->store()->setDecision(origin, Perm::Kind::Popups, Perm::Decision::Ask);
         }
     }
-    // 3) Multiple automatic downloads: the 2nd within 5 s is held and prompts; auto "deny" blocks
+    // 3) Multiple ungestured downloads: drive Qt's downloadRequested path directly so
+    // Chromium's own scripted-download throttling cannot suppress requests before Pacitum sees them.
     {
         PermissionController::s_testAnswer = QStringLiteral("deny");
         BrowserTab* t = openAndWait(w, base + QStringLiteral("/dl"));
-        wait(2500);
         auto* st = t && t->permissions() ? t->permissions()->store() : nullptr;
-        check(st && st->decision(origin, Perm::Kind::Downloads) == Perm::Decision::Block, QStringLiteral("extra automatic downloads prompted and blocked"));
+        auto* page = t ? t->view()->page() : nullptr;
+        if (page) {
+            for (int i = 0; i < 3; ++i) {
+                const QUrl url(base + QStringLiteral("/file%1").arg(i + 1));
+                const QString filename = QStringLiteral("auto%1.txt").arg(i + 1);
+                QTimer::singleShot(i * 150, page, [page, url, filename]{ page->download(url, filename); });
+            }
+        }
+        QElapsedTimer elapsed; elapsed.start();
+        while (st && st->decision(origin, Perm::Kind::Downloads) != Perm::Decision::Block && elapsed.elapsed() < 8000)
+            wait(50);
+        const auto decision = st ? st->decision(origin, Perm::Kind::Downloads) : Perm::Decision::Ask;
+        check(st && decision == Perm::Decision::Block,
+              QStringLiteral("extra automatic downloads prompted and blocked (decision: %1)")
+                  .arg(decision == Perm::Decision::Block ? QStringLiteral("Block") : decision == Perm::Decision::Allow ? QStringLiteral("Allow") : QStringLiteral("Ask")));
         if (st) st->setDecision(origin, Perm::Kind::Downloads, Perm::Decision::Ask);
     }
     PermissionController::s_testAutoAnswer = false;

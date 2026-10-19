@@ -101,6 +101,7 @@ private slots:
     void showHistory();
     void clearHistory();
     void showBookmarksDialog();
+    void importBookmarks();
     void toggleFullscreen();
     void focusAddressBar();
     void zoomIn();

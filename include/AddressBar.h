@@ -83,4 +83,8 @@ private:
     bool m_suggest = true;
     bool m_selectOnClick = false;
     bool inlineHintActive() const;
+    void dropInlineHint();                 // remove the selected suffix, keep what was typed
+    QStringListModel* m_model = nullptr;   // reused for every refresh (no per-keystroke allocation)
+    bool m_noInline = false;               // true after Backspace/Delete: don't re-add a hint
+    bool m_composing = false;              // IME preedit active: never rewrite the text
 };

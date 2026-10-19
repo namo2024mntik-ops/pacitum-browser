@@ -30,6 +30,7 @@
 #include "WebProfile.h"
 #include "Widgets.h"
 #include <QFileDialog>
+#include <QTextDocument>
 #include <QStandardPaths>
 #include <QPointer>
 #include <QWindow>
@@ -551,6 +552,7 @@ void BrowserWindow::createMenuBar() {
     auto* bm = mb->addMenu(QStringLiteral("Bookmarks"));
     bm->addAction(QStringLiteral("Add Bookmark"), QKeySequence(QStringLiteral("Ctrl+B")), this, &BrowserWindow::toggleBookmark);
     bm->addAction(QStringLiteral("Show All Bookmarks"), this, &BrowserWindow::showBookmarksDialog);
+    bm->addAction(QStringLiteral("Import Bookmarks from HTML…"), this, &BrowserWindow::importBookmarks);
 
     auto* win = mb->addMenu(QStringLiteral("Window"));
     win->addAction(QStringLiteral("Downloads"), QKeySequence(QStringLiteral("Ctrl+J")), this, &BrowserWindow::showDownloads);
@@ -1139,10 +1141,87 @@ void BrowserWindow::showHistory() {
 }
 void BrowserWindow::clearHistory() { m_history->clear(); statusBar()->showMessage(QStringLiteral("History cleared"), 2000); }
 void BrowserWindow::showBookmarksDialog() {
-    auto bms = m_bookmarks->allBookmarks();
-    if (bms.isEmpty()) { QMessageBox::information(this, QStringLiteral("Bookmarks"), QStringLiteral("No bookmarks yet.")); return; }
-    QStringList lines; for (auto &b: bms) lines << b.title + QStringLiteral(" — ") + b.url;
-    QMessageBox::information(this, QStringLiteral("Bookmarks (%1)").arg(bms.size()), lines.join(QStringLiteral("\n")));
+    QDialog dlg(this);
+    dlg.setWindowTitle(QStringLiteral("Bookmarks"));
+    dlg.resize(640, 440);
+    auto* layout = new QVBoxLayout(&dlg);
+    auto* list = new QListWidget(&dlg);
+    for (const auto& b : m_bookmarks->allBookmarks()) {
+        auto* item = new QListWidgetItem(b.title + QStringLiteral("\\n") + b.url, list);
+        item->setToolTip(b.url);
+        item->setData(Qt::UserRole, b.url);
+    }
+    layout->addWidget(list, 1);
+    auto* buttons = new QHBoxLayout;
+    auto* importBtn = new QPushButton(QStringLiteral("Import HTML…"), &dlg);
+    auto* openBtn = new QPushButton(QStringLiteral("Open"), &dlg);
+    auto* closeBtn = new QPushButton(QStringLiteral("Close"), &dlg);
+    buttons->addWidget(importBtn); buttons->addStretch(1); buttons->addWidget(openBtn); buttons->addWidget(closeBtn);
+    layout->addLayout(buttons);
+    connect(importBtn, &QPushButton::clicked, &dlg, [this, &dlg, list]{
+        importBookmarks();
+        list->clear();
+        for (const auto& b : m_bookmarks->allBookmarks()) {
+            auto* item = new QListWidgetItem(b.title + QStringLiteral("\\n") + b.url, list);
+            item->setToolTip(b.url); item->setData(Qt::UserRole, b.url);
+        }
+    });
+    connect(openBtn, &QPushButton::clicked, &dlg, [this, list, &dlg]{
+        if (auto* item = list->currentItem()) { const QString url = item->data(Qt::UserRole).toString(); dlg.accept(); navigateToUrl(url); }
+    });
+    connect(list, &QListWidget::itemDoubleClicked, &dlg, [this, &dlg](QListWidgetItem* item){
+        const QString url = item->data(Qt::UserRole).toString(); dlg.accept(); navigateToUrl(url);
+    });
+    connect(closeBtn, &QPushButton::clicked, &dlg, &QDialog::reject);
+    dlg.exec();
+}
+
+void BrowserWindow::importBookmarks() {
+    const QString path = QFileDialog::getOpenFileName(this, QStringLiteral("Import Bookmarks"),
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        QStringLiteral("Bookmark HTML (*.html *.htm);;All files (*)"));
+    if (path.isEmpty()) return;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, QStringLiteral("Import Bookmarks"),
+            QStringLiteral("Could not read the selected file."));
+        return;
+    }
+    const QString html = QString::fromUtf8(file.readAll());
+    // Chrome, Edge and Firefox export Netscape-style bookmark HTML with <A HREF="...">title</A>.
+    static const QRegularExpression anchor(
+        QStringLiteral("<a\\\\b([^>]*)>(.*?)</a\\\\s*>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    static const QRegularExpression href(
+        QStringLiteral("\\\\bhref\\\\s*=\\\\s*(['\\\"])(.*?)\\\\1"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    QVector<QPair<QString, QString>> items;
+    auto match = anchor.globalMatch(html);
+    QTextDocument decoder;
+    while (match.hasNext()) {
+        const auto a = match.next();
+        const auto hm = href.match(a.captured(1));
+        if (!hm.hasMatch()) continue;
+        QUrl url = QUrl::fromEncoded(hm.captured(2).toUtf8());
+        if (!url.isValid() || url.scheme().isEmpty() ||
+            (url.scheme() != QStringLiteral("http") && url.scheme() != QStringLiteral("https") &&
+             url.scheme() != QStringLiteral("file") && url.scheme() != QStringLiteral("ftp"))) continue;
+        decoder.setHtml(a.captured(2));
+        QString title = decoder.toPlainText().trimmed();
+        if (title.isEmpty()) title = url.toString();
+        items.push_back(qMakePair(title, url.toString(QUrl::FullyEncoded)));
+    }
+    if (items.isEmpty()) {
+        QMessageBox::information(this, QStringLiteral("Import Bookmarks"),
+            QStringLiteral("No supported bookmarks were found. Choose an HTML bookmarks export."));
+        return;
+    }
+    const int added = m_bookmarks->addBookmarks(items);
+    m_bookmarksBar->refresh();
+    if (auto* tab = activeTab()) m_addressBar->setBookmarked(m_bookmarks->isBookmarked(tab->currentUrl()));
+    QMessageBox::information(this, QStringLiteral("Import Bookmarks"),
+        QStringLiteral("Found %1 bookmarks. Imported %2 new bookmarks; duplicates were skipped.")
+            .arg(items.size()).arg(added));
 }
 void BrowserWindow::toggleBookmarksBar() { const bool show = !Motion::targetVisible(m_bookmarksBar); Motion::slideVisible(m_bookmarksBar, show, 0, Motion::Base); auto s = readSettings(); s[QStringLiteral("show_bookmarks_bar")] = show; writeSettingsFile(s); }
 void BrowserWindow::toggleVerticalTabs() { m_verticalTabs = !m_verticalTabs; m_tabs->setVertical(m_verticalTabs); m_splitTabs->setVertical(m_verticalTabs); }

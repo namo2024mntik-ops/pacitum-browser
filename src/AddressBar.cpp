@@ -9,6 +9,8 @@
 #include <QEvent>
 #include <QMouseEvent>
 #include <QKeyEvent>
+#include <QInputMethodEvent>
+#include <QStringList>
 #include <QStyle>
 #include <QAbstractItemView>
 #include <QUrl>
@@ -23,6 +25,17 @@ static QColor cssColor(const QString& s) {
     QColor c(m.captured(1).toInt(), m.captured(2).toInt(), m.captured(3).toInt());
     if (!m.captured(4).isEmpty()) c.setAlphaF(m.captured(4).toDouble());
     return c;
+}
+
+// Forms of a URL the user may be typing the start of: "https://www.a.com/x" is also typed as
+// "www.a.com/x" or "a.com/x". Same idea as Chrome, so "gith" can hint "github.com/".
+static QStringList inlineForms(const QString& url) {
+    QStringList f{url};
+    QString s = url;
+    const int p = s.indexOf(QStringLiteral("://"));
+    if (p > 0 && p < 12) { s = s.mid(p + 3); f << s; }
+    if (s.startsWith(QStringLiteral("www."), Qt::CaseInsensitive)) f << s.mid(4);
+    return f;
 }
 
 static bool isInternalNewTab(const QString& url) {
@@ -76,6 +89,11 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     m_completer = new QCompleter(this);
     m_completer->popup()->setProperty("_pmNoSlide", true);   // re-positioned while typing: fade only
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
+    // Default filter is "starts with", which hid every suggestion that doesn't begin with the
+    // typed text (typing "github" never matched "https://github.com/...").
+    m_completer->setFilterMode(Qt::MatchContains);
+    m_model = new QStringListModel(m_completer);
+    m_completer->setModel(m_model);
     m_completer->setMaxVisibleItems(8);
     m_input->setCompleter(m_completer);
 
@@ -158,6 +176,7 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
         if (e->type() == QEvent::Resize && !m_display->isHidden()) {
             m_display->setGeometry(2, 0, m_input->width() - 2, m_input->height());
         } else if (e->type() == QEvent::FocusIn) {
+            m_noInline = false; m_composing = false;
             setDisplayMode(false);
             if (!isInternalNewTab(m_currentUrl)) m_input->setText(m_currentUrl);   // full URL on focus
             setProperty("focused", true); style()->unpolish(this); style()->polish(this);
@@ -170,17 +189,24 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
             if (!m_completer->popup()->isVisible()) showBlurred();
         } else if (e->type() == QEvent::MouseButtonRelease && m_selectOnClick) {
             m_selectOnClick = false; m_input->selectAll(); return true;
+        } else if (e->type() == QEvent::InputMethod) {
+            m_composing = !static_cast<QInputMethodEvent*>(e)->preeditString().isEmpty();
         } else if (e->type() == QEvent::KeyPress) {
-            // Inline hint is a selected suffix. Backspace should drop that hint and one typed
-            // character (Chrome), not only the selection — otherwise the same hint returns.
+            // The inline hint is a selected suffix. Backspace/Delete removes only the hint
+            // (Chrome) and the hint must not come back until the user types again.
             auto* ke = static_cast<QKeyEvent*>(e);
-            if (ke->key() == Qt::Key_Backspace && !ke->modifiers() && inlineHintActive()) {
-                const int keep = m_input->selectionStart() - 1;
-                const QString typed = keep > 0 ? m_input->text().left(keep) : QString();
-                m_input->setText(typed);
-                m_input->setCursorPosition(typed.size());
-                onTextChanged(typed);
-                return true;
+            const bool plain = !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier));
+            if ((ke->key() == Qt::Key_Backspace || ke->key() == Qt::Key_Delete) && plain) {
+                m_noInline = true;
+                if (inlineHintActive()) { dropInlineHint(); onTextChanged(QString()); return true; }
+            } else if (ke->key() == Qt::Key_Escape && !m_completer->popup()->isVisible() && inlineHintActive()) {
+                m_noInline = true; dropInlineHint(); return true;
+            } else if (ke->matches(QKeySequence::Cut)) {
+                m_noInline = true;
+            } else if (plain && !ke->text().isEmpty() && ke->text().at(0).isPrint()) {
+                m_noInline = false;
+            } else if (ke->matches(QKeySequence::Paste)) {
+                m_noInline = false;
             }
         }
     } else if (o == m_chip && m_secureHttps) {
@@ -191,7 +217,11 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
     return QFrame::eventFilter(o, e);
 }
 
-void AddressBar::onReturn() { emit returnPressed(m_input->text().trimmed()); m_input->clearFocus(); }
+void AddressBar::onReturn() {
+    m_timer.stop();   // a pending refresh must not rewrite the field / reopen the popup after Enter
+    emit returnPressed(m_input->text().trimmed());
+    m_input->clearFocus();
+}
 
 void AddressBar::onTextChanged(const QString&) { m_timer.start(); }
 
@@ -202,34 +232,65 @@ bool AddressBar::inlineHintActive() const {
         && m_input->cursorPosition() == m_input->text().size();
 }
 
+void AddressBar::dropInlineHint() {
+    if (!inlineHintActive()) return;
+    const int keep = m_input->selectionStart();
+    m_input->setText(m_input->text().left(keep));
+    m_input->setCursorPosition(keep);
+}
+
 void AddressBar::updateSuggestions() {
-    // The editable text is what the user typed. A selected inline hint is not part of the query.
-    QString text = m_input->text();
-    if (inlineHintActive()) text.truncate(m_input->selectionStart());
-    text = text.trimmed();
-    if (text.isEmpty() || !m_history || !m_suggest) { m_completer->setModel(new QStringListModel(m_completer)); return; }
-    auto results = m_history->search(text, 10);
-    QStringList suggestions; QSet<QString> seen;
-    QString inlineMatch;
-    for (auto &r : results) {
-        if (seen.contains(r.url) || r.url == m_currentUrl) continue;
-        seen.insert(r.url);
-        suggestions << r.url;
-        if (inlineMatch.isEmpty() && r.url.startsWith(text, Qt::CaseInsensitive) && r.url.size() > text.size())
-            inlineMatch = r.url;
+    // Late timer (after Enter / focus lost) or IME preedit: leave the field alone.
+    if (m_composing || !m_input->hasFocus()) return;
+
+    const QString raw = m_input->text();
+    const bool hint = inlineHintActive();
+    // `typed` is exactly what the user typed (a selected inline hint is not part of it, and
+    // spaces are kept: the old code trimmed and re-set the text, which ate a typed space).
+    const QString typed = hint ? raw.left(m_input->selectionStart()) : raw;
+    const QString query = typed.trimmed();
+    if (query.isEmpty() || !m_history || !m_suggest) {
+        m_model->setStringList({});
+        m_completer->popup()->hide();
+        if (hint) dropInlineHint();
+        return;
     }
-    // setModel() clears the completion prefix. Restoring it keeps Qt from selecting the
-    // whole suggestion (the typed prefix must stay unselected, like other browsers).
-    m_completer->setModel(new QStringListModel(suggestions, m_completer));
-    m_completer->setCompletionPrefix(text);
-    if (!suggestions.isEmpty()) m_completer->complete();
-    if (!inlineMatch.isEmpty()) {
-        const QString filled = text + inlineMatch.mid(text.size());
-        m_input->setText(filled);
-        m_input->setSelection(text.size(), filled.size() - text.size());
-    } else if (m_input->text() != text) {
-        m_input->setText(text);
-        m_input->setCursorPosition(text.size());
+
+    // Scan more rows for the hint than the popup shows, so a prefix match is not crowded out
+    // by newer substring matches.
+    const auto results = m_history->search(query, 40);
+    QStringList suggestions; QSet<QString> seen;
+    QString bestHint;
+    // Hint only when the cursor is at the end and there is no stray whitespace.
+    const bool canHint = !m_noInline && typed == query && (hint || m_input->cursorPosition() == raw.size());
+    for (const auto& r : results) {
+        if (seen.contains(r.url) || r.url == m_currentUrl || isInternalNewTab(r.url)) continue;
+        seen.insert(r.url);
+        if (suggestions.size() < 10) suggestions << r.url;
+        if (!canHint) continue;
+        for (const QString& form : inlineForms(r.url)) {
+            if (form.size() > query.size() && form.startsWith(query, Qt::CaseInsensitive)) {
+                const QString rest = form.mid(query.size());
+                // Shortest completion wins (domain before deep link); ties keep the most recent.
+                if (bestHint.isEmpty() || rest.size() < bestHint.size()) bestHint = rest;
+                break;
+            }
+        }
+    }
+
+    // Same model object every time. QCompleter forgets its prefix on reset, so restore it
+    // (the typed prefix must stay unselected).
+    m_model->setStringList(suggestions);
+    m_completer->setCompletionPrefix(query);
+    if (suggestions.isEmpty()) m_completer->popup()->hide();
+    else m_completer->complete();
+
+    if (!bestHint.isEmpty()) {
+        const QString filled = typed + bestHint;   // user's own casing is kept
+        if (!(hint && raw == filled)) m_input->setText(filled);
+        m_input->setSelection(typed.size(), bestHint.size());
+    } else if (hint) {
+        dropInlineHint();   // the old hint no longer matches
     }
 }
 

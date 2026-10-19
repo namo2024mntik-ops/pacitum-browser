@@ -31,6 +31,10 @@
 #include "Widgets.h"
 #include <QFileDialog>
 #include <QTextDocument>
+#include <QDialog>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QHBoxLayout>
 #include <QStandardPaths>
 #include <QPointer>
 #include <QWindow>
@@ -1190,10 +1194,10 @@ void BrowserWindow::importBookmarks() {
     const QString html = QString::fromUtf8(file.readAll());
     // Chrome, Edge and Firefox export Netscape-style bookmark HTML with <A HREF="...">title</A>.
     static const QRegularExpression anchor(
-        QStringLiteral("<a\\\\b([^>]*)>(.*?)</a\\\\s*>"),
+        QStringLiteral("<a\\b([^>]*)>(.*?)</a\\s*>"),
         QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
     static const QRegularExpression href(
-        QStringLiteral("\\\\bhref\\\\s*=\\\\s*(['\\\"])(.*?)\\\\1"),
+        QStringLiteral("href\\s*=\\s*([\"'])(.*?)\\1"),
         QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
     QVector<QPair<QString, QString>> items;
     auto match = anchor.globalMatch(html);

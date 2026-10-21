@@ -40,11 +40,18 @@ SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
     m_s = read();
     auto* lay = new QHBoxLayout(this); lay->setContentsMargins(0,0,0,0); lay->setSpacing(0);
 
-    auto* navWrap = new QWidget(this); navWrap->setFixedWidth(260);
+    auto* navWrap = new QWidget(this); navWrap->setFixedWidth(280);
     navWrap->setObjectName(QStringLiteral("SettingsContent")); navWrap->setAttribute(Qt::WA_StyledBackground, true);
-    auto* nl = new QVBoxLayout(navWrap); nl->setContentsMargins(0,20,0,12); nl->setSpacing(8);
-    auto* h1 = new QLabel(QStringLiteral("Settings"), navWrap); h1->setObjectName(QStringLiteral("SettingsH1")); h1->setContentsMargins(24,0,0,8);
+    auto* nl = new QVBoxLayout(navWrap); nl->setContentsMargins(0,28,0,12); nl->setSpacing(8);
+    auto* h1 = new QLabel(QStringLiteral("Settings"), navWrap); h1->setObjectName(QStringLiteral("SettingsTitle")); h1->setContentsMargins(28,0,0,6);
     nl->addWidget(h1);
+    // 1.9: section search. Filters the list on the left; Enter opens the first match.
+    auto* search = new QLineEdit(navWrap); search->setObjectName(QStringLiteral("SettingsSearch"));
+    search->setPlaceholderText(QStringLiteral("Search settings")); search->setClearButtonEnabled(true);
+    search->setAccessibleName(QStringLiteral("Search settings"));
+    search->addAction(ThemeManager::icon(QStringLiteral("search"), ThemeManager::current().textSecondary, 16), QLineEdit::LeadingPosition);
+    auto* sw = new QWidget(navWrap); auto* swl = new QHBoxLayout(sw); swl->setContentsMargins(16, 0, 16, 6); swl->addWidget(search);
+    nl->addWidget(sw);
     m_nav = new QListWidget(navWrap); m_nav->setObjectName(QStringLiteral("SettingsNav"));
     m_nav->setIconSize(QSize(18,18)); m_nav->setFrameShape(QFrame::NoFrame);
     nl->addWidget(m_nav, 1);
@@ -69,8 +76,14 @@ SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
         it->setSizeHint(QSize(0, 38));
         m_stack->addWidget((this->*sct.fn)());
     }
-    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row){ m_stack->setCurrentIndex(row); animateSection(m_stack->currentWidget()); });
+    connect(m_nav, &QListWidget::currentRowChanged, this, [this](int row){ if (row >= 0) { m_stack->setCurrentIndex(row); animateSection(m_stack->currentWidget()); } });
     m_nav->setCurrentRow(0);
+    connect(search, &QLineEdit::textChanged, this, [this](const QString& q){
+        for (int i = 0; i < m_nav->count(); ++i) m_nav->item(i)->setHidden(!q.isEmpty() && !m_nav->item(i)->text().contains(q, Qt::CaseInsensitive));
+    });
+    connect(search, &QLineEdit::returnPressed, this, [this]{
+        for (int i = 0; i < m_nav->count(); ++i) if (!m_nav->item(i)->isHidden()) { m_nav->setCurrentRow(i); return; }
+    });
 }
 
 // Settings items: the section title and each card fade in with a 35 ms stagger (and rise 6 px via
@@ -131,8 +144,8 @@ QWidget* SettingsPage::card(QVBoxLayout* parentLayout, const QString& heading) {
 void SettingsPage::addRow(QWidget* c, const QString& title, const QString& sub, QWidget* control) {
     auto* l = static_cast<QVBoxLayout*>(c->layout());
     if (l->count() > 0) { auto* d = new QFrame(c); d->setObjectName(QStringLiteral("Divider")); l->addWidget(d); }
-    auto* row = new QWidget(c); row->setMinimumHeight(56);
-    auto* rl = new QHBoxLayout(row); rl->setContentsMargins(20,10,20,10); rl->setSpacing(16);
+    auto* row = new QWidget(c); row->setMinimumHeight(64);
+    auto* rl = new QHBoxLayout(row); rl->setContentsMargins(20,12,20,12); rl->setSpacing(16);
     auto* texts = new QVBoxLayout(); texts->setSpacing(2);
     auto* t = new QLabel(title, row); t->setWordWrap(true); texts->addWidget(t);
     if (!sub.isEmpty()) { auto* s = new QLabel(sub, row); s->setObjectName(QStringLiteral("RowSub")); s->setWordWrap(true); texts->addWidget(s); }
@@ -153,7 +166,7 @@ QWidget* SettingsPage::appearancePage() {
     auto* c = card(l, QString());
 
     auto* seg = new QFrame(); seg->setObjectName(QStringLiteral("Segmented"));
-    auto* sl = new QHBoxLayout(seg); sl->setContentsMargins(2,2,2,2); sl->setSpacing(2);
+    auto* sl = new QHBoxLayout(seg); sl->setContentsMargins(3,3,3,3); sl->setSpacing(0);
     auto* grp = new QButtonGroup(seg);
     const QString cur = m_s.value(QStringLiteral("theme")).toString(QStringLiteral("System"));
     for (const QString& t : {QStringLiteral("System"), QStringLiteral("Light"), QStringLiteral("Dark")}) {
@@ -163,6 +176,7 @@ QWidget* SettingsPage::appearancePage() {
             write(QStringLiteral("theme"), t); write(QStringLiteral("dark_mode"), t == QStringLiteral("Dark"));
             emit settingChanged(QStringLiteral("theme")); });
     }
+    new SegmentThumb(grp, seg);   // sliding pill behind the checked option
     addRow(c, QStringLiteral("Theme"), QStringLiteral("Follow the system color scheme or choose light/dark"), seg);
 
     auto* sw = new QWidget(); auto* swl = new QHBoxLayout(sw); swl->setContentsMargins(0,0,0,0); swl->setSpacing(8);

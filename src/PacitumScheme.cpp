@@ -49,6 +49,17 @@ void PacitumSchemeHandler::requestStarted(QWebEngineUrlRequestJob* job) {
         job->reply("text/plain", buf);
         return;
     }
+    if (host == QStringLiteral("fonts")) {
+        // Bundled Inter for the internal pages (pacitum://fonts/Inter-Regular.ttf). Fixed names only.
+        static const QStringList allowed{QStringLiteral("Inter-Regular.ttf"), QStringLiteral("Inter-Medium.ttf"),
+                                         QStringLiteral("Inter-SemiBold.ttf"), QStringLiteral("Inter-Bold.ttf")};
+        const QString name = job->requestUrl().path().mid(1);
+        QFile f(QStringLiteral(":/fonts/") + name);
+        if (!allowed.contains(name) || !f.open(QIODevice::ReadOnly)) { job->fail(QWebEngineUrlRequestJob::UrlNotFound); return; }
+        auto* buf = new QBuffer(job); buf->setData(f.readAll());
+        job->reply("font/ttf", buf);
+        return;
+    }
     if (host == QStringLiteral("newtab") || host.isEmpty()) {
         QFile f(QStringLiteral(":/pages/newtab.html"));
         if (!f.open(QIODevice::ReadOnly)) { job->fail(QWebEngineUrlRequestJob::UrlNotFound); return; }

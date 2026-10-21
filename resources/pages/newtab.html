@@ -1,6 +1,10 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>New Tab</title>
 <meta name="color-scheme" content="light dark">
 <style>
+@font-face{font-family:Inter;font-style:normal;font-weight:400;font-display:swap;src:local("Inter Regular"),url(pacitum://fonts/Inter-Regular.ttf) format("truetype")}
+@font-face{font-family:Inter;font-style:normal;font-weight:500;font-display:swap;src:local("Inter Medium"),url(pacitum://fonts/Inter-Medium.ttf) format("truetype")}
+@font-face{font-family:Inter;font-style:normal;font-weight:600;font-display:swap;src:local("Inter SemiBold"),url(pacitum://fonts/Inter-SemiBold.ttf) format("truetype")}
+@font-face{font-family:Inter;font-style:normal;font-weight:700;font-display:swap;src:local("Inter Bold"),url(pacitum://fonts/Inter-Bold.ttf) format("truetype")}
 /* Pacitum 1.6 home (home-profile-spec.md §1): Variant A "Calm" + customize sheet; B (wallpaper) and C (focus) as options. */
 :root{--chrome:%CHROME%;--card:%TOOL%;--page:%PAGE%;--surf:%SURF%;--surfh:%SURFH%;--bord:%BORD%;--bord2:%BORD2%;--txt:%TXT%;--sec:%SEC%;--ter:%TER%;
 --acc:%ACC%;--acch:%ACCH%;--accs:%ACCS%;--onacc:%ONACC%;--ring:%RING%;--warn:%WARN%;--dan:%DANGER%;--blob1:%PCOL%;--bo:%BLOBO%;
@@ -26,27 +30,27 @@ svg.i{width:16px;height:16px;flex:none}
 .greet{font-size:34px;font-weight:600;letter-spacing:-.6px;margin-top:10px;text-align:center}
 .date{color:var(--sec);font-size:14px;margin-top:6px;display:flex;gap:8px;align-items:center;min-height:19px}
 .date .wx{display:flex;gap:6px;align-items:center}
-.hs{width:720px;max-width:100%;height:56px;border-radius:28px;background:var(--card);box-shadow:var(--sh1),0 8px 24px rgba(0,0,0,.08);display:flex;align-items:center;gap:12px;padding:0 8px 0 8px;margin-top:28px;transition:box-shadow .16s var(--out)}
+.hs{width:680px;max-width:100%;height:54px;border-radius:16px;background:var(--card);box-shadow:var(--sh1),0 8px 24px rgba(0,0,0,.08);display:flex;align-items:center;gap:12px;padding:0 8px 0 8px;margin-top:28px;transition:box-shadow .16s var(--out)}
 .hs:focus-within{box-shadow:0 0 0 2px var(--acc),0 12px 32px rgba(0,0,0,.12)}
-.eng{height:40px;border-radius:20px;padding:0 8px 0 8px;display:flex;align-items:center;gap:6px;background:var(--surf);font-size:13px;font-weight:500;position:relative}
+.eng{height:38px;border-radius:11px;padding:0 8px 0 8px;display:flex;align-items:center;gap:6px;background:var(--surf);font-size:13px;font-weight:500;position:relative}
 .eng:hover{background:var(--surfh)}
 .ef{width:20px;height:20px;border-radius:10px;display:grid;place-items:center;color:#fff;font-size:11px;font-weight:700}
 .hs input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:16px;height:100%}
 .hs input::placeholder{color:var(--ter)}
-.mic{width:34px;height:34px;border-radius:17px;display:grid;place-items:center;color:var(--sec)}.mic:hover{background:var(--surf)}
-.menu{position:absolute;z-index:30;min-width:200px;padding:6px;border-radius:14px;background:var(--card);box-shadow:var(--shp);animation:pop .14s var(--out)}
-.menu button{display:flex;width:100%;height:34px;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-align:left}
+.mic{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:var(--sec)}.mic:hover{background:var(--surf)}
+.menu{position:absolute;z-index:30;min-width:200px;padding:6px;border-radius:16px;background:var(--card);box-shadow:var(--shp);animation:pop .14s var(--out)}
+.menu button{display:flex;width:100%;height:34px;align-items:center;gap:10px;padding:0 10px;border-radius:10px;text-align:left}
 .menu button:hover,.menu button:focus-visible{background:var(--surf);outline:0}.menu .a{color:var(--acc);font-weight:600}
 @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
 /* dock */
 .dock{display:flex;gap:4px;padding:10px;border-radius:22px;background:color-mix(in srgb,var(--card) 70%,transparent);box-shadow:inset 0 0 0 1px var(--bord);margin-top:28px;backdrop-filter:blur(20px);max-width:100%;flex-wrap:wrap;justify-content:center}
-.sc{width:92px;height:92px;border-radius:16px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;font-size:12px;position:relative;color:var(--txt);text-decoration:none;transition:background-color .12s var(--out),box-shadow .16s var(--out);touch-action:none}
+.sc{width:96px;height:96px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;font-size:12px;position:relative;color:var(--txt);text-decoration:none;transition:background-color .12s var(--out),box-shadow .16s var(--out);touch-action:none}
 .sc:hover,.sc:focus-visible{background:var(--surf);outline:0}
 .sc .fav{transition:transform .12s var(--out)}.sc:hover .fav{transform:translateY(-2px)}.sc:active .fav{transform:scale(.96);transition-duration:.08s}
 .wc{transition:box-shadow .16s var(--out),transform .16s var(--out)}.wc:hover{transform:translateY(-1px)}
 html.rm .sc .fav,html.rm .wc{transition:none!important;transform:none!important}
 .sc .l{max-width:84px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fav{width:44px;height:44px;border-radius:22px;display:grid;place-items:center;color:#fff;font-size:18px;font-weight:600;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);flex:none}
+.fav{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;color:#fff;font-size:18px;font-weight:600;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);flex:none}
 .fav.add{background:var(--surf);color:var(--sec);box-shadow:inset 0 0 0 1.5px var(--bord2)}
 .ed{position:absolute;top:5px;right:5px;width:22px;height:22px;border-radius:11px;display:grid;place-items:center;color:var(--sec);background:var(--card);box-shadow:var(--sh1);opacity:0;transform:scale(.8);transition:opacity .12s var(--out),transform .12s var(--back)}
 .ed svg{width:12px;height:12px}

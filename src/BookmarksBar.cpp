@@ -11,7 +11,7 @@
 #include <QAction>
 
 BookmarksBar::BookmarksBar(BookmarkManager* mgr, QWidget* parent) : QWidget(parent), m_mgr(mgr) {
-    setFixedHeight(33);
+    setFixedHeight(35);   // 34 + 1 px bottom inset
     setAttribute(Qt::WA_StyledBackground, true);
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(10,0,10,1); layout->setSpacing(2);

@@ -68,6 +68,7 @@ protected:
 private slots:
     void newTab(const QString& url = {});
     void newPrivateTab();
+    void openLink(const QUrl& url, int target);   // page context menu targets (BrowserTab::LinkTarget)
     void closeTab(int index);
     void closeSplitTab(int index);
     void onTabChanged(int index);

@@ -11,22 +11,23 @@
 
 static PacitumPalette darkPalette() {
     PacitumPalette p;
-    p.frame = "#16181D"; p.tab = "#262A31"; p.tabHover = "#1F2228"; p.toolbar = "#1B1E24"; p.page = "#121418";
+    // 1.9 refresh: the active tab shares the toolbar colour so tab + toolbar read as one surface.
+    p.frame = "#111318"; p.tab = "#1A1D23"; p.tabHover = "#1C1F25"; p.toolbar = "#1A1D23"; p.page = "#121418";
     p.surface = "#24282F"; p.surfaceHover = "#2D323A"; p.border = "#2A2F37"; p.text = "#E8EAEE";
     p.textSecondary = "#A0A6B1"; p.disabled = "#4F555F"; p.accent = "#2DD4BF"; p.onAccent = "#04201D";
     p.accentSoft = "rgba(45,212,191,0.14)"; p.secure = "#34D399"; p.danger = "#F87171";
-    p.omnibox = "#22262D"; p.omniboxHover = "#2A2F37"; p.pressed = "#353B44"; p.borderStrong = "#363C46";
-    p.textTertiary = "#6E7581"; p.accentHover = "#5EEAD4"; p.accentPressed = "#14B8A6";
+    p.omnibox = "#23272E"; p.omniboxHover = "#292D35"; p.pressed = "#353B44"; p.borderStrong = "#363C46";
+    p.textTertiary = "#7C838F"; p.accentHover = "#5EEAD4"; p.accentPressed = "#14B8A6";
     p.focusRing = "rgba(45,212,191,0.55)"; p.warning = "#FBBF24";
     return p;
 }
 static PacitumPalette lightPalette() {
     PacitumPalette p;
-    p.frame = "#EDF0F4"; p.tab = "#FFFFFF"; p.tabHover = "#E2E6EC"; p.toolbar = "#FFFFFF"; p.page = "#F7F8FA";
+    p.frame = "#E9ECF1"; p.tab = "#FFFFFF"; p.tabHover = "#DDE1E7"; p.toolbar = "#FFFFFF"; p.page = "#F7F8FA";
     p.surface = "#E9ECF1"; p.surfaceHover = "#DFE3E9"; p.border = "#DDE1E7"; p.text = "#16191E";
     p.textSecondary = "#5B626D"; p.disabled = "#B3B9C2"; p.accent = "#0D9488"; p.onAccent = "#FFFFFF";
     p.accentSoft = "rgba(13,148,136,0.10)"; p.secure = "#059669"; p.danger = "#DC2626";
-    p.omnibox = "#FFFFFF"; p.omniboxHover = "#FFFFFF"; p.pressed = "#D3D8E0"; p.borderStrong = "#CDD2DA";
+    p.omnibox = "#F0F2F5"; p.omniboxHover = "#E9ECF1"; p.pressed = "#D3D8E0"; p.borderStrong = "#CDD2DA";
     p.textTertiary = "#8A919C"; p.accentHover = "#0F766E"; p.accentPressed = "#115E59";
     p.focusRing = "rgba(13,148,136,0.45)"; p.warning = "#D97706";
     return p;
@@ -115,25 +116,25 @@ QWidget { color: @text; font-family: "Inter", "Segoe UI", "Cantarell", sans-seri
 QMainWindow, QDialog { background: @page; }
 #TabStrip { background: @frame; }
 #TabStrip QToolButton { background: transparent; border: none; }
-#NavToolbar { background: @frame; border: none; }
+#NavToolbar { background: @toolbar; border: none; }
 #NavToolbar QToolButton { background: transparent; border: none; padding: 0; }
 #NavToolbar QToolButton::menu-indicator { image: none; width: 0; }
 #ChromeDivider { background: @border; border: none; min-height: 1px; max-height: 1px; }
 #Avatar { border-radius: 13px; color: #FFFFFF; font-weight: 600; font-size: 11px;
           background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2DD4BF, stop:1 #3B82F6); }
-BookmarksBar { background: @frame; border: none; }
-BookmarksBar QScrollArea, BookmarksBar QScrollArea > QWidget > QWidget { background: @frame; border: none; }
-BookmarksBar QPushButton { background: transparent; border: none; border-radius: 13px; padding: 0 9px;
+BookmarksBar { background: @toolbar; border: none; }
+BookmarksBar QScrollArea, BookmarksBar QScrollArea > QWidget > QWidget { background: @toolbar; border: none; }
+BookmarksBar QPushButton { background: transparent; border: none; border-radius: 8px; padding: 0 10px;
           height: 26px; min-height: 26px; max-width: 160px; font-size: 12px; color: @text; text-align: left; }
 BookmarksBar QPushButton:hover { background: @surface; }
 BookmarksBar QPushButton:pressed { background: @pressed; }
-QMenu { background: @toolbar; border: 1px solid @border; border-radius: 14px; padding: 6px; }
-QMenu::item { height: 34px; padding: 0 10px 0 6px; border-radius: 8px; background: transparent; color: @text; }
+QMenu { background: @toolbar; border: 1px solid @borderStrong; border-radius: 16px; padding: 6px; }
+QMenu::item { height: 34px; padding: 0 12px 0 6px; border-radius: 10px; background: transparent; color: @text; }
 QMenu::item:selected { background: @surface; }
 QMenu::item:pressed { background: @pressed; }
 QMenu::item:disabled { color: @disabled; }
 QMenu::icon { padding-left: 10px; }
-QMenu::separator { height: 1px; background: @border; margin: 6px 4px; }
+QMenu::separator { height: 1px; background: @border; margin: 5px 8px; }
 QMenu QToolButton { background: transparent; border: none; border-radius: 15px; }
 QMenu QToolButton:hover { background: @surfaceHover; }
 QMenu QToolButton:pressed { background: @pressed; }
@@ -160,7 +161,7 @@ QPushButton:disabled { color: @disabled; border-color: @border; }
 QPushButton:default, QPushButton#PrimaryButton { background: @accent; color: @onAccent; border: none; font-weight: 600; }
 QPushButton:default:hover, QPushButton#PrimaryButton:hover { background: @accentHover; }
 QPushButton:default:pressed, QPushButton#PrimaryButton:pressed { background: @accentPressed; }
-QLineEdit, QComboBox, QSpinBox { background: @surface; border: 1px solid transparent; border-radius: 8px; min-height: 30px; padding: 0 10px; color: @text; selection-background-color: @accent; selection-color: @onAccent; }
+QLineEdit, QComboBox, QSpinBox { background: @surface; border: 1px solid transparent; border-radius: 10px; min-height: 30px; padding: 0 10px; color: @text; selection-background-color: @accent; selection-color: @onAccent; }
 QLineEdit:hover, QComboBox:hover, QSpinBox:hover { border: 1px solid @border; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 2px solid @accent; background: @toolbar; }
 QComboBox::drop-down { border: none; width: 24px; }
@@ -168,7 +169,7 @@ QComboBox QAbstractItemView { background: @toolbar; border: 1px solid @border; s
 QCheckBox { spacing: 10px; background: transparent; }
 QCheckBox::indicator { width: 36px; height: 20px; border-radius: 10px; background: @disabled; }
 QCheckBox::indicator:checked { background: @accent; }
-QGroupBox { background: @toolbar; border: 1px solid @border; border-radius: 12px; margin-top: 28px; padding: 14px 20px 10px 20px; font-weight: 400; }
+QGroupBox { background: @toolbar; border: 1px solid @border; border-radius: 14px; margin-top: 28px; padding: 14px 20px 10px 20px; font-weight: 400; }
 QGroupBox::title { subcontrol-origin: margin; left: 2px; top: 4px; padding: 0; font-size: 15px; font-weight: 600; color: @text; }
 QGroupBox QLabel, QGroupBox QCheckBox, QGroupBox QRadioButton { background: transparent; }
 QTabWidget#SettingsTabs::pane { border: none; background: @page; }
@@ -177,18 +178,23 @@ QTabWidget#SettingsTabs QTabBar::tab:selected { background: @accentSoft; color: 
 QTabWidget#SettingsTabs QTabBar::tab:hover:!selected { background: @surface; }
 #SettingsPage, #SettingsContent, #SettingsScroll, #SettingsScroll > QWidget > QWidget { background: @page; }
 #SettingsNav { background: @page; border: none; border-right: 1px solid @border; outline: 0; padding: 0 12px; }
-#SettingsNav::item { height: 36px; border-radius: 8px; padding: 0 12px; color: @text; margin: 1px 0; }
+#SettingsNav::item { height: 36px; border-radius: 10px; padding: 0 12px; color: @text; margin: 1px 0; }
 #SettingsNav::item:hover { background: @surface; }
 #SettingsNav::item:selected { background: @accentSoft; color: @accent; font-weight: 600; }
 #SettingsH1 { font-size: 20px; font-weight: 600; background: transparent; }
+#SettingsTitle { font-size: 22px; font-weight: 600; background: transparent; }
+QLineEdit#SettingsSearch { background: @toolbar; border: 1px solid @border; border-radius: 10px; min-height: 34px; padding: 0 10px; }
+QLineEdit#SettingsSearch:focus { border: 2px solid @accent; padding: 0 9px; }
 #SettingsH2 { font-size: 15px; font-weight: 600; background: transparent; margin-top: 6px; }
-#Card { background: @toolbar; border: 1px solid @border; border-radius: 12px; }
+#Card { background: @toolbar; border: 1px solid @border; border-radius: 14px; }
 #Card QLabel { background: transparent; }
 #Divider { background: @border; border: none; min-height: 1px; max-height: 1px; }
 #RowSub { color: @textSecondary; font-size: 12px; }
-#Segmented { background: @surface; border-radius: 8px; }
-#Segmented QPushButton { background: transparent; border: none; border-radius: 6px; min-height: 28px; padding: 0 14px; }
-#Segmented QPushButton:checked { background: @toolbar; font-weight: 600; }
+#Segmented { background: @surface; border-radius: 10px; }
+#Segmented QPushButton { background: transparent; border: none; border-radius: 8px; min-height: 30px; padding: 0 14px; }
+#Segmented QPushButton:hover { background: transparent; }
+#Segmented QPushButton:checked { background: transparent; font-weight: 600; }
+#SegThumb { background: @segThumb; border-radius: 8px; }
 QStatusBar { background: @toolbar; color: @textSecondary; border-top: 1px solid @border; font-size: 12px; }
 QStatusBar QLabel { background: transparent; color: @textSecondary; }
 QToolTip { background: @toolbar; color: @text; border: 1px solid @border; border-radius: 6px; padding: 4px 8px; }
@@ -206,7 +212,8 @@ QHeaderView::section { background: @toolbar; color: @textSecondary; border: none
         {"@accentHover", p.accentHover}, {"@accentPressed", p.accentPressed}, {"@pressed", p.pressed}, {"@textSecondary", p.textSecondary}, {"@accentSoft", p.accentSoft},
         {"@onAccent", p.onAccent}, {"@tabHover", p.tabHover}, {"@frame", p.frame}, {"@toolbar", p.toolbar},
         {"@page", p.page}, {"@surface", p.surface}, {"@border", p.border}, {"@text", p.text},
-        {"@disabled", p.disabled}, {"@accent", p.accent}, {"@tab", p.tab}};
+        {"@disabled", p.disabled}, {"@accent", p.accent}, {"@tab", p.tab},
+        {"@segThumb", m_darkMode ? p.pressed : p.toolbar}};
     for (auto& r : repl) s.replace(r.first, r.second);
     return s;
 }
@@ -252,9 +259,9 @@ QTabBar::close-button:hover { background: %8; }
 QString ThemeManager::addressBarStyle() const {
     const auto& p = m_pal;
     QString s = QStringLiteral(R"(
-#Omnibox { background: @omnibox; border: 1px solid @border; border-radius: 19px; }
-#Omnibox:hover { background: @omniboxHover; border: 1px solid @borderStrong; }
-#Omnibox[focused="true"] { background: @omnibox; border: 2px solid @accent; }
+#Omnibox { background: @omnibox; border: 1px solid transparent; border-radius: 12px; }
+#Omnibox:hover { background: @omniboxHover; border: 1px solid transparent; }
+#Omnibox[focused="true"] { background: @toolbar; border: 2px solid @accent; }
 #Omnibox QLineEdit { background: transparent; border: none; padding: 0; min-height: 0; font-size: 14px; color: @text;
                      selection-background-color: @accent; selection-color: @onAccent; }
 #Omnibox QLineEdit[urlview="true"] { color: transparent; }
@@ -263,13 +270,13 @@ QString ThemeManager::addressBarStyle() const {
 #Omnibox QToolButton { background: transparent; border: none; border-radius: 15px; }
 #Omnibox QToolButton:hover { background: @surface; }
 #Omnibox QToolButton:pressed { background: @pressed; }
-#OmniChip { border-radius: 14px; padding: 0 6px; font-size: 12px; }
+#OmniChip { border-radius: 9px; padding: 0 6px; font-size: 12px; }
 #OmniChip[kind="danger"] { color: @danger; padding: 0 10px 0 8px; }
 #OmniChip[kind="internal"] { color: @accent; padding: 0 10px 0 8px; }
 #OmniChip:hover { background: @surface; }
 )");
     const QList<QPair<QString, QString>> repl = {
-        {"@omniboxHover", p.omniboxHover}, {"@omnibox", p.omnibox}, {"@borderStrong", p.borderStrong}, {"@border", p.border},
+        {"@omniboxHover", p.omniboxHover}, {"@omnibox", p.omnibox}, {"@toolbar", p.toolbar}, {"@borderStrong", p.borderStrong}, {"@border", p.border},
         {"@accent", p.accent}, {"@onAccent", p.onAccent}, {"@text", p.text}, {"@surface", p.surface},
         {"@pressed", p.pressed}, {"@danger", p.danger}};
     for (auto& r : repl) s.replace(r.first, r.second);

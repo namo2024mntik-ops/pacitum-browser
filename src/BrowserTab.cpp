@@ -1,5 +1,10 @@
 #include "BrowserTab.h"
 #include <QResizeEvent>
+#include <QContextMenuEvent>
+#include <QWebEngineContextMenuRequest>
+#include <QFontMetrics>
+#include <QAction>
+#include "Widgets.h"
 #include "FindBar.h"
 #include "PacitumScheme.h"
 #include "WebProfile.h"
@@ -14,7 +19,12 @@ namespace {
 class PacitumWebView : public QWebEngineView {
 public:
     using QWebEngineView::QWebEngineView;
+    std::function<void(const QPoint&)> menuHandler;   // Pacitum page context menu (replaces Qt's default)
 protected:
+    void contextMenuEvent(QContextMenuEvent* e) override {
+        if (menuHandler && lastContextMenuRequest()) { menuHandler(e->globalPos()); e->accept(); return; }
+        QWebEngineView::contextMenuEvent(e);
+    }
     QWebEngineView* createWindow(QWebEnginePage::WebWindowType) override {
         if (!BrowserTab::s_popupFactory) return nullptr;
         BrowserTab* t = BrowserTab::s_popupFactory();
@@ -101,6 +111,7 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     layout->addWidget(m_progress);
 
     m_view = new PacitumWebView(this);
+    static_cast<PacitumWebView*>(m_view)->menuHandler = [this](const QPoint& p){ showContextMenu(p); };
     if (m_private) {
         m_profile = new QWebEngineProfile(this);   // off-the-record
         m_profile->setPersistentCookiesPolicy(QWebEngineProfile::NoPersistentCookies);
@@ -162,19 +173,98 @@ void BrowserTab::loadUrl(const QString& raw) {
         && !url.startsWith(QStringLiteral("data:"))) {
         if (url.contains('.') && !url.contains(' ')) url = QStringLiteral("https://") + url;
         else {
-            QMap<QString,QString> engines{
-                {QStringLiteral("Google"), QStringLiteral("https://www.google.com/search?q=")},
-                {QStringLiteral("Bing"), QStringLiteral("https://www.bing.com/search?q=")},
-                {QStringLiteral("DuckDuckGo"), QStringLiteral("https://duckduckgo.com/?q=")},
-                {QStringLiteral("Yahoo"), QStringLiteral("https://search.yahoo.com/search?p=")},
-                {QStringLiteral("Brave"), QStringLiteral("https://search.brave.com/search?q=")}
-            };
-            QString base = engines.value(m_searchEngine, QStringLiteral("https://www.google.com/search?q="));
-            url = base + QString(QUrl::toPercentEncoding(url));
+            url = searchUrl(url);
         }
     }
     ensureActive();
     m_view->setUrl(QUrl(url));
+}
+
+QString BrowserTab::searchUrl(const QString& terms) const {
+    static const QMap<QString, QString> engines{
+        {QStringLiteral("Google"), QStringLiteral("https://www.google.com/search?q=")},
+        {QStringLiteral("Bing"), QStringLiteral("https://www.bing.com/search?q=")},
+        {QStringLiteral("DuckDuckGo"), QStringLiteral("https://duckduckgo.com/?q=")},
+        {QStringLiteral("Yahoo"), QStringLiteral("https://search.yahoo.com/search?p=")},
+        {QStringLiteral("Brave"), QStringLiteral("https://search.brave.com/search?q=")}
+    };
+    const QString base = engines.value(m_searchEngine, QStringLiteral("https://www.google.com/search?q="));
+    return base + QString::fromLatin1(QUrl::toPercentEncoding(terms));
+}
+
+// 1.9 page context menu (link / image / selection / editable field / page), Pacitum popup style.
+// Copy, save and edit items reuse QWebEnginePage's own actions so Chromium does the work.
+void BrowserTab::showContextMenu(const QPoint& globalPos) {
+    QWebEngineContextMenuRequest* req = m_view->lastContextMenuRequest();
+    if (!req) return;
+    Pacitum::PopupMenu menu(this);
+    const QFontMetrics fm(menu.font());
+    auto label = [](const QString& text, const QString& keys) { return keys.isEmpty() ? text : text + QLatin1Char('\t') + keys; };
+    auto page = [&](QWebEnginePage::WebAction wa, const QString& text, const QString& keys = QString()) {
+        QAction* pa = m_view->pageAction(wa);
+        QAction* a = menu.addAction(label(text, keys));
+        a->setEnabled(pa && pa->isEnabled());
+        if (pa) connect(a, &QAction::triggered, pa, &QAction::trigger);
+        return a;
+    };
+    auto open = [&](const QString& text, const QUrl& url, int target) {
+        QAction* a = menu.addAction(text);
+        connect(a, &QAction::triggered, this, [this, url, target]{ emit openLinkRequested(url, target); });
+        return a;
+    };
+    auto sep = [&menu]{ if (!menu.isEmpty() && !menu.actions().constLast()->isSeparator()) menu.addSeparator(); };
+
+    const QUrl link = req->linkUrl();
+    const QString sel = req->selectedText().simplified();
+    const bool editable = req->isContentEditable();
+    const bool image = req->mediaType() == QWebEngineContextMenuRequest::MediaTypeImage && req->mediaUrl().isValid();
+
+    if (link.isValid() && !link.isEmpty()) {
+        QAction* head = menu.addAction(fm.elidedText(link.toDisplayString(), Qt::ElideMiddle, 260).replace(QLatin1Char('&'), QStringLiteral("&&")));
+        head->setEnabled(false);
+        open(QStringLiteral("Open link in new tab"), link, NewTab);
+        open(QStringLiteral("Open link in new window"), link, NewWindow);
+        open(QStringLiteral("Open link in private tab"), link, PrivateTab);
+        open(QStringLiteral("Open link in split view"), link, SplitView);
+        sep();
+        page(QWebEnginePage::CopyLinkToClipboard, QStringLiteral("Copy link address"));
+        page(QWebEnginePage::DownloadLinkToDisk, QStringLiteral("Save link as…"));
+    }
+    if (image) {
+        sep();
+        open(QStringLiteral("Open image in new tab"), req->mediaUrl(), NewTab);
+        page(QWebEnginePage::DownloadImageToDisk, QStringLiteral("Save image as…"));
+        page(QWebEnginePage::CopyImageToClipboard, QStringLiteral("Copy image"));
+        page(QWebEnginePage::CopyImageUrlToClipboard, QStringLiteral("Copy image address"));
+    }
+    if (editable) {
+        sep();
+        page(QWebEnginePage::Undo, QStringLiteral("Undo"), QStringLiteral("Ctrl+Z"));
+        page(QWebEnginePage::Redo, QStringLiteral("Redo"), QStringLiteral("Ctrl+Y"));
+        menu.addSeparator();
+        page(QWebEnginePage::Cut, QStringLiteral("Cut"), QStringLiteral("Ctrl+X"));
+        page(QWebEnginePage::Copy, QStringLiteral("Copy"), QStringLiteral("Ctrl+C"));
+        page(QWebEnginePage::Paste, QStringLiteral("Paste"), QStringLiteral("Ctrl+V"));
+        page(QWebEnginePage::PasteAndMatchStyle, QStringLiteral("Paste as plain text"), QStringLiteral("Ctrl+Shift+V"));
+        page(QWebEnginePage::SelectAll, QStringLiteral("Select all"), QStringLiteral("Ctrl+A"));
+    } else if (!sel.isEmpty()) {
+        sep();
+        page(QWebEnginePage::Copy, QStringLiteral("Copy"), QStringLiteral("Ctrl+C"));
+        const QString quoted = fm.elidedText(sel, Qt::ElideRight, 160).replace(QLatin1Char('&'), QStringLiteral("&&"));   // no mnemonics
+        open(QStringLiteral("Search %1 for \u201C%2\u201D").arg(m_searchEngine, quoted), QUrl(searchUrl(sel)), NewTab);
+    }
+    if (menu.isEmpty()) {   // plain page
+        page(QWebEnginePage::Back, QStringLiteral("Back"), QStringLiteral("Alt+Left"));
+        page(QWebEnginePage::Forward, QStringLiteral("Forward"), QStringLiteral("Alt+Right"));
+        page(QWebEnginePage::Reload, QStringLiteral("Reload"), QStringLiteral("Ctrl+R"));
+        menu.addSeparator();
+        page(QWebEnginePage::SavePage, QStringLiteral("Save page as…"), QStringLiteral("Ctrl+S"));
+        page(QWebEnginePage::SelectAll, QStringLiteral("Select all"), QStringLiteral("Ctrl+A"));
+        const QUrl here = m_view->url();
+        if (here.scheme() == QLatin1String("http") || here.scheme() == QLatin1String("https"))
+            open(QStringLiteral("View page source\tCtrl+U"), QUrl(QStringLiteral("view-source:") + here.toString()), NewTab);
+    }
+    menu.exec(globalPos);
 }
 
 bool BrowserTab::s_freezeEnabled = true;

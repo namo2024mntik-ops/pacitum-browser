@@ -2,6 +2,8 @@
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.
+UI refresh (unreleased): active tab merges into the toolbar and slides between tabs, rounded-rectangle omnibox, redesigned tab and page right-click menus (links, images, selected text, fields), Settings search with a sliding theme switcher, and the Inter font bundled with the app (`resources/fonts`, SIL Open Font License).
+
 Version 1.7.8: omnibox inline hints select only the untyped suffix.
 
 Version 1.7.7: reader mode (Ctrl+Shift+R) and Translate page (Google Translate, language submenu in the ⋮ menu).

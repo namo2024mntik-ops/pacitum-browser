@@ -72,8 +72,14 @@ protected:
     void tabInserted(int index) override;
     void tabRemoved(int index) override;
     void tabLayoutChange() override;
+    void paintEvent(QPaintEvent* e) override;
 
 private:
+    void startSelectionSlide();
+    QVariantAnimation* m_slideAnim = nullptr;
+    QRectF m_slideFrom;
+    qreal m_slideT = 1.0;                     // 1 = no slide running
+    mutable QRectF m_lastSelBody;             // where the active-tab shape was last drawn
     struct TabFlags { bool loading = false, waiting = false, audible = false, muted = false, crashed = false; int usage = 0; qint64 usageSince = 0; };
     class QTimer* m_usagePulse = nullptr;
     quint64 ensureId(int index);
@@ -141,6 +147,7 @@ signals:
     void newTabRequested();
     void tabSplitRequested(int index);
     void tabDuplicateRequested(int index);
+    void tabReloadRequested(int index);
     void tabMuteRequested(int index, bool muted);
     void tabPinRequested(int index, bool pinned);
     void tabReopenRequested();

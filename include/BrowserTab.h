@@ -44,6 +44,8 @@ public:
     void applyWebSettings();
     void setSearchEngine(const QString& e) { m_searchEngine = e; }
     QWebEngineView* view() const { return m_view; }
+    enum LinkTarget { NewTab = 0, NewWindow = 1, PrivateTab = 2, SplitView = 3 };
+    QString searchUrl(const QString& terms) const;   // search-engine results URL for plain text
     void fadeIn();
     void navTransition(int dir);   // -1 back, +1 forward
     void ensureActive();                 // thaw a frozen page before touching it
@@ -71,6 +73,8 @@ signals:
     void loadDone(bool ok);
     void crashed();
     void fullScreenRequested(QWebEngineFullScreenRequest request);
+    // Page context menu (1.9): open a URL somewhere else. Handled by BrowserWindow.
+    void openLinkRequested(const QUrl& url, int target);
 
 private:
     int m_loadValue = 0;
@@ -84,6 +88,7 @@ private slots:
 
 private:
     void buildSignInBar();
+    void showContextMenu(const QPoint& globalPos);
     void showSignInBar(const QUrl& target);
     void checkGoogleSignIn(const QUrl& url);
     class InfoBar* m_signInBar = nullptr;

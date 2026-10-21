@@ -66,12 +66,12 @@ private:
     bool m_max = false;
 };
 
-// 36×20 switch with sliding knob (design-spec §4 Settings controls).
+// 40×22 switch with sliding knob (1.9 refresh; design-spec §4 Settings controls).
 class ToggleSwitch : public QAbstractButton {
     Q_OBJECT
 public:
     explicit ToggleSwitch(QWidget* parent = nullptr);
-    QSize sizeHint() const override { return {36, 20}; }
+    QSize sizeHint() const override { return {40, 22}; }
 protected:
     void paintEvent(QPaintEvent* e) override;
     void checkStateSet() override;
@@ -79,6 +79,21 @@ protected:
 private:
     QVariantAnimation m_anim;
     qreal m_pos = 0.0;
+};
+
+class QButtonGroup;
+// Sliding selection pill behind a row of checkable buttons (Settings › Theme). Sits under the
+// buttons of its parent and glides to the checked one (220 ms OutCubic, instant with reduced motion).
+class SegmentThumb : public QWidget {
+    Q_OBJECT
+public:
+    SegmentThumb(QButtonGroup* group, QWidget* parent);
+protected:
+    bool eventFilter(QObject* o, QEvent* e) override;
+private:
+    void place(bool animate);
+    QButtonGroup* m_group;
+    class QPropertyAnimation* m_anim;
 };
 
 // 22 px accent swatch circle with selected outline.

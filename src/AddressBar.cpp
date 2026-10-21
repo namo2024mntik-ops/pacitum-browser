@@ -38,6 +38,8 @@ static QStringList inlineForms(const QString& url) {
     return f;
 }
 
+static constexpr qreal kRadius = 12.0;   // omnibox corner radius (1.9 refresh: rounded rectangle, not a pill)
+
 static bool isInternalNewTab(const QString& url) {
     return url.isEmpty() || url.startsWith(QStringLiteral("pacitum://newtab")) || url == QStringLiteral("about:blank");
 }
@@ -45,7 +47,7 @@ static bool isInternalNewTab(const QString& url) {
 AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_history(hm) {
     setObjectName(QStringLiteral("Omnibox"));
     setAttribute(Qt::WA_StyledBackground, true);
-    setFixedHeight(38);
+    setFixedHeight(36);
     setMinimumWidth(240);   // spec §4.4: omnibox shrinks to min 240
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(5,0,4,0);
@@ -112,9 +114,10 @@ void AddressBar::applyTheme(ThemeManager* tm) {
     setStyleSheet(tm->addressBarStyle());
     const auto& p = tm->palette();
     m_completer->popup()->setStyleSheet(QStringLiteral(
-        "QAbstractItemView{background:%1;color:%2;border:1px solid %3;border-radius:12px;padding:6px;outline:0;}"
-        "QAbstractItemView::item{min-height:36px;padding:0 10px;border-radius:6px;}"
-        "QAbstractItemView::item:selected{background:%4;color:%2;}").arg(p.toolbar, p.text, p.border, p.surface));
+        "QAbstractItemView{background:%1;color:%2;border:1px solid %3;border-radius:14px;padding:6px;outline:0;}"
+        "QAbstractItemView::item{min-height:40px;padding:0 12px;border-radius:10px;}"
+        "QAbstractItemView::item:hover{background:%4;color:%2;}"
+        "QAbstractItemView::item:selected{background:%5;color:%2;}").arg(p.toolbar, p.text, p.borderStrong, p.surface, p.accentSoft));
     updateSecurityIcon(m_currentUrl);
     updateStar();
     if (!m_input->hasFocus()) showBlurred();
@@ -395,12 +398,12 @@ void AddressBar::paintEvent(QPaintEvent* e) {
             g.setPen(QPen(c, 1.0)); g.setBrush(Qt::NoBrush);
             const qreal in = 2.5 + i;
             const QRectF r = QRectF(rect()).adjusted(in, in, -in, -in);
-            g.drawRoundedRect(r, r.height() / 2.0, r.height() / 2.0);
+            g.drawRoundedRect(r, qMax<qreal>(0, kRadius - in), qMax<qreal>(0, kRadius - in));
         }
     }
     if (m_progOpacity <= 0.0 || m_prog <= 0.0) return;
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-    QPainterPath clip; clip.addRoundedRect(QRectF(rect()), height() / 2.0, height() / 2.0);
+    QPainterPath clip; clip.addRoundedRect(QRectF(rect()), kRadius, kRadius);
     p.setClipPath(clip);
     QColor c(m_progError ? ThemeManager::current().danger : ThemeManager::current().accent);
     c.setAlphaF(c.alphaF() * m_progOpacity);

@@ -255,6 +255,7 @@ void BrowserWindow::setupUI() {
     connect(m_tabs, &PacitumTabWidget::tabReopenRequested, this, &BrowserWindow::reopenClosedTab);
     connect(m_tabs, &PacitumTabWidget::tabMuteRequested, this, &BrowserWindow::muteTab);
     connect(m_tabs, &PacitumTabWidget::tabPinRequested, this, &BrowserWindow::pinTab);
+    connect(m_tabs, &PacitumTabWidget::tabReloadRequested, this, [this](int i){ if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i))) t->reload(); });
     connect(m_tabs, &QTabWidget::currentChanged, this, [this]{ m_tabs->stripBar() ? m_tabs->stripBar()->update() : void(); });
     m_splitter->addWidget(m_tabs);
     m_activeWidget = m_tabs;
@@ -297,7 +298,7 @@ void BrowserWindow::setupUI() {
 
 QToolButton* BrowserWindow::makeToolBtn(const QString& tip) {
     auto* b = new AnimatedToolButton(m_toolbar);
-    b->setFixedSize(34,34); b->setIconSize(QSize(18,18)); b->setRadius(17);   // spec §3: 34 px circles
+    b->setFixedSize(36,36); b->setIconSize(QSize(18,18)); b->setRadius(18);   // 1.9: 36 px circles
     b->setToolTip(tip); b->setFocusPolicy(Qt::TabFocus);
     return b;
 }
@@ -335,7 +336,7 @@ void BrowserWindow::createToolbar() {
     connect(m_downloads, &DownloadManager::downloadStarted, this, [this]{ if (isActiveWindow()) QTimer::singleShot(0, this, [this]{ flyToDownloads(); }); });
     // spec issue #6: puzzle "extensions" glyph instead of the unclear window icon
     m_splitBtn = makeToolBtn(QStringLiteral("Extensions")); connect(m_splitBtn, &QToolButton::clicked, this, &BrowserWindow::showExtensionsMenu);
-    m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(34,34); m_privateBadge->setAlignment(Qt::AlignCenter);
+    m_privateBadge = new QLabel(m_toolbar); m_privateBadge->setFixedSize(36,36); m_privateBadge->setAlignment(Qt::AlignCenter);
     m_privateBadge->setToolTip(QStringLiteral("Private browsing")); m_privateBadge->hide();
     m_profileBtn = makeToolBtn(QStringLiteral("Profile"));
     // 1.6 profiles: avatar of this window's profile with a ring in the profile colour (spec §2.2)
@@ -470,11 +471,11 @@ void BrowserWindow::showExtensionsMenu() {
 void BrowserWindow::updateToolbarOverflow() {
     if (!m_toolbar) return;
     const int w = m_toolbar->width();
-    const int fixed = 16 + 34 * 3 + (m_homeBtn->isVisibleTo(m_toolbar) ? 36 : 0) + 6 * 2 + 34 /* ⋮ */ + 2 * 6
-                      + (m_privateBadge->isVisibleTo(m_toolbar) ? 36 : 0);
+    const int fixed = 16 + 38 * 3 + (m_homeBtn->isVisibleTo(m_toolbar) ? 38 : 0) + 6 * 2 + 36 /* ⋮ */ + 2 * 6
+                      + (m_privateBadge->isVisibleTo(m_toolbar) ? 38 : 0);
     int room = w - fixed - 240;
     const bool wantDownloads = m_downloadsWanted;
-    auto fits = [&room](bool want){ if (!want) return false; if (room >= 36) { room -= 36; return true; } return false; };
+    auto fits = [&room](bool want){ if (!want) return false; if (room >= 38) { room -= 38; return true; } return false; };
     // reserve in priority order (profile kept longest, extensions dropped first)
     const bool showProfile = fits(true);
     const bool showDownloads = fits(wantDownloads);
@@ -586,6 +587,7 @@ void BrowserWindow::newTab(const QString& url) {
         scheduleSessionSave();
     });
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
+    connect(tab, &BrowserTab::openLinkRequested, this, &BrowserWindow::openLink);
     connect(tab, &BrowserTab::titleChanged, this, [this, tab](const QString& t){ if (!tab->isPrivate() && !tab->isLazy()) m_history->updateTitle(tab->currentUrl(), t); });
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);
     // omnibox progress follows the active tab (animations-spec §7)
@@ -635,6 +637,33 @@ void BrowserWindow::newPrivateTab() {
     int idx = m_tabs->currentIndex();
     m_tabs->setTabText(idx, QStringLiteral("Private — ") + m_tabs->tabText(idx));
     m_privateBadge->show();
+}
+
+void BrowserWindow::openLink(const QUrl& url, int target) {
+    if (!url.isValid()) return;
+    const QString u = url.toString();
+    switch (target) {
+    case BrowserTab::NewWindow: {
+        auto* w = new BrowserWindow(); w->setAttribute(Qt::WA_DeleteOnClose); w->show();
+        QPointer<BrowserWindow> guard(w);
+        QTimer::singleShot(0, w, [guard, u]{ if (guard) guard->navigateToUrl(u); });
+        break;
+    }
+    case BrowserTab::PrivateTab: {
+        m_privateMode = true; newTab(u); m_privateMode = false;
+        const int idx = m_tabs->currentIndex();
+        m_tabs->setTabText(idx, QStringLiteral("Private — ") + m_tabs->tabText(idx));
+        m_privateBadge->show();
+        break;
+    }
+    case BrowserTab::SplitView:
+        newTab(u);
+        if (!m_splitActive) toggleSplitView(m_tabs->currentIndex());
+        break;
+    default:
+        newTab(u);
+        break;
+    }
 }
 
 void BrowserWindow::closeTab(int index) {

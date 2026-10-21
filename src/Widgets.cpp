@@ -23,6 +23,7 @@
 #include <QLibrary>
 #include <cstdlib>
 #include <QtMath>
+#include <QButtonGroup>
 
 static QColor mix(const QColor& a, const QColor& b, qreal t) {
     return QColor::fromRgbF(a.redF() + (b.redF() - a.redF()) * t, a.greenF() + (b.greenF() - a.greenF()) * t,
@@ -194,7 +195,7 @@ void WindowButton::paintEvent(QPaintEvent*) {
 }
 
 ToggleSwitch::ToggleSwitch(QWidget* parent) : QAbstractButton(parent) {
-    setCheckable(true); setCursor(Qt::PointingHandCursor); setFixedSize(36, 20);
+    setCheckable(true); setCursor(Qt::PointingHandCursor); setFixedSize(40, 22);
     m_anim.setDuration(160); m_anim.setEasingCurve(QEasingCurve::OutCubic);   // kit #38: knob 160 ms
     connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_pos = v.toReal(); update(); });
 }
@@ -209,9 +210,44 @@ void ToggleSwitch::paintEvent(QPaintEvent*) {
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen);
     p.setBrush(mix(QColor(pal.disabled), QColor(pal.accent), m_pos));
-    p.drawRoundedRect(QRectF(0, 0, 36, 20), 10, 10);
+    p.drawRoundedRect(QRectF(0, 0, 40, 22), 11, 11);
+    // knob stretches a little mid-travel (reads as a quick slide rather than a jump)
+    const qreal stretch = 4.0 * std::sin(M_PI * m_pos);
     p.setBrush(Qt::white);
-    p.drawEllipse(QRectF(2 + 16 * m_pos, 2, 16, 16));
+    p.drawRoundedRect(QRectF(3 + 18 * m_pos - stretch / 2, 3, 16 + stretch, 16), 8, 8);
+}
+
+SegmentThumb::SegmentThumb(QButtonGroup* group, QWidget* parent) : QWidget(parent), m_group(group) {
+    setObjectName(QStringLiteral("SegThumb"));
+    setAttribute(Qt::WA_StyledBackground, true);
+    setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    m_anim = new QPropertyAnimation(this, "geometry", this);
+    m_anim->setEasingCurve(QEasingCurve::OutCubic);
+    parent->installEventFilter(this);
+    for (auto* b : group->buttons()) b->installEventFilter(this);
+    connect(group, &QButtonGroup::buttonToggled, this, [this](QAbstractButton*, bool on){ if (on) place(true); });
+    lower();
+}
+bool SegmentThumb::eventFilter(QObject*, QEvent* e) {
+    switch (e->type()) {
+    case QEvent::Resize: case QEvent::Move: case QEvent::Show: case QEvent::LayoutRequest:
+        if (m_anim->state() != QAbstractAnimation::Running) place(false);
+        break;
+    default: break;
+    }
+    return false;
+}
+void SegmentThumb::place(bool animate) {
+    QAbstractButton* b = m_group->checkedButton();
+    if (!b) { hide(); return; }
+    const QRect target = b->geometry();
+    const bool fresh = isHidden() || geometry().width() <= 1;
+    show(); lower();
+    const int ms = animate && !fresh ? Pacitum::motionMs(220) : 0;
+    m_anim->stop();
+    if (ms <= 0) { setGeometry(target); return; }
+    m_anim->setDuration(ms); m_anim->setStartValue(geometry()); m_anim->setEndValue(target);
+    m_anim->start();
 }
 
 SwatchButton::SwatchButton(const QString& color, QWidget* parent) : QAbstractButton(parent), m_color(color) {
@@ -221,7 +257,7 @@ void SwatchButton::paintEvent(QPaintEvent*) {
     QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
     p.setPen(Qt::NoPen); p.setBrush(QColor(m_color));
     p.drawEllipse(QRectF(4, 4, 22, 22));
-    if (isChecked()) { p.setBrush(Qt::NoBrush); p.setPen(QPen(QColor(ThemeManager::current().text), 2)); p.drawEllipse(QRectF(1, 1, 28, 28)); }
+    if (isChecked()) { p.setBrush(Qt::NoBrush); p.setPen(QPen(QColor(m_color), 2)); p.drawEllipse(QRectF(1, 1, 28, 28)); }   // ring in the swatch colour, 2 px gap
 }
 
 namespace Pacitum {
@@ -287,11 +323,11 @@ void PopupMenu::paintEvent(QPaintEvent* e) {
             c.setAlphaF(peak * 0.11 * (1.0 - t) * (1.0 - t) + 0.002);
             const qreal grow = i * 1.0;
             p.setBrush(c);
-            p.drawRoundedRect(card.adjusted(-grow, -grow * 0.5, grow, grow).translated(0, qMin<qreal>(6, i * 0.5)), 14 + grow, 14 + grow);
+            p.drawRoundedRect(card.adjusted(-grow, -grow * 0.5, grow, grow).translated(0, qMin<qreal>(6, i * 0.5)), 16 + grow, 16 + grow);
         }
         p.setBrush(QColor(pal.toolbar));
-        p.setPen(QPen(QColor(pal.border), 1));
-        p.drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), 14, 14);
+        p.setPen(QPen(QColor(pal.borderStrong), 1));
+        p.drawRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), 16, 16);
     }
     QMenu::paintEvent(e);
 }

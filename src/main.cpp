@@ -30,6 +30,7 @@
 #include <QMutex>
 #include <QTimer>
 #include <QUrl>
+#include <QFontDatabase>
 #include <QTextStream>
 #include <QWindow>
 #include <QProcess>
@@ -251,6 +252,9 @@ int main(int argc, char *argv[]) {
     app.setDesktopFileName(QStringLiteral("pacitum-browser"));
     app.setWindowIcon(QIcon(QStringLiteral(":/icons/pacitum-icon-256.png")));
     {
+        // Inter ships with the app (resources/fonts, SIL OFL) so every machine gets the design font.
+        for (const char* w : {"Regular", "Medium", "SemiBold", "Bold"})
+            QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/Inter-%1.ttf").arg(QLatin1String(w)));
         QFont f = app.font();
         f.setFamilies({QStringLiteral("Inter"), QStringLiteral("Segoe UI"), QStringLiteral("Cantarell"), f.family()});
         f.setPixelSize(13);

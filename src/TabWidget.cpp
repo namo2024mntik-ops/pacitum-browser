@@ -36,7 +36,26 @@ QColor mixc(const QColor& a, const QColor& b, qreal t) {
                             a.blueF() + (b.blueF() - a.blueF()) * t, a.alphaF() + (b.alphaF() - a.alphaF()) * t);
 }
 constexpr int kMinStripTabs = 60;
-constexpr int kGap = 4, kTabH = 32, kTop = 5, kMaxW = 232, kMinW = 56, kPinW = 40, kPinSep = 9;
+// 1.9 refresh: tabs hang from the bottom of the 42 px strip. The active tab is 34 px tall, runs into
+// the toolbar below (same colour) and has small outward "feet" so the two read as one surface.
+constexpr int kGap = 4, kTabH = 34, kTop = 8, kIconY = 9, kMaxW = 232, kMinW = 56, kPinW = 40, kPinSep = 9;
+constexpr qreal kTabRadius = 10, kFoot = 6;
+
+// Active tab outline: rounded top corners, square bottom with concave feet (body rect in bar coords).
+QPainterPath activeTabPath(const QRectF& b) {
+    QPainterPath path;
+    const qreal rad = qMin(kTabRadius, b.width() / 2);
+    path.moveTo(b.left() - kFoot, b.bottom());
+    path.quadTo(b.left(), b.bottom(), b.left(), b.bottom() - kFoot);
+    path.lineTo(b.left(), b.top() + rad);
+    path.quadTo(b.left(), b.top(), b.left() + rad, b.top());
+    path.lineTo(b.right() - rad, b.top());
+    path.quadTo(b.right(), b.top(), b.right(), b.top() + rad);
+    path.lineTo(b.right(), b.bottom() - kFoot);
+    path.quadTo(b.right(), b.bottom(), b.right() + kFoot, b.bottom());
+    path.closeSubpath();
+    return path;
+}
 
 class FloatingTabStyle : public QProxyStyle {
 public:
@@ -106,6 +125,12 @@ void PacitumTabBar::enableFloatingTabs() {
     setElideMode(Qt::ElideNone);
     setFocusPolicy(Qt::TabFocus);
     for (int i = 0; i < count(); ++i) tabInserted(i);
+    // Active-tab slide (1.9): on a tab switch the merged tab shape glides from the old tab to the new one.
+    m_slideAnim = new QVariantAnimation(this);
+    m_slideAnim->setStartValue(0.0); m_slideAnim->setEndValue(1.0); m_slideAnim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_slideAnim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v){ m_slideT = v.toReal(); update(); });
+    connect(m_slideAnim, &QVariantAnimation::finished, this, [this]{ m_slideT = 1.0; update(); });
+    connect(this, &QTabBar::currentChanged, this, [this](int){ startSelectionSlide(); });
     m_spin = new QVariantAnimation(this);
     // animations-spec §6: one shared 0→1 loop (1600 ms) for all loading tabs; angle = v·720 (800 ms/turn),
     // arc span = 90 + 180·sin²(πv) (90→270→90, InOutSine-like halves).
@@ -113,9 +138,39 @@ void PacitumTabBar::enableFloatingTabs() {
     connect(m_spin, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
         m_spinV = v.toReal(); m_spinAngle = m_spinV * 720.0;
         for (int i = 0; i < count(); ++i)                          // repaint only the 16 px favicon rects
-            if (m_flags.value(idOf(i)).loading) { const QRect r = tabRect(i); update(QRect(r.x() + (isTabPinned(i) ? 10 : 10), r.y() + kTop + 6, 20, 20)); }
+            if (m_flags.value(idOf(i)).loading) { const QRect r = tabRect(i); update(QRect(r.x() + 10, r.y() + kTop + kIconY - 2, 20, 20)); }
     });
 }
+void PacitumTabBar::startSelectionSlide() {
+    const int ms = Pacitum::motionMs(200);
+    if (!m_slideAnim || !animationsEnabled || ms == 0 || !isVisible() || m_lastSelBody.isNull() || m_vertical) {
+        if (m_slideAnim) m_slideAnim->stop();
+        m_slideT = 1.0; update(); return;
+    }
+    m_slideFrom = m_lastSelBody;
+    m_slideAnim->stop();
+    m_slideT = 0.0;
+    m_slideAnim->setDuration(ms);
+    m_slideAnim->start();
+}
+
+void PacitumTabBar::paintEvent(QPaintEvent* e) {
+    const int cur = currentIndex();
+    if (m_floating && m_slideT < 1.0 && cur >= 0) {
+        const QRect r = tabRect(cur);
+        const qreal bw = isTabPinned(cur) ? kPinW : r.width() - kGap;
+        const QRectF to(r.x(), r.y() + kTop, qMax<qreal>(0, bw), kTabH + 1);
+        const qreal t = m_slideT;
+        auto lerp = [t](qreal a, qreal b) { return a + (b - a) * t; };
+        const QRectF now(lerp(m_slideFrom.x(), to.x()), to.y(), lerp(m_slideFrom.width(), to.width()), to.height());
+        m_lastSelBody = now;   // a new switch mid-slide starts from where the shape is now
+        QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(Qt::NoPen); p.setBrush(qc(ThemeManager::current().tab));
+        p.drawPath(activeTabPath(now));
+    }
+    QTabBar::paintEvent(e);
+}
+
 void PacitumTabBar::setVerticalMode(bool v) {
     m_vertical = v;
     setMinimumWidth(v ? 200 : 0);
@@ -180,7 +235,7 @@ QSize PacitumTabBar::tabSizeHint(int index) const {
     if (auto it = m_pinMorph.constFind(idOf(index)); it != m_pinMorph.constEnd())
         w = int(it->first + (w - it->first) * it->second);
     const qreal prog = m_progress.value(idOf(index), 1.0);
-    return QSize(qMax(1, int(w * prog)), m_floating ? kTop * 2 + kTabH : 32);
+    return QSize(qMax(1, int(w * prog)), m_floating ? kTop + kTabH : 32);
 }
 QSize PacitumTabBar::minimumTabSizeHint(int index) const { return tabSizeHint(index); }
 
@@ -192,7 +247,7 @@ QRect PacitumTabBar::audioRect(int index) const {
     const QRect r = tabRect(index);
     const bool closeShown = tabButton(index, QTabBar::RightSide) && tabButton(index, QTabBar::RightSide)->isVisible();
     const int right = closeShown ? closeButtonRect(r).left() - 4 : r.right() - kGap - 8;
-    return QRect(right - 16, r.y() + kTop + 8, 16, 16);
+    return QRect(right - 16, r.y() + kTop + kIconY, 16, 16);
 }
 
 void PacitumTabBar::tabInserted(int index) {
@@ -372,44 +427,42 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
     if (appear < 1.0) p->setOpacity(qMin(1.0, appear * 1.5));   // open: opacity 0→1 (faster than width)
     const QColor chrome = qc(pal.frame);
     QColor fill = chrome;
-    const bool dark = chrome.lightness() < 128;
     if (selected) {
-        // shadow-1: 1 px offset soft shadow + hairline outline (cheaper than QGraphicsDropShadowEffect)
-        p->setPen(Qt::NoPen);
-        p->setBrush(dark ? QColor(0, 0, 0, 0x59) : QColor(0x10, 0x18, 0x28, 0x1A));
-        p->drawRoundedRect(body.translated(0, 1), 10, 10);
-        p->setBrush(dark ? QColor(0, 0, 0, 0x22) : QColor(0x10, 0x18, 0x28, 0x0A));
-        p->drawRoundedRect(body.adjusted(-0.5, 0, 0.5, 1.5), 10.5, 10.5);
+        // Merged active tab: same fill as the toolbar, open at the bottom. While the selection slides
+        // (paintEvent), the moving shape is drawn there instead.
         fill = qc(pal.tab);
-        p->setBrush(fill);
-        p->setPen(QPen(dark ? QColor(255, 255, 255, 0x0A) : QColor(0x10, 0x18, 0x28, 0x0D), 1));
-        p->drawRoundedRect(body, 10, 10);
+        const QRectF shape(r.x(), r.y() + kTop, bodyW, kTabH + 1);
+        if (m_slideT >= 1.0) {
+            m_lastSelBody = shape;
+            p->setPen(Qt::NoPen); p->setBrush(fill);
+            p->drawPath(activeTabPath(shape));
+        }
     } else if (hov > 0.001) {
         fill = mixc(chrome, qc(pal.tabHover), hov);
         p->setPen(Qt::NoPen); p->setBrush(fill);
-        p->drawRoundedRect(body, 10, 10);
+        p->drawRoundedRect(body.adjusted(0, 2, 0, -4), 8, 8);
     }
-    // keyboard focus: 2 px ring with 2 px gap
+    // keyboard focus: 2 px ring inside the tab
     if (selected && hasFocus()) {
         p->setBrush(Qt::NoBrush); p->setPen(QPen(qc(pal.focusRing), 2));
-        p->drawRoundedRect(body.adjusted(-2.5, -2.5, 2.5, 2.5), 12, 12);
+        p->drawRoundedRect(body.adjusted(2, 3, -2, -4), 8, 8);
     }
 
     // separator between two plain inactive tabs, and after the pinned group
     if (idx >= 0) {
         const int sx = r.right() - kGap / 2 + 1;
         if (pinned && !m_pinned.contains(idx + 1) && idx + 1 < count()) {
-            p->fillRect(QRectF(r.x() + kPinW + kGap + 4 - 2, r.y() + kTop + 8, 1, 16), qc(pal.borderStrong));
+            p->fillRect(QRectF(r.x() + kPinW + kGap + 4 - 2, r.y() + kTop + kIconY, 1, 16), qc(pal.borderStrong));
         } else if (!pinned && !selected && hov < 0.5 && idx + 1 < count() && idx + 1 != currentIndex()
                    && idOf(idx + 1) != m_hoverId && opt.position != QStyleOptionTab::Moving) {
-            p->fillRect(QRectF(sx - 1, r.y() + kTop + 8, 1, 16), qc(pal.borderStrong));
+            p->fillRect(QRectF(sx - 1, r.y() + kTop + kIconY, 1, 16), qc(pal.borderStrong));
         }
     }
 
     const bool compact = !pinned && bodyW < 80;
     const bool closeVisible = idx >= 0 && tabButton(idx, QTabBar::RightSide) && tabButton(idx, QTabBar::RightSide)->isVisible();
     int iconX = pinned || (compact && !closeVisible) ? int(body.center().x() - 8) : r.x() + 12;
-    const QRectF iconR(iconX, r.y() + kTop + 8, 16, 16);
+    const QRectF iconR(iconX, r.y() + kTop + kIconY, 16, 16);
     if (fl.loading) {
         QPen track(qc(pal.surfaceHover), 2); p->setPen(track); p->setBrush(Qt::NoBrush);
         const QRectF a = iconR.adjusted(1.5, 1.5, -1.5, -1.5);
@@ -450,7 +503,7 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
     int right = int(body.right()) - 6;
     if (closeVisible) right = closeButtonRect(r).left() - 4;
     if (fl.usage > 0) {   // in-use slot (§5): recording > screen share > location > audio
-        const QRect ar(right - 16, r.y() + kTop + 8, 16, 16);
+        const QRect ar(right - 16, r.y() + kTop + kIconY, 16, 16);
         if (fl.usage == 3) {
             const QPointF c = QRectF(ar).center();
             qreal halo = 0.25;
@@ -465,7 +518,7 @@ void PacitumTabBar::paintFloatingTab(QPainter* p, const QStyleOptionTab& opt) co
         }
         right = ar.left() - 4;
     } else if (fl.audible || fl.muted) {
-        const QRect ar(right - 16, r.y() + kTop + 8, 16, 16);
+        const QRect ar(right - 16, r.y() + kTop + kIconY, 16, 16);
         const QPixmap pm = fl.muted ? ThemeManager::icon(QStringLiteral("tab-mute"), pal.textSecondary, 15).pixmap(QSize(15, 15), devicePixelRatioF())
                                     : ThemeManager::icon(QStringLiteral("audio-playing"), pal.accent, 16).pixmap(QSize(16, 16), devicePixelRatioF());
         p->drawPixmap(ar.topLeft() + QPoint((16 - pm.deviceIndependentSize().width()) / 2, (16 - pm.deviceIndependentSize().height()) / 2), pm);
@@ -592,7 +645,7 @@ QWidget* PacitumTabWidget::createTabStrip(QWidget* parent) {
     m_stripNewTab->setToolTip(QStringLiteral("New tab (Ctrl+T)"));
     m_stripNewTab->setAccessibleName(QStringLiteral("New tab"));
     connect(m_stripNewTab, &QToolButton::clicked, this, &PacitumTabWidget::newTabRequested);
-    lay->addWidget(m_stripNewTab, 0, Qt::AlignVCenter);
+    lay->addWidget(m_stripNewTab, 0, Qt::AlignBottom);   // centred on the tabs (they hang from the bottom)
     lay->addSpacing(40);   // drag area is always at least 40 px
     lay->addStretch(1);
 
@@ -768,33 +821,35 @@ void PacitumTabWidget::showTabList() {
 }
 
 void PacitumTabWidget::showTabContextMenu(int index, const QPoint& pos) {
-    QMenu menu(this);
-    auto* closeAct = menu.addAction(QStringLiteral("Close Tab"));
-    connect(closeAct, &QAction::triggered, this, [this, index]{ emit tabCloseRequested(index); });
-    auto* closeOthers = menu.addAction(QStringLiteral("Close Other Tabs"));
-    connect(closeOthers, &QAction::triggered, this, [this, index]{ closeOtherTabs(index); });
-    auto* closeRight = menu.addAction(QStringLiteral("Close Tabs to the Right"));
-    connect(closeRight, &QAction::triggered, this, [this, index]{ closeTabsToRight(index); });
+    // 1.9 tab menu: create / page actions / layout / close, shortcuts in the right-hand column.
+    Pacitum::PopupMenu menu(this);
+    auto add = [&menu](const QString& text, const QString& keys, auto&& fn) {
+        auto* a = menu.addAction(keys.isEmpty() ? text : text + QLatin1Char('\t') + keys);
+        QObject::connect(a, &QAction::triggered, &menu, fn);
+        return a;
+    };
+    add(QStringLiteral("New tab"), QStringLiteral("Ctrl+T"), [this]{ emit newTabRequested(); });
     menu.addSeparator();
-    auto* dup = menu.addAction(QStringLiteral("Duplicate Tab"));
-    connect(dup, &QAction::triggered, this, [this, index]{ emit tabDuplicateRequested(index); });
-    auto* split = menu.addAction(QStringLiteral("Open in Split View"));
-    connect(split, &QAction::triggered, this, [this, index]{ emit tabSplitRequested(index); });
+    add(QStringLiteral("Reload"), QStringLiteral("Ctrl+R"), [this, index]{ emit tabReloadRequested(index); });
+    add(QStringLiteral("Duplicate tab"), QString(), [this, index]{ emit tabDuplicateRequested(index); });
+    const bool pinned = activeBar()->isTabPinned(index);
+    add(pinned ? QStringLiteral("Unpin tab") : QStringLiteral("Pin tab"), QString(), [this, index, pinned]{ emit tabPinRequested(index, !pinned); });
+    add(QStringLiteral("Mute tab"), QString(), [this, index]{ emit tabMuteRequested(index, true); });
+    add(QStringLiteral("Open in split view"), QString(), [this, index]{ emit tabSplitRequested(index); });
     menu.addSeparator();
-    const auto& pal = ThemeManager::current();
-    auto* pin = menu.addAction(ThemeManager::icon(activeBar()->isTabPinned(index) ? QStringLiteral("tab-pin") : QStringLiteral("pin-filled"), pal.textSecondary, 18),
-                               activeBar()->isTabPinned(index) ? QStringLiteral("Unpin Tab") : QStringLiteral("Pin Tab"));
-    connect(pin, &QAction::triggered, this, [this, index]{ emit tabPinRequested(index, !activeBar()->isTabPinned(index)); });
-    auto* mute = menu.addAction(QStringLiteral("Mute Tab"));
-    connect(mute, &QAction::triggered, this, [this, index]{ emit tabMuteRequested(index, true); });
+    add(QStringLiteral("Close tab"), QStringLiteral("Ctrl+W"), [this, index]{ emit tabCloseRequested(index); });
+    add(QStringLiteral("Close other tabs"), QString(), [this, index]{ closeOtherTabs(index); })->setEnabled(count() > 1);
+    add(QStringLiteral("Close tabs to the right"), QString(), [this, index]{ closeTabsToRight(index); })->setEnabled(index < count() - 1);
+    menu.addSeparator();
+    add(QStringLiteral("Reopen closed tab"), QStringLiteral("Ctrl+Shift+T"), [this]{ emit tabReopenRequested(); });
     menu.exec(pos);
 }
 
 void PacitumTabWidget::showBarContextMenu(const QPoint& pos) {
-    QMenu menu(this);
-    auto* nt = menu.addAction(QStringLiteral("New Tab"));
+    Pacitum::PopupMenu menu(this);
+    auto* nt = menu.addAction(QStringLiteral("New tab\tCtrl+T"));
     connect(nt, &QAction::triggered, this, &PacitumTabWidget::newTabRequested);
-    auto* re = menu.addAction(QStringLiteral("Reopen Closed Tab"));
+    auto* re = menu.addAction(QStringLiteral("Reopen closed tab\tCtrl+Shift+T"));
     connect(re, &QAction::triggered, this, &PacitumTabWidget::tabReopenRequested);
     menu.exec(pos);
 }

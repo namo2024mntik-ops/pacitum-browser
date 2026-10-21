@@ -80,8 +80,8 @@ jobs:
           $ok = Select-String -Path resize\startup.log -Pattern 'RESIZE OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path resize\crash.log)) { Write-Error "RESIZE TEST FAILED"; exit 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: resize-test, path: resize/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: resize-test, path: resize/, if-no-files-found: ignore, retention-days: 1 }
       - name: Profile test (migration, registry, isolation, guest)
         shell: pwsh
         run: |
@@ -97,8 +97,8 @@ jobs:
           $ok = Select-String -Path profiles\startup.log -Pattern 'PROFILES OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path profiles\crash.log)) { Write-Error "PROFILE TEST FAILED"; exit 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: profile-test, path: profiles/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: profile-test, path: profiles/, if-no-files-found: ignore, retention-days: 1 }
       - name: Permissions test (store, shims, bridge, prompts, popups, downloads)
         shell: pwsh
         run: |
@@ -115,8 +115,8 @@ jobs:
           $ok = Select-String -Path permissions\startup.log -Pattern 'PERMISSIONS OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path permissions\crash.log)) { Write-Error "PERMISSIONS TEST FAILED"; exit 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: permissions-test, path: permissions/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: permissions-test, path: permissions/, if-no-files-found: ignore, retention-days: 1 }
       - name: Stress test (tabs, switching, fullscreen, loads)
         shell: pwsh
         run: |
@@ -133,8 +133,8 @@ jobs:
           $ok = Select-String -Path stress\startup.log -Pattern 'STRESS OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path stress\crash.log)) { Write-Error "STRESS TEST FAILED"; exit 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: stress-test, path: stress/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: stress-test, path: stress/, if-no-files-found: ignore, retention-days: 1 }
       - name: Single-instance handoff test (second launch passes its URL to the running window)
         shell: pwsh
         run: |
@@ -163,11 +163,11 @@ jobs:
           $ok = Select-String -Path perf\startup.log -Pattern 'PERF OK' -Quiet
           if ($p.ExitCode -ne 0 -or -not $ok -or (Test-Path perf\crash.log)) { Write-Error "PERF TEST FAILED"; exit 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: handoff-perf-test, path: "handoff/\nperf/", if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: handoff-perf-test, path: "handoff/\nperf/", if-no-files-found: ignore, retention-days: 1 }
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: smoke-test, path: smoke/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: smoke-test, path: smoke/, if-no-files-found: ignore, retention-days: 1 }
       - name: Installer
         shell: pwsh
         run: |
@@ -249,9 +249,10 @@ jobs:
           Start-Sleep 3; Shot '5-relaunched'
           Get-Process PacitumBrowser -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v7.0.2
-        if: always()
-        with: { name: installer-screens, path: installer-shots/, if-no-files-found: ignore }
+        if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
+        with: { name: installer-screens, path: installer-shots/, if-no-files-found: ignore, retention-days: 1 }
       - uses: actions/upload-artifact@v7.0.2
         with:
           name: PacitumBrowser-Setup
           path: installer/*.exe
+          retention-days: 3   # releases keep their own copy (tag builds attach it)

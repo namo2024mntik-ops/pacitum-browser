@@ -9,3 +9,4 @@ browser_data/
 cmake-build-*/
 build/
 aqtinstall.log
+!examples/**/*.json

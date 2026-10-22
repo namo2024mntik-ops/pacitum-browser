@@ -45,6 +45,9 @@ public:
     void setColor(const QColor& c) { m_color = c; m_pm = QPixmap(); }
     void setPixmap(const QPixmap& pm) { m_pm = pm; }
     void setOpacity(qreal o) { m_opacity = o; update(); }
+    // 1.8.5 3D: during the next fade the snapshot also turns around its vertical axis (perspective)
+    // up to `degrees` and scales to `scaleTo`. Cleared when the fade ends.
+    void setTilt(qreal degrees, qreal scaleTo = 1.0) { m_tilt = degrees; m_scaleTo = scaleTo; }
     // Fade from -> to over ms (optionally drifting by `drift` px); hides (or deletes) itself at the end.
     void fade(qreal from, qreal to, int ms, QEasingCurve::Type curve, int delayMs = 0, QPoint drift = {}, bool deleteWhenDone = false);
     void stop();
@@ -54,6 +57,7 @@ protected:
 private:
     QColor m_color; QPixmap m_pm; qreal m_opacity = 1.0;
     qreal m_from = 1.0, m_to = 0.0; QPoint m_origin, m_drift;
+    qreal m_t = 0.0, m_tilt = 0.0, m_scaleTo = 1.0;
     bool m_deleteWhenDone = false, m_pendingStart = false;
     QVariantAnimation m_anim;
 };

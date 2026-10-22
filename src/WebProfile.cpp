@@ -1,5 +1,6 @@
 #include "WebProfile.h"
 #include "PacitumScheme.h"
+#include "ExtensionManager.h"
 #include <QWebEngineProfile>
 #include <QWebEngineSettings>
 #include <QtWebEngineCore/qtwebenginecoreglobal.h>
@@ -80,6 +81,7 @@ void GoogleSignInInterceptor::interceptRequest(QWebEngineUrlRequestInfo& info) {
 
 void configureProfile(QWebEngineProfile* profile, bool persistent) {
     if (!profile) return;
+    if (persistent) ExtensionManager::instance()->attach(profile);   // 1.8.5 mini extensions (not in private/guest)
     const QString honest = profile->httpUserAgent();
     if (defaultUaStore().isEmpty()) defaultUaStore() = honest;
     profile->setHttpUserAgent(chromeUserAgent(honest));

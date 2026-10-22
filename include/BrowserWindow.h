@@ -17,6 +17,8 @@
 #include <QDateTime>
 #include <QList>
 #include <QMap>
+#include <QHash>
+#include <QPixmap>
 
 class PacitumTabWidget;
 class BrowserTab;
@@ -91,6 +93,22 @@ private slots:
     void toggleBookmarksBar();
     void toggleVerticalTabs();
     void toggleSplitView(int index = -1);
+    // 1.8.5 split view
+    void openSplit(int index);           // index < 0: new tab on the right
+    void closeSplit();
+    void moveTabToSplit(int index);      // main → right pane (opens split if needed)
+    void moveTabFromSplit(int index);    // right pane → main (closes split when it empties)
+    void swapSplitSides();
+    void splitCrossFade(const std::function<void()>& change);
+    void installExtensionFromFolder();
+    // 1.8.5 tools + 3D
+    void toggleNotes();
+    void takeScreenshot();
+    void showPageQr();
+    void togglePictureInPicture();
+    void showTabOverview();
+    void captureActiveThumb();
+    void showNotice(const QString& text);
     void duplicateTab(int index);
     void muteTab(int index, bool muted);
     void pinTab(int index, bool pinned);
@@ -240,7 +258,11 @@ private:
     QToolButton* m_menuBtn = nullptr;
 
     BookmarksBar* m_bookmarksBar = nullptr;
-    QSplitter* m_splitter = nullptr;
+    class PacitumSplitter* m_splitter = nullptr;
+    class NotesPanel* m_notes = nullptr;
+    QWidget* m_contentRow = nullptr;
+    QHash<QObject*, QPixmap> m_thumbs;   // last snapshot per tab (3D tab overview), ~640 px wide
+    QTimer m_thumbTimer;
     PacitumTabWidget* m_tabs = nullptr;
     PacitumTabWidget* m_splitTabs = nullptr;
     PacitumTabWidget* m_activeWidget = nullptr;

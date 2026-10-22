@@ -1,0 +1,2 @@
+/* Pacitum example extension: hide distractions on YouTube. */
+#related, #secondary, ytd-reel-shelf-renderer, ytd-rich-shelf-renderer[is-shorts], #comments { display: none !important; }

@@ -1,0 +1,9 @@
+{
+  "name": "YouTube Focus",
+  "version": "1.0",
+  "description": "Hides recommendations, Shorts and comments on YouTube.",
+  "matches": ["*://www.youtube.com/*"],
+  "css": ["focus.css"],
+  "js": ["focus.js"],
+  "run_at": "document_idle"
+}

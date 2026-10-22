@@ -204,6 +204,12 @@ QScrollBar:vertical { background: transparent; width: 10px; }
 QScrollBar::handle:vertical { background: @border; border-radius: 4px; min-height: 30px; margin: 2px; }
 QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
 QSplitter::handle { background: @border; }
+#NotesPanel { background: @toolbar; border-left: 1px solid @border; }
+QPlainTextEdit#NotesEdit { background: @page; border: 1px solid @border; border-radius: 12px; padding: 8px; font-size: 14px; selection-background-color: @accent; selection-color: @onAccent; }
+QPlainTextEdit#NotesEdit:focus { border: 2px solid @accent; padding: 7px; }
+#ShotBar { background: @toolbar; border: 1px solid @borderStrong; border-radius: 22px; }
+#ShotBar QLabel { background: transparent; color: @textSecondary; }
+#ShotBar QPushButton { border-radius: 16px; min-height: 32px; max-height: 32px; }
 QListWidget, QTableWidget, QTreeWidget { background: @toolbar; border: 1px solid @border; border-radius: 12px; alternate-background-color: @page; }
 QHeaderView::section { background: @toolbar; color: @textSecondary; border: none; border-bottom: 1px solid @border; padding: 6px; }
 )");

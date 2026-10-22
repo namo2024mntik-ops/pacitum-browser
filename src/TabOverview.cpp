@@ -65,6 +65,8 @@ void TabOverview::select(int i, bool animate) {
 }
 
 void TabOverview::finish(int index) {
+    if (m_closing) return;   // a second Esc / click while the close animation runs
+    m_closing = true;
     m_result = index;
     if (index >= 0 && index != m_sel) select(index);
     const int ms = Pacitum::motionMs(180);

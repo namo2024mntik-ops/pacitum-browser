@@ -223,11 +223,13 @@ FadeOverlay::FadeOverlay(QWidget* parent) : QWidget(parent) {
     setFocusPolicy(Qt::NoFocus);
     connect(&m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
         const qreal t = v.toReal();
+        m_t = t;
         m_opacity = m_from + (m_to - m_from) * t;
         if (!m_drift.isNull()) move(m_origin + QPoint(qRound(m_drift.x() * t), qRound(m_drift.y() * t)));
         update();
     });
     connect(&m_anim, &QVariantAnimation::finished, this, [this] {
+        m_tilt = 0.0; m_scaleTo = 1.0; m_t = 0.0;
         if (m_deleteWhenDone) { hide(); deleteLater(); return; }
         if (m_to <= 0.0) { hide(); m_pm = QPixmap(); }   // release the snapshot right away
     });
@@ -235,7 +237,7 @@ FadeOverlay::FadeOverlay(QWidget* parent) : QWidget(parent) {
 void FadeOverlay::fade(qreal from, qreal to, int ms, QEasingCurve::Type curve, int delayMs, QPoint drift, bool deleteWhenDone) {
     m_anim.stop();
     m_from = from; m_to = to; m_drift = drift; m_origin = pos(); m_deleteWhenDone = deleteWhenDone;
-    m_opacity = from;
+    m_opacity = from; m_t = 0.0;
     show(); raise(); update();
     m_anim.setDuration(qMax(1, ms)); m_anim.setStartValue(0.0); m_anim.setEndValue(1.0); m_anim.setEasingCurve(curve);
     if (delayMs <= 0) { m_anim.start(); return; }
@@ -248,6 +250,19 @@ void FadeOverlay::paintEvent(QPaintEvent* e) {
     if (m_opacity <= 0.0) return;
     QPainter p(this);
     p.setOpacity(m_opacity);
+    if (!m_pm.isNull() && (m_tilt != 0.0 || m_scaleTo != 1.0)) {
+        // perspective turn around the vertical centre line; bilinear sampling off mid-flight (fast)
+        const QPointF c = QRectF(rect()).center();
+        const qreal s = 1.0 + (m_scaleTo - 1.0) * m_t;
+        QTransform tr;
+        tr.translate(c.x(), c.y());
+        tr.rotate(m_tilt * m_t, Qt::YAxis);
+        tr.scale(s, s);
+        tr.translate(-c.x(), -c.y());
+        p.setTransform(tr);
+        p.drawPixmap(rect(), m_pm);
+        return;
+    }
     if (!m_pm.isNull()) p.drawPixmap(rect(), m_pm);
     else p.fillRect(e->rect(), m_color);
 }

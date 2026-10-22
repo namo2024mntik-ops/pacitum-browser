@@ -8,6 +8,8 @@
 #include <functional>
 #include <QFrame>
 #include <QUrl>
+#include <QPointer>
+#include <QPixmap>
 #include <QWebEngineFullScreenRequest>
 class QLabel;
 class QTimer;
@@ -46,6 +48,12 @@ public:
     QWebEngineView* view() const { return m_view; }
     enum LinkTarget { NewTab = 0, NewWindow = 1, PrivateTab = 2, SplitView = 3 };
     QString searchUrl(const QString& terms) const;   // search-engine results URL for plain text
+    ~BrowserTab() override;
+    // 1.8.5 tools
+    void togglePictureInPicture();       // pop the page's main video out into an always-on-top window
+    bool inPictureInPicture() const { return !m_pip.isNull(); }
+    QPixmap captureView() const;         // visible page pixels (for screenshots / 3D effects)
+    QRect viewRectIn(QWidget* w) const;  // the page area in w's coordinates
     void fadeIn();
     void navTransition(int dir);   // -1 back, +1 forward
     void ensureActive();                 // thaw a frozen page before touching it
@@ -75,6 +83,7 @@ signals:
     void fullScreenRequested(QWebEngineFullScreenRequest request);
     // Page context menu (1.9): open a URL somewhere else. Handled by BrowserWindow.
     void openLinkRequested(const QUrl& url, int target);
+    void notice(const QString& text);    // short message for the window to show (bubble)
 
 private:
     int m_loadValue = 0;
@@ -89,6 +98,10 @@ private slots:
 private:
     void buildSignInBar();
     void showContextMenu(const QPoint& globalPos);
+    void endPictureInPicture();
+    QPointer<class PipWindow> m_pip;
+    QWidget* m_pipPlaceholder = nullptr;
+    int m_viewLayoutIndex = -1;
     void showSignInBar(const QUrl& target);
     void checkGoogleSignIn(const QUrl& url);
     class InfoBar* m_signInBar = nullptr;

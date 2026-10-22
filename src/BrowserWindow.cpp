@@ -90,6 +90,16 @@
 #include <QHash>
 #include <QFrame>
 #include <QLineEdit>
+#include "SplitView.h"
+#include "ExtensionManager.h"
+#include "Tools.h"
+#include "TabOverview.h"
+#include <QHBoxLayout>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QDesktopServices>
+#include <QDir>
+#include "Motion.h"
 
 BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     m_history = new HistoryManager(QStringLiteral("browser_history.db"));
@@ -202,6 +212,12 @@ void BrowserWindow::installPopupFactory() {
 
 BrowserWindow::~BrowserWindow() {
     qApp->removeEventFilter(this);
+    // Child widgets (tab bars, tabs) are deleted after this body and after our members are gone.
+    // Cut their signals to us now, so no handler runs against freed members (m_thumbs, m_thumbTimer)
+    // while the window is being torn down.
+    m_thumbTimer.stop();
+    for (auto* tw : {m_tabs, m_splitTabs}) if (tw) tw->disconnect(this);
+    for (auto* t : findChildren<BrowserTab*>()) t->disconnect(this);
     if (m_firstRun) m_firstRun->waitForImport();   // the import worker writes into m_history
     if (m_updater) m_updater->disconnect(this);
     delete m_history; delete m_bookmarks; delete m_theme; delete m_session;
@@ -242,15 +258,20 @@ void BrowserWindow::setupUI() {
     auto* divider = new QFrame(central); divider->setObjectName(QStringLiteral("ChromeDivider")); divider->setFixedHeight(1);
     mainLay->addWidget(divider);
 
-    m_splitter = new QSplitter(Qt::Horizontal, this);
-    m_splitter->setHandleWidth(1);
-    mainLay->addWidget(m_splitter, 1);
+    // content row: [split view | notes panel]
+    m_contentRow = new QWidget(central);
+    auto* rowLay = new QHBoxLayout(m_contentRow); rowLay->setContentsMargins(0, 0, 0, 0); rowLay->setSpacing(0);
+    m_splitter = new PacitumSplitter(m_contentRow);
+    rowLay->addWidget(m_splitter, 1);
+    mainLay->addWidget(m_contentRow, 1);
+    m_thumbTimer.setSingleShot(true); m_thumbTimer.setInterval(700);
+    connect(&m_thumbTimer, &QTimer::timeout, this, &BrowserWindow::captureActiveThumb);
 
     m_tabs = new PacitumTabWidget(m_verticalTabs, this);
     connect(m_tabs, &PacitumTabWidget::tabCloseRequested, this, &BrowserWindow::closeTab);
     connect(m_tabs, &QTabWidget::currentChanged, this, &BrowserWindow::onTabChanged);
     connect(m_tabs, &PacitumTabWidget::newTabRequested, this, [this]{ newTab(); });
-    connect(m_tabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
+    connect(m_tabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::moveTabToSplit);
     connect(m_tabs, &PacitumTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
     connect(m_tabs, &PacitumTabWidget::tabReopenRequested, this, &BrowserWindow::reopenClosedTab);
     connect(m_tabs, &PacitumTabWidget::tabMuteRequested, this, &BrowserWindow::muteTab);
@@ -282,7 +303,7 @@ void BrowserWindow::setupUI() {
     connect(m_splitTabs, &PacitumTabWidget::tabCloseRequested, this, &BrowserWindow::closeSplitTab);
     connect(m_splitTabs, &QTabWidget::currentChanged, this, &BrowserWindow::onTabChanged);
     connect(m_splitTabs, &PacitumTabWidget::newTabRequested, this, [this]{ newTab(QString{}); /* in split */ });
-    connect(m_splitTabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::toggleSplitView);
+    connect(m_splitTabs, &PacitumTabWidget::tabSplitRequested, this, &BrowserWindow::moveTabFromSplit);
     connect(m_splitTabs, &PacitumTabWidget::tabDuplicateRequested, this, &BrowserWindow::duplicateTab);
     m_splitter->addWidget(m_splitTabs);
 
@@ -455,15 +476,141 @@ void BrowserWindow::updateTabAudio(BrowserTab* tab) {
 }
 
 void BrowserWindow::showExtensionsMenu() {
-    QMenu m(this);
-    auto* none = m.addAction(m_theme->secondaryIcon(QStringLiteral("extensions"), 18), QStringLiteral("No extensions installed"));
-    none->setEnabled(false);
+    // 1.8.5: Pacitum mini extensions (user scripts / styles) + split view controls.
+    Pacitum::PopupMenu m(this);
+    auto* em = ExtensionManager::instance();
+    auto* head = m.addAction(m_theme->secondaryIcon(QStringLiteral("extensions"), 18),
+                             em->extensions().isEmpty() ? QStringLiteral("No extensions installed") : QStringLiteral("Extensions"));
+    head->setEnabled(false);
+    for (const PacitumExtension& e : em->extensions()) {
+        QMenu* sub = m.addMenu(QStringLiteral("%1  %2").arg(e.name, e.enabled ? QString() : QStringLiteral("(off)")).trimmed().replace(QLatin1Char('&'), QStringLiteral("&&")));
+        sub->setToolTipsVisible(true);
+        auto* info = sub->addAction(QStringLiteral("Version %1 · runs on %2").arg(e.version, e.sites.join(QStringLiteral(", "))).left(90));
+        info->setEnabled(false);
+        if (!e.description.isEmpty()) { auto* d = sub->addAction(e.description.left(90)); d->setEnabled(false); }
+        sub->addSeparator();
+        auto* on = sub->addAction(QStringLiteral("Enabled")); on->setCheckable(true); on->setChecked(e.enabled);
+        const QString id = e.id, name = e.name, dir = e.dir;
+        connect(on, &QAction::toggled, this, [this, id](bool v){ ExtensionManager::instance()->setEnabled(id, v); if (auto* t = activeTab()) t->reload(); });
+        connect(sub->addAction(QStringLiteral("Show folder")), &QAction::triggered, this, [dir]{ QDesktopServices::openUrl(QUrl::fromLocalFile(dir)); });
+        connect(sub->addAction(QStringLiteral("Remove…")), &QAction::triggered, this, [this, id, name]{
+            if (QMessageBox::question(this, QStringLiteral("Remove extension"), QStringLiteral("Remove \"%1\"?").arg(name)) == QMessageBox::Yes) {
+                ExtensionManager::instance()->remove(id);
+                if (auto* t = activeTab()) t->reload();
+            }
+        });
+    }
     m.addSeparator();
-    auto* split = m.addAction(m_theme->secondaryIcon(QStringLiteral("split-view"), 18), m_splitActive ? QStringLiteral("Close split view") : QStringLiteral("Split view"));
-    connect(split, &QAction::triggered, this, [this]{ toggleSplitView(); });
+    connect(m.addAction(QStringLiteral("Load extension folder…")), &QAction::triggered, this, [this]{ installExtensionFromFolder(); });
+    connect(m.addAction(QStringLiteral("Reload extensions")), &QAction::triggered, this, [this]{
+        ExtensionManager::instance()->reload(); if (auto* t = activeTab()) t->reload(); });
+    connect(m.addAction(QStringLiteral("Open extensions folder")), &QAction::triggered, this, []{
+        const QString f = ExtensionManager::instance()->folder(); QDir().mkpath(f); QDesktopServices::openUrl(QUrl::fromLocalFile(f)); });
+    m.addSeparator();
+    auto* split = m.addAction(m_theme->secondaryIcon(QStringLiteral("split-view"), 18),
+                              m_splitActive ? QStringLiteral("Close split view\tCtrl+Alt+S") : QStringLiteral("Split view\tCtrl+Alt+S"));
+    connect(split, &QAction::triggered, this, [this]{ toggleSplitView(m_splitActive ? -1 : m_tabs->currentIndex()); });
+    if (m_splitActive) {
+        connect(m.addAction(QStringLiteral("Swap sides\tCtrl+Alt+X")), &QAction::triggered, this, [this]{ swapSplitSides(); });
+        connect(m.addAction(QStringLiteral("Make sides equal")), &QAction::triggered, this, [this]{ m_splitter->equalize(); });
+    }
     const QSize sz = m.sizeHint();
     QPoint anchor = m_splitBtn->mapToGlobal(QPoint(m_splitBtn->width(), m_splitBtn->height() + 6));
     m.exec(QPoint(anchor.x() - sz.width(), anchor.y()));
+}
+
+// ---------------------------------------------------------------- 1.8.5 tools + 3D overview
+void BrowserWindow::showNotice(const QString& text) {
+    if (text.isEmpty()) return;
+    const int top = (m_chromeHidden || !m_toolbar) ? 16 : m_toolbar->mapTo(this, QPoint(0, m_toolbar->height())).y() + 12;
+    Motion::bubble(this, text, 1600, top);
+}
+
+void BrowserWindow::toggleNotes() {
+    if (!m_notes) {
+        m_notes = new NotesPanel(m_contentRow);
+        static_cast<QHBoxLayout*>(m_contentRow->layout())->addWidget(m_notes);
+        connect(m_notes, &NotesPanel::closeRequested, this, [this]{ toggleNotes(); });
+        m_notes->hide();
+    }
+    if (m_notes->isVisible()) { m_notes->flush(); m_notes->hide(); return; }
+    m_notes->show();
+    Motion::fadeIn(m_notes, Motion::Base);   // the panel fades in; the page is resized once, not animated
+    m_notes->focusEditor();
+}
+
+void BrowserWindow::takeScreenshot() {
+    auto* t = activeTab();
+    if (!t) return;
+    const QPixmap shot = t->captureView();
+    if (shot.isNull()) { showNotice(QStringLiteral("Nothing to capture")); return; }
+    auto* o = new ScreenshotOverlay(shot, this);
+    o->setGeometry(t->viewRectIn(this));
+    connect(o, &ScreenshotOverlay::finished, this, &BrowserWindow::showNotice);
+    o->show(); o->raise(); o->setFocus();
+}
+
+void BrowserWindow::showPageQr() {
+    auto* t = activeTab();
+    const QString url = t ? t->currentUrl() : QString();
+    if (url.isEmpty() || url.startsWith(QStringLiteral("pacitum:"))) { showNotice(QStringLiteral("Open a website to make a QR code")); return; }
+    auto* d = new QrDialog(url, this);
+    d->open();
+}
+
+void BrowserWindow::togglePictureInPicture() {
+    if (auto* t = activeTab()) t->togglePictureInPicture();
+}
+
+void BrowserWindow::captureActiveThumb() {
+    auto* t = activeTab();
+    if (!t || !t->isVisible() || t->inPictureInPicture()) return;
+    QPixmap pm = t->captureView();
+    if (pm.isNull()) return;
+    if (pm.width() > 640) pm = pm.scaledToWidth(640, Qt::SmoothTransformation);   // small cache = fast 3D frames
+    m_thumbs.insert(t, pm);
+}
+
+void BrowserWindow::showTabOverview() {
+    if (findChild<TabOverview*>(QString(), Qt::FindDirectChildrenOnly)) return;   // already open
+    if (m_tabs->count() < 2) { showNotice(QStringLiteral("Open more tabs to use the overview")); return; }
+    captureActiveThumb();
+    QList<TabOverview::Card> cards;
+    for (int i = 0; i < m_tabs->count(); ++i) {
+        QWidget* w = m_tabs->widget(i);
+        TabOverview::Card c;
+        c.title = m_tabs->tabText(i);
+        c.icon = m_tabs->tabIcon(i);
+        c.shot = m_thumbs.value(w);
+        if (c.shot.isNull() && w && w->isVisible() && !qobject_cast<BrowserTab*>(w)) c.shot = w->grab();   // settings / downloads page
+        cards << c;
+    }
+    // Remember the tabs themselves: one may close while the overview is open, shifting the indexes.
+    QList<QPointer<QWidget>> widgets;
+    for (int i = 0; i < m_tabs->count(); ++i) widgets << m_tabs->widget(i);
+    auto* ov = new TabOverview(cards, m_tabs->currentIndex(), this);
+    ov->setObjectName(QStringLiteral("PacitumWindowOverlay"));   // resizeEvent keeps it at the window size
+    connect(ov, &TabOverview::chosen, this, [this, widgets](int i){
+        if (i < 0 || i >= widgets.size() || !widgets[i]) return;
+        const int at = m_tabs->indexOf(widgets[i]);
+        if (at >= 0) m_tabs->setCurrentIndex(at);
+    });
+    ov->open();
+}
+
+void BrowserWindow::installExtensionFromFolder() {
+    const QString dir = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose an extension folder (with manifest.json)"));
+    if (dir.isEmpty()) return;
+    auto* em = ExtensionManager::instance();
+    PacitumExtension e; QString err;
+    if (!em->readManifest(dir, &e, &err)) { QMessageBox::warning(this, QStringLiteral("Can't load extension"), err); return; }
+    // Extensions run their code on matching pages: say where before installing.
+    const auto answer = QMessageBox::question(this, QStringLiteral("Add extension"),
+        QStringLiteral("Add \"%1\" %2?\n\nIt can read and change pages on:\n%3")
+            .arg(e.name, e.version, e.sites.join(QLatin1Char('\n'))));
+    if (answer != QMessageBox::Yes) return;
+    if (em->install(dir, &err).isEmpty()) { QMessageBox::warning(this, QStringLiteral("Can't load extension"), err); return; }
+    if (auto* t = activeTab()) t->reload();
 }
 
 // spec §4.4 step 3: when the toolbar gets too narrow for a 240 px omnibox, collapse
@@ -517,6 +664,12 @@ void BrowserWindow::setupShortcuts() {
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]{ m_tabs->showTabSearch(); });
     new QShortcut(QKeySequence(QStringLiteral("F12")), this, SLOT(showDevTools()));
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")), this, SLOT(toggleReaderMode()));
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+S")), this, [this]{ toggleSplitView(m_splitActive ? -1 : m_tabs->currentIndex()); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Alt+X")), this, [this]{ swapSplitSides(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")), this, [this]{ takeScreenshot(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Y")), this, [this]{ toggleNotes(); });
+    new QShortcut(QKeySequence(QStringLiteral("Alt+P")), this, [this]{ togglePictureInPicture(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Space")), this, [this]{ showTabOverview(); });
     new QShortcut(QKeySequence(QStringLiteral("Alt+Left")), this, SLOT(goBack()));
     new QShortcut(QKeySequence(QStringLiteral("Alt+Right")), this, SLOT(goForward()));
     for (int i = 1; i <= 9; ++i)
@@ -588,6 +741,9 @@ void BrowserWindow::newTab(const QString& url) {
     });
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
     connect(tab, &BrowserTab::openLinkRequested, this, &BrowserWindow::openLink);
+    connect(tab, &BrowserTab::notice, this, &BrowserWindow::showNotice);
+    connect(tab, &BrowserTab::loadDone, this, [this, tab]{ if (tab == activeTab()) m_thumbTimer.start(); });
+    connect(tab, &QObject::destroyed, this, [this, tab]{ m_thumbs.remove(tab); });
     connect(tab, &BrowserTab::titleChanged, this, [this, tab](const QString& t){ if (!tab->isPrivate() && !tab->isLazy()) m_history->updateTitle(tab->currentUrl(), t); });
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);
     // omnibox progress follows the active tab (animations-spec §7)
@@ -658,7 +814,7 @@ void BrowserWindow::openLink(const QUrl& url, int target) {
     }
     case BrowserTab::SplitView:
         newTab(u);
-        if (!m_splitActive) toggleSplitView(m_tabs->currentIndex());
+        moveTabToSplit(m_tabs->currentIndex());
         break;
     default:
         newTab(u);
@@ -693,9 +849,11 @@ void BrowserWindow::closeTab(int index) {
 }
 
 void BrowserWindow::closeSplitTab(int index) {
-    if (index < 0) return;
-    if (m_splitTabs->count() > 1) m_splitTabs->removeTab(index);
-    else toggleSplitView();
+    if (index < 0 || index >= m_splitTabs->count()) return;
+    QWidget* w = m_splitTabs->widget(index);
+    m_splitTabs->removeTab(index);
+    if (w) w->deleteLater();   // a closed right-side tab really closes (it used to keep running)
+    if (m_splitTabs->count() == 0) closeSplit();
 }
 
 void BrowserWindow::onTabChanged(int index) {
@@ -707,6 +865,8 @@ void BrowserWindow::onTabChanged(int index) {
 
 void BrowserWindow::tabActivated(PacitumTabWidget* sender, int index) {
     m_activeWidget = sender;
+    if (m_splitter) m_splitter->setActivePane(sender);
+    m_thumbTimer.start();   // refresh this tab's 3D-overview card once it has painted
     QWidget* w = sender->widget(index);
     // Switching tabs while a page is fullscreen (Ctrl+Tab, a popup opening a tab): leave fullscreen
     // so the new tab is never shown without chrome.
@@ -990,6 +1150,13 @@ void BrowserWindow::showMenu() {
     add(QStringLiteral("download"), QStringLiteral("Downloads"), QStringLiteral("Ctrl+J"), [this]{ showDownloads(); });
     add(QStringLiteral("bookmarks"), QStringLiteral("Bookmarks"), QStringLiteral("Ctrl+Shift+O"), [this]{ showBookmarksDialog(); });
     add(QStringLiteral("extensions"), QStringLiteral("Extensions"), QString(), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showExtensionsMenu); });
+    m.addSeparator();
+    // 1.8.5 built-in tools
+    add(QStringLiteral("grid"), QStringLiteral("Tab overview (3D)"), QStringLiteral("Ctrl+Shift+Space"), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showTabOverview); });
+    add(QStringLiteral("screenshot"), QStringLiteral("Screenshot"), QStringLiteral("Ctrl+Shift+S"), [this]{ QTimer::singleShot(0, this, &BrowserWindow::takeScreenshot); });
+    add(QStringLiteral("picture-in-picture"), QStringLiteral("Picture-in-picture"), QStringLiteral("Alt+P"), [this]{ togglePictureInPicture(); });
+    add(QStringLiteral("notes"), QStringLiteral("Notes"), QStringLiteral("Ctrl+Shift+Y"), [this]{ toggleNotes(); });
+    add(QStringLiteral("qr-code"), QStringLiteral("QR code for this page"), QString(), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showPageQr); });
     m.addSeparator();
 
     // Zoom row: [zoom] Zoom ......  ( −  100 %  + )  [⛶]
@@ -1385,16 +1552,93 @@ void BrowserWindow::onDownloadRequested(QWebEngineDownloadRequest* dl){
 }
 
 void BrowserWindow::toggleSplitView(int index) {
-    if (!m_splitActive) {
-        m_splitTabs->show(); m_splitActive=true;
-        if (index>=0) { auto* tab=m_tabs->widget(index); QString title=m_tabs->tabText(index); m_tabs->removeTab(index); m_splitTabs->addTab(tab, title); }
-        else newTab();
-        // Actually newTab goes to m_tabs; move last tab to split if we created one
-        if (index<0 && m_tabs->count()>0) { auto* tab=m_tabs->widget(m_tabs->count()-1); QString title=m_tabs->tabText(m_tabs->count()-1); m_tabs->removeTab(m_tabs->count()-1); m_splitTabs->addTab(tab, title); }
-    } else {
-        while(m_splitTabs->count()>0){ auto* tab=m_splitTabs->widget(0); QString title=m_splitTabs->tabText(0); m_splitTabs->removeTab(0); m_tabs->addTab(tab, title); }
-        m_splitTabs->hide(); m_splitActive=false;
+    if (!m_splitActive) openSplit(index); else closeSplit();
+}
+
+// Split open/close/swap: one snapshot of the content area fades out over the new layout, so the
+// web views are resized once instead of every frame.
+void BrowserWindow::splitCrossFade(const std::function<void()>& change) {
+    const int ms = m_animations ? Motion::fadeMs(Motion::Medium) : 0;
+    QWidget* host = m_splitter ? m_splitter->parentWidget() : nullptr;
+    QPixmap shot = (ms > 0 && host && m_splitter->isVisible()) ? m_splitter->grab() : QPixmap();
+    change();
+    if (shot.isNull()) return;
+    auto* veil = new Motion::FadeOverlay(host);
+    veil->setPixmap(shot);
+    veil->setGeometry(m_splitter->geometry());
+    veil->fade(1.0, 0.0, ms, QEasingCurve::OutCubic, 0, QPoint(), true);
+}
+
+void BrowserWindow::openSplit(int index) {
+    if (m_splitActive) { if (index >= 0) moveTabToSplit(index); return; }
+    if (index < 0 || m_tabs->count() < 2) {   // nothing to put on the right yet: a fresh tab goes there
+        newTab();
+        index = m_tabs->currentIndex();
     }
+    splitCrossFade([this, index]{
+        m_splitActive = true;
+        m_splitTabs->show();
+        QWidget* tab = m_tabs->widget(index);
+        const QString title = m_tabs->tabText(index);
+        m_tabs->removeTab(index);
+        m_splitTabs->addTab(tab, title);
+        m_splitTabs->setCurrentWidget(tab);
+        if (auto* bt = qobject_cast<BrowserTab*>(tab)) updateTabIcon(bt);
+        m_splitter->equalize();
+        tabActivated(m_splitTabs, m_splitTabs->currentIndex());
+    });
+}
+
+void BrowserWindow::closeSplit() {
+    if (!m_splitActive) return;
+    splitCrossFade([this]{
+        while (m_splitTabs->count() > 0) {
+            QWidget* tab = m_splitTabs->widget(0);
+            const QString title = m_splitTabs->tabText(0);
+            m_splitTabs->removeTab(0);
+            m_tabs->addTab(tab, title);
+            if (auto* bt = qobject_cast<BrowserTab*>(tab)) updateTabIcon(bt);
+        }
+        m_splitTabs->hide();
+        m_splitActive = false;
+        m_activeWidget = m_tabs;
+        m_splitter->setActivePane(nullptr);
+        if (m_tabs->currentIndex() >= 0) tabActivated(m_tabs, m_tabs->currentIndex());
+    });
+}
+
+void BrowserWindow::moveTabToSplit(int index) {
+    if (index < 0 || index >= m_tabs->count()) return;
+    if (!m_splitActive) { openSplit(index); return; }
+    if (m_tabs->count() < 2) return;   // the left side must keep a tab
+    QWidget* tab = m_tabs->widget(index);
+    const QString title = m_tabs->tabText(index);
+    m_tabs->removeTab(index);
+    m_splitTabs->addTab(tab, title);
+    m_splitTabs->setCurrentWidget(tab);
+    if (auto* bt = qobject_cast<BrowserTab*>(tab)) updateTabIcon(bt);
+    tabActivated(m_splitTabs, m_splitTabs->currentIndex());
+}
+
+void BrowserWindow::moveTabFromSplit(int index) {
+    if (index < 0 || index >= m_splitTabs->count()) return;
+    if (m_splitTabs->count() == 1) { closeSplit(); return; }
+    QWidget* tab = m_splitTabs->widget(index);
+    const QString title = m_splitTabs->tabText(index);
+    m_splitTabs->removeTab(index);
+    const int at = m_tabs->addTab(tab, title);
+    if (auto* bt = qobject_cast<BrowserTab*>(tab)) updateTabIcon(bt);
+    m_tabs->setCurrentIndex(at);
+}
+
+void BrowserWindow::swapSplitSides() {
+    if (!m_splitActive || m_splitter->count() < 2) return;
+    splitCrossFade([this]{
+        const QList<int> sizes = m_splitter->sizes();
+        m_splitter->insertWidget(0, m_splitter->widget(1));
+        m_splitter->setSizes({sizes.value(1), sizes.value(0)});
+        m_splitter->refreshMarker(false);
+    });
 }
 
 void BrowserWindow::toggleDarkMode(){ m_darkMode=!m_darkMode; m_themeSetting = m_darkMode ? QStringLiteral("Dark") : QStringLiteral("Light"); applyTheme(); saveSettings(); }

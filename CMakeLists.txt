@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.8.0 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.8.5 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -14,7 +14,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel
 find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
 
 # Include dirs
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/qrcodegen)
 
 # Sources
 set(SOURCES
@@ -51,6 +51,11 @@ set(SOURCES
     src/PermissionController.cpp
     src/PermissionSettings.cpp
     src/PermissionTest.cpp
+    src/SplitView.cpp
+    src/ExtensionManager.cpp
+    src/Tools.cpp
+    src/TabOverview.cpp
+    third_party/qrcodegen/qrcodegen.cpp
 )
 
 set(HEADERS
@@ -82,6 +87,10 @@ set(HEADERS
     include/PermissionDevices.h
     include/PermissionController.h
     include/PermissionSettings.h
+    include/SplitView.h
+    include/ExtensionManager.h
+    include/Tools.h
+    include/TabOverview.h
 )
 
 # Resources

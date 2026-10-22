@@ -2,6 +2,11 @@
 #include <QResizeEvent>
 #include <QContextMenuEvent>
 #include <QWebEngineContextMenuRequest>
+#include "Tools.h"
+#include <QVBoxLayout>
+#include <QLabel>
+#include <QPushButton>
+#include <QWebEngineScript>
 #include <QFontMetrics>
 #include <QAction>
 #include "Widgets.h"
@@ -178,6 +183,76 @@ void BrowserTab::loadUrl(const QString& raw) {
     }
     ensureActive();
     m_view->setUrl(QUrl(url));
+}
+
+BrowserTab::~BrowserTab() {
+    if (m_pip) endPictureInPicture();   // the view lives in the PiP window: bring it home before we go
+}
+
+QPixmap BrowserTab::captureView() const { return m_view && m_view->isVisible() ? m_view->grab() : QPixmap(); }
+QRect BrowserTab::viewRectIn(QWidget* w) const {
+    if (!m_view || !w) return {};
+    return QRect(m_view->mapTo(w->window(), QPoint(0, 0)) - w->mapTo(w->window(), QPoint(0, 0)), m_view->size());
+}
+
+// Picture-in-picture: Chromium's own API needs a click on the page, so Pacitum pops the page out
+// instead: the main video is pinned to fill the viewport and the web view moves into a small
+// always-on-top window (playback never restarts). "Back to tab" undoes both.
+void BrowserTab::togglePictureInPicture() {
+    if (m_pip) { endPictureInPicture(); return; }
+    static const QString start = QStringLiteral(
+        "(function(){var vs=Array.prototype.slice.call(document.querySelectorAll('video')).filter(function(v){return v.readyState>0&&v.offsetWidth>0;});"
+        "if(!vs.length)return 'none';"
+        "vs.sort(function(a,b){return ((b.paused?0:1)-(a.paused?0:1))||(b.clientWidth*b.clientHeight-a.clientWidth*a.clientHeight);});"
+        "var v=vs[0];v.setAttribute('data-pacitum-pip','1');"
+        "var s=document.getElementById('pacitum-pip-style');if(!s){s=document.createElement('style');s.id='pacitum-pip-style';(document.head||document.documentElement).appendChild(s);}"
+        "s.textContent='html,body{overflow:hidden!important;background:#000!important}body *{visibility:hidden!important}"
+        "video[data-pacitum-pip]{visibility:visible!important;position:fixed!important;left:0!important;top:0!important;width:100vw!important;height:100vh!important;"
+        "max-width:none!important;max-height:none!important;z-index:2147483647!important;background:#000!important;object-fit:contain!important;transform:none!important}';"
+        "if(v.paused){var p=v.play();if(p&&p.catch)p.catch(function(){});}return 'ok';})()");
+    QPointer<BrowserTab> guard(this);
+    m_view->page()->runJavaScript(start, QWebEngineScript::ApplicationWorld, [guard](const QVariant& r) {
+        if (!guard) return;
+        if (r.toString() != QLatin1String("ok")) { emit guard->notice(QStringLiteral("No video playing on this page")); return; }
+        auto* lay = qobject_cast<QVBoxLayout*>(guard->layout());
+        if (!lay || guard->m_pip) return;
+        guard->setNoFreeze(true);
+        guard->m_viewLayoutIndex = lay->indexOf(guard->m_view);
+        lay->removeWidget(guard->m_view);
+        if (!guard->m_pipPlaceholder) {
+            auto* ph = new QWidget(guard);
+            auto* pl = new QVBoxLayout(ph); pl->setAlignment(Qt::AlignCenter); pl->setSpacing(12);
+            auto* t = new QLabel(QStringLiteral("Playing in picture-in-picture"), ph); t->setObjectName(QStringLiteral("SettingsH2")); t->setAlignment(Qt::AlignCenter);
+            auto* b = new QPushButton(QStringLiteral("Bring it back"), ph);
+            QObject::connect(b, &QPushButton::clicked, guard, [g = QPointer<BrowserTab>(guard)]{ if (g) g->endPictureInPicture(); });
+            pl->addWidget(t); pl->addWidget(b, 0, Qt::AlignCenter);
+            guard->m_pipPlaceholder = ph;
+        }
+        lay->insertWidget(qMax(0, guard->m_viewLayoutIndex), guard->m_pipPlaceholder, 1);
+        guard->m_pipPlaceholder->show();
+        auto* pip = new PipWindow(guard->m_view, guard->m_title.isEmpty() ? QStringLiteral("Picture-in-picture") : guard->m_title, guard->window());
+        guard->m_pip = pip;
+        QObject::connect(pip, &PipWindow::returnRequested, guard, [g = QPointer<BrowserTab>(guard)]{ if (g) g->endPictureInPicture(); });
+        pip->show();
+    });
+}
+
+void BrowserTab::endPictureInPicture() {
+    if (!m_pip) return;
+    PipWindow* pip = m_pip;
+    m_pip = nullptr;
+    auto* lay = qobject_cast<QVBoxLayout*>(layout());
+    if (m_pipPlaceholder) { if (lay) lay->removeWidget(m_pipPlaceholder); m_pipPlaceholder->hide(); }
+    m_view->setParent(this);
+    if (lay) lay->insertWidget(qMax(0, m_viewLayoutIndex), m_view, 1);
+    m_view->show();
+    m_view->page()->runJavaScript(QStringLiteral(
+        "(function(){var s=document.getElementById('pacitum-pip-style');if(s)s.remove();"
+        "var v=document.querySelector('video[data-pacitum-pip]');if(v)v.removeAttribute('data-pacitum-pip');})()"),
+        QWebEngineScript::ApplicationWorld);
+    setNoFreeze(false);
+    pip->m_closingByReturn = true;
+    pip->close();
 }
 
 QString BrowserTab::searchUrl(const QString& terms) const {
@@ -440,12 +515,16 @@ void BrowserTab::navTransition(int dir) {
     if (!m_view || !isVisible() || m_view->width() < 2) return;
     const int fade = Motion::fadeMs(Motion::Medium);
     if (fade <= 0) return;
-    const QPixmap pm = m_view->grab();   // one snapshot; the web view itself is never animated
+    QPixmap pm = m_view->grab();   // one snapshot; the web view itself is never animated
     if (pm.isNull()) return;
     if (!m_navShot) m_navShot = new Motion::FadeOverlay(this);
+    const bool depth = Motion::enabled();
+    // 1.8.5 3D: the old page turns away in perspective. A half-size snapshot keeps each frame cheap.
+    if (depth) pm = pm.scaled(pm.size() / 2, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     m_navShot->setPixmap(pm);
     m_navShot->setGeometry(QRect(m_view->mapTo(this, QPoint(0, 0)), m_view->size()));
-    m_navShot->fade(1.0, 0.0, fade, QEasingCurve::OutCubic, 0, Motion::enabled() ? QPoint(dir < 0 ? 32 : -32, 0) : QPoint());
+    if (depth) m_navShot->setTilt(dir < 0 ? 24.0 : -24.0, 0.94);
+    m_navShot->fade(1.0, 0.0, fade, QEasingCurve::OutCubic, 0, depth ? QPoint(dir < 0 ? 24 : -24, 0) : QPoint());
 }
 
 void BrowserTab::resizeEvent(QResizeEvent* e) {

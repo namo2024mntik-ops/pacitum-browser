@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Pacitum Browser
+GenericName=Web Browser
+Comment=A calm, fast web browser
+Exec=PacitumBrowser %U
+Icon=pacitum-browser
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+StartupWMClass=PacitumBrowser
+Keywords=web;browser;internet;

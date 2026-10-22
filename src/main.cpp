@@ -62,7 +62,9 @@ static QString logDir() {
     wchar_t buf[MAX_PATH]; DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
     QString base = n ? QString::fromWCharArray(buf, int(n)) : QDir::tempPath();
 #else
-    QString base = QDir::homePath() + QStringLiteral("/.local/share");
+    // Linux: ~/.local/share, macOS: ~/Library/Application Support (same place as the profile data)
+    QString base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (base.isEmpty()) base = QDir::homePath() + QStringLiteral("/.local/share");
 #endif
     g_logDir = base + QStringLiteral("/Pacitum/Pacitum Browser");
     QDir().mkpath(g_logDir);

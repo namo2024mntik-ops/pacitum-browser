@@ -8,6 +8,7 @@ Version 1.8.5:
 - **Extensions**: user scripts and styles loaded from a folder with a `manifest.json` (simple Chrome content-script extensions load too). See `examples/extensions/`.
 - **Built-in tools**: screenshot (Ctrl+Shift+S), picture-in-picture (Alt+P), notes side panel (Ctrl+Shift+Y), QR code for the page.
 - **3D**: 3D tab overview (Ctrl+Shift+Space), back/forward pages turn away in perspective, 3D depth on the New Tab page. All off with reduced motion.
+- **Linux and macOS**: builds on all three systems (Linux AppImage, macOS `.dmg` with red/yellow/green window buttons); the updater downloads the right file for each. See `BUILD.md`.
 - The Inter font ships with the app (`resources/fonts`, SIL Open Font License); QR codes use Nayuki's QR Code generator (`third_party/qrcodegen`, MIT).
 
 Version 1.7.8: omnibox inline hints select only the untyped suffix.

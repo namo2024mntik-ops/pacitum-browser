@@ -285,7 +285,12 @@ void BrowserWindow::setupUI() {
         connect(m_minBtn, &QToolButton::clicked, this, &QWidget::showMinimized);
         connect(m_maxBtn, &QToolButton::clicked, this, [this]{ isMaximized() ? showNormal() : showMaximized(); });
         connect(m_closeBtn, &QToolButton::clicked, this, &QWidget::close);
+#ifdef Q_OS_MACOS
+        // macOS order and place: close, minimise, zoom on the left, before the tabs
+        sl->insertWidget(0, m_closeBtn); sl->insertWidget(1, m_minBtn); sl->insertWidget(2, m_maxBtn); sl->insertSpacing(3, 12);
+#else
         sl->addWidget(m_minBtn); sl->addWidget(m_maxBtn); sl->addWidget(m_closeBtn);
+#endif
         m_tabStrip->installEventFilter(this);
         m_tabs->stripBar()->installEventFilter(this);
     }

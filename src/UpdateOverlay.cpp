@@ -37,6 +37,15 @@ double easeOut(double t) { return 1 - std::pow(1 - t, 3); }
 double easeOutBack(double t) { const double c = 1.70158, c3 = c + 1; return 1 + c3 * std::pow(t - 1, 3) + c * std::pow(t - 1, 2); }
 QColor alpha(QColor c, double a) { c.setAlphaF(clamp01(a) * c.alphaF()); return c; }
 
+// Old pop-up content fading out above the new content during Sheet::swap().
+class Cover : public QWidget {
+public:
+    using QWidget::QWidget;
+    QPixmap pm; double op = 0;
+protected:
+    void paintEvent(QPaintEvent*) override { QPainter p(this); p.setOpacity(op); p.drawPixmap(0, 0, pm); }
+};
+
 // The tick from the design: M5 12.5 l4.5 4.5 L19 7.5 (24 × 24 box), drawn up to `t`.
 void drawCheck(QPainter& p, const QPointF& c, double size, double t, const QColor& col, double width) {
     if (t <= 0) return;
@@ -278,7 +287,7 @@ Sheet::Sheet(const Colors& c, QWidget* parent, bool onTop) : QWidget(parent), m_
     bl->addStretch(1);
     l->addLayout(bl);
 
-    m_cover = new QWidget(this);
+    m_cover = new Cover(this);
     m_cover->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_cover->hide();
     relayout();
@@ -381,25 +390,14 @@ void Sheet::swap(const std::function<void()>& change) {
     const QPixmap old = m_body->grab();
     change();
     relayout();
-    auto* cover = m_cover;
+    auto* cover = static_cast<Cover*>(m_cover);
+    cover->pm = old; cover->op = 1.0;
     cover->setGeometry(m_body->geometry());
-    cover->setProperty("op", 1.0);
     cover->show(); cover->raise();
-    // paint the old content fading out above the new one
-    struct Painter : QObject {
-        QPixmap pm; QWidget* w;
-        Painter(QWidget* wd, QPixmap p) : QObject(wd), pm(std::move(p)), w(wd) {}
-        bool eventFilter(QObject*, QEvent* e) override {
-            if (e->type() != QEvent::Paint) return false;
-            QPainter p(w); p.setOpacity(w->property("op").toDouble()); p.drawPixmap(0, 0, pm); return true;
-        }
-    };
-    for (auto* o : cover->findChildren<Painter*>(QString(), Qt::FindDirectChildrenOnly)) delete o;
-    auto* pt = new Painter(cover, old); cover->installEventFilter(pt);
     auto* a = new QVariantAnimation(cover);
     a->setStartValue(1.0); a->setEndValue(0.0); a->setDuration(m_reduced ? 100 : 200);
-    connect(a, &QVariantAnimation::valueChanged, cover, [cover](const QVariant& v){ cover->setProperty("op", v); cover->update(); });
-    connect(a, &QVariantAnimation::finished, cover, [cover, pt]{ cover->hide(); cover->removeEventFilter(pt); pt->deleteLater(); });
+    connect(a, &QVariantAnimation::valueChanged, cover, [cover](const QVariant& v){ cover->op = v.toDouble(); cover->update(); });
+    connect(a, &QVariantAnimation::finished, cover, [cover]{ cover->hide(); cover->pm = QPixmap(); });
     a->start(QAbstractAnimation::DeleteWhenStopped);
 }
 

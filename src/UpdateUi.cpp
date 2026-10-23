@@ -24,6 +24,7 @@
 #include <QDateTime>
 #include <QFileInfo>
 #include <QStyle>
+#include <QtMath>
 #include <memory>
 
 void pacitumLog(const QString& line);   // main.cpp (startup.log)

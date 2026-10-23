@@ -1,26 +1,43 @@
 # Build — Pacitum Browser
 
-## Verified CMake parsing
-```
-cmake version 4.4.4 — compiler GNU 15.2.0 detected
-=> Fails only at find_package(Qt6) because Qt6 not installed on this machine.
-   CMakeLists.txt:11 syntax is valid.
-```
+Pacitum builds on **Windows, Linux and macOS** with Qt 6.8+ (Qt WebEngine), CMake 3.16+ and a C++17 compiler.
+Install Qt with the official Qt Online Installer (or `aqtinstall`) and include the modules
+**Qt WebEngine, Qt WebChannel, Qt Positioning**, and optionally **Qt Serial Port** and **Qt Connectivity** (Bluetooth).
 
-## Full build (requires Qt6 + WebEngine)
+## Windows (MSVC)
+```bat
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
+cmake --build build
+build\PacitumBrowser.exe
+```
+Installer: `installer.iss` (Inno Setup 6.6+), see `.github/workflows/windows.yml`.
+
+## Linux
 ```bash
-# Install Qt (example: official Qt installer -> C:/Qt/6.9.1/msvc2022_64)
-cmake -B build -DCMAKE_PREFIX_PATH="C:/Qt/6.9.1/msvc2022_64" -G Ninja
-cmake --build build --config Release
-./build/PacitumBrowser.exe  # shares browser_history.db / bookmarks.json with the Python prototype
+sudo apt install ninja-build libgl1-mesa-dev libxkbcommon-x11-0 libxcb-cursor0 libnss3   # Debian/Ubuntu
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/gcc_64"
+cmake --build build
+./build/PacitumBrowser
+sudo cmake --install build      # optional: binary, menu entry and icon under /usr/local
 ```
+An AppImage is produced by `.github/workflows/linux-macos.yml` (linuxdeploy + Qt plugin).
+Data and logs: `~/.local/share/Pacitum/Pacitum Browser`.
 
-Requirements: Qt 6.5+, QtWebEngineWidgets, QtSvg, CMake 3.16+, C++17 compiler.
+## macOS (Apple silicon or Intel)
+```bash
+brew install ninja
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$HOME/Qt/6.8.3/macos" -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+cmake --build build
+open build/PacitumBrowser.app
+```
+To share the app: `macdeployqt build/PacitumBrowser.app` then `codesign --force --deep --sign - build/PacitumBrowser.app`
+(ad-hoc signature; Apple silicon won't run unsigned code). CI builds a `.dmg`.
+The download isn't notarized, so the first launch needs right-click → **Open**.
+Data and logs: `~/Library/Application Support/Pacitum/Pacitum Browser`.
 
-MSYS2 would need `mingw-w64-ucrt-x86_64-qt6-webengine` but that package is currently not
-available in MSYS2 repos — use the official Qt installer instead.
-
-## Project stats
-- 14 headers in `include/` + 15 sources in `src/` + CMakeLists.txt + resources.qrc
-- Lines: ~3000+ LOC, 1:1 parity with Python version
-- Data files compatible: browser_settings.json, bookmarks.json, browser_session.json, browser_history.db
+## Platform notes
+- **Window frame:** Pacitum draws its own title bar. Windows uses native snap/resize hit-testing; Linux and macOS move
+  and resize through the system (`startSystemMove` / `startSystemResize`). macOS shows red/yellow/green buttons on the left.
+- **Updates:** the built-in updater picks the asset for the running system: `*Setup*.exe` (Windows, installs and
+  restarts), `*linux*.AppImage` (replaces the running AppImage and restarts), `*macOS*.dmg` (opens the disk image).
+- **Shortcuts:** `Ctrl` shortcuts are `Cmd` on macOS (Qt maps them automatically).

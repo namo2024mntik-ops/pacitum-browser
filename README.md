@@ -2,6 +2,10 @@
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.
+Version 1.8.6:
+- **Linux and macOS**: Pacitum now builds and runs on all three systems. Linux gets an AppImage; macOS gets a `.dmg` with the red/yellow/green window buttons and the camera/microphone permission texts macOS requires. The updater downloads the right file for each system. See `BUILD.md`.
+- Fix: the browser could crash while closing (from 1.8.5).
+
 Version 1.8.5:
 - **UI refresh**: the active tab merges into the toolbar and slides between tabs; rounded-rectangle omnibox; new tab, link, image, text and page right-click menus; Settings search with a sliding theme switcher.
 - **Split view**: grip handle (double-click for 50/50), accent bar on the focused side, swap sides (Ctrl+Alt+X), toggle with Ctrl+Alt+S, links open straight into the right side.

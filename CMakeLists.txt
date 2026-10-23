@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.8.5 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.8.6 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -103,7 +103,14 @@ if(WIN32)
     set(APP_RC ${CMAKE_SOURCE_DIR}/resources/app.rc)
 endif()
 
-add_executable(PacitumBrowser ${SOURCES} ${HEADERS} ${RESOURCES} ${APP_RC})
+set(APP_ICNS "")
+if(APPLE)
+    # macOS: a real .app bundle with the icon and the permission texts web pages need
+    set(APP_ICNS ${CMAKE_SOURCE_DIR}/resources/macos/pacitum.icns)
+    set_source_files_properties(${APP_ICNS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+endif()
+
+add_executable(PacitumBrowser ${SOURCES} ${HEADERS} ${RESOURCES} ${APP_RC} ${APP_ICNS})
 target_compile_definitions(PacitumBrowser PRIVATE PACITUM_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(PacitumBrowser PRIVATE
@@ -128,6 +135,16 @@ if(WIN32)
 endif()
 
 # Platform specific
+if(APPLE)
+    set_target_properties(PacitumBrowser PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_SOURCE_DIR}/resources/macos/Info.plist.in
+        MACOSX_BUNDLE_BUNDLE_NAME "Pacitum Browser"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.pacitum.browser"
+        MACOSX_BUNDLE_ICON_FILE pacitum.icns
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+endif()
 if(WIN32)
     set_target_properties(PacitumBrowser PROPERTIES WIN32_EXECUTABLE TRUE)
     # Enable High DPI
@@ -140,4 +157,9 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/resources")
 endif()
 
 # Install
-install(TARGETS PacitumBrowser DESTINATION bin)
+install(TARGETS PacitumBrowser BUNDLE DESTINATION . RUNTIME DESTINATION bin)
+if(UNIX AND NOT APPLE)
+    # Linux: menu entry + icon (the AppImage build in CI uses the same files)
+    install(FILES resources/linux/pacitum-browser.desktop DESTINATION share/applications)
+    install(FILES resources/linux/pacitum-browser.png DESTINATION share/icons/hicolor/256x256/apps)
+endif()

@@ -137,7 +137,14 @@ void Updater::check(bool userInitiated) {
         info.notes = rel.value(QStringLiteral("body")).toString();
         info.pageUrl = rel.value(QStringLiteral("html_url")).toString();
         const auto assets = rel.value(QStringLiteral("assets")).toArray();
+        // Each platform takes its own release asset: Windows Setup .exe, Linux AppImage, macOS .dmg.
+#if defined(Q_OS_WIN)
         static const QRegularExpression setupRe(QStringLiteral("setup.*\\.exe$"), QRegularExpression::CaseInsensitiveOption);
+#elif defined(Q_OS_MACOS)
+        static const QRegularExpression setupRe(QStringLiteral("macos.*\\.dmg$"), QRegularExpression::CaseInsensitiveOption);
+#else
+        static const QRegularExpression setupRe(QStringLiteral("linux.*\\.appimage$"), QRegularExpression::CaseInsensitiveOption);
+#endif
         for (const auto& av : assets) {
             const auto a = av.toObject(); const QString n = a.value(QStringLiteral("name")).toString();
             if (setupRe.match(n).hasMatch() && info.installerName.isEmpty()) {
@@ -178,7 +185,13 @@ void Updater::download(const UpdateInfo& info) {
     QDir().mkpath(dir);
     QString name = QFileInfo(info.installerName).fileName();
     name.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")));
+#if defined(Q_OS_WIN)
     if (name.isEmpty()) name = QStringLiteral("PacitumBrowser-Setup.exe");
+#elif defined(Q_OS_MACOS)
+    if (name.isEmpty()) name = QStringLiteral("PacitumBrowser-macOS.dmg");
+#else
+    if (name.isEmpty()) name = QStringLiteral("PacitumBrowser-linux-x86_64.AppImage");
+#endif
     m_file = dir + QLatin1Char('/') + name;
     QFile::remove(m_file);
     delete m_out; m_out = new QFile(m_file + QStringLiteral(".part"), this);
@@ -292,8 +305,25 @@ bool Updater::installAndRelaunch() {
     pacitumLog(QStringLiteral("update: installer helper started=%1").arg(ok));
     if (ok) QTimer::singleShot(0, qApp, []{ for (auto* w : QApplication::topLevelWidgets()) w->close(); QCoreApplication::quit(); });
     return ok;
+#elif defined(Q_OS_MACOS)
+    // macOS: open the downloaded disk image; the user drags the new app over the old one.
+    if (m_file.isEmpty() || !QFile::exists(m_file)) return false;
+    const bool ok = QProcess::startDetached(QStringLiteral("/usr/bin/open"), {m_file});
+    pacitumLog(QStringLiteral("update: opened %1 ok=%2").arg(m_file).arg(ok));
+    return false;   // nothing replaced in place; the dialog shows where the file was saved
 #else
-    return false;   // the installer is Windows-only; the dialog shows where the file was saved
+    // Linux AppImage: swap the running AppImage file for the new one and restart it.
+    const QString current = qEnvironmentVariable("APPIMAGE");
+    if (m_file.isEmpty() || !QFile::exists(m_file) || current.isEmpty() || !QFileInfo(current).isWritable()) return false;
+    const QString staged = current + QStringLiteral(".new");
+    QFile::remove(staged);
+    if (!QFile::copy(m_file, staged)) return false;
+    QFile::setPermissions(staged, QFile::permissions(current) | QFileDevice::ExeOwner | QFileDevice::ExeUser);
+    if (!QFile::remove(current) || !QFile::rename(staged, current)) { pacitumLog(QStringLiteral("update: could not replace %1").arg(current)); return false; }
+    const bool ok = QProcess::startDetached(current, {});
+    pacitumLog(QStringLiteral("update: replaced %1, relaunch=%2").arg(current).arg(ok));
+    if (ok) QTimer::singleShot(0, qApp, []{ for (auto* w : QApplication::topLevelWidgets()) w->close(); QCoreApplication::quit(); });
+    return ok;
 #endif
 }
 
@@ -355,7 +385,14 @@ UpdateDialog::UpdateDialog(const UpdateInfo& info, QWidget* parent) : QDialog(pa
         m_bar->setValue(1000);
         m_status->setText(tr("Installing… Pacitum will restart in a moment."));
         if (!Updater::instance()->installAndRelaunch()) {
-            m_status->setText(tr("Couldn't start the installer. It was saved to %1").arg(QDir::toNativeSeparators(Updater::instance()->downloadedPath())));
+            const QString where = QDir::toNativeSeparators(Updater::instance()->downloadedPath());
+#if defined(Q_OS_MACOS)
+            m_status->setText(tr("Downloaded. Drag Pacitum Browser from the opened window into Applications. (Saved to %1)").arg(where));
+#elif defined(Q_OS_WIN)
+            m_status->setText(tr("Couldn't start the installer. It was saved to %1").arg(where));
+#else
+            m_status->setText(tr("Downloaded to %1. Replace your Pacitum AppImage with it and start it again.").arg(where));
+#endif
             m_update->setEnabled(true);
         }
     });

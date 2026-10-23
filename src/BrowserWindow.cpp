@@ -747,7 +747,6 @@ void BrowserWindow::newTab(const QString& url) {
     connect(tab, &BrowserTab::titleChanged, this, &BrowserWindow::updateTabTitle);
     connect(tab, &BrowserTab::openLinkRequested, this, &BrowserWindow::openLink);
     connect(tab, &BrowserTab::notice, this, &BrowserWindow::showNotice);
-    connect(tab, &BrowserTab::loadDone, this, [this, tab]{ if (tab == activeTab()) m_thumbTimer.start(); });
     connect(tab, &QObject::destroyed, this, [this, tab]{ m_thumbs.remove(tab); });
     connect(tab, &BrowserTab::titleChanged, this, [this, tab](const QString& t){ if (!tab->isPrivate() && !tab->isLazy()) m_history->updateTitle(tab->currentUrl(), t); });
     connect(tab, &BrowserTab::loadingChanged, this, &BrowserWindow::onTabLoading);

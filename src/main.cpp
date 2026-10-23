@@ -154,7 +154,12 @@ static void setupEnvironment() {
 
     // Conservative, driver-safe Chromium flags. (Earlier builds disabled GPU driver-bug workarounds,
     // forced desktop OpenGL and passed --enable-features twice, which made Chromium drop the first list.)
-    QByteArray flags = QByteArray("--enable-gpu-rasterization --enable-zero-copy");
+    // 1.8.7: no forced --enable-gpu-rasterization / --enable-zero-copy. Forcing them skips Chromium's
+    // per-GPU blocklist, and zero-copy tiles made 3D / animated pages blink on mouse move on some
+    // drivers. Chromium still turns both on by itself where the GPU is known to handle them.
+    // PACITUM_DISABLE_GPU=1 falls back to software rendering for broken drivers.
+    QByteArray flags;
+    if (qEnvironmentVariableIntValue("PACITUM_DISABLE_GPU")) flags += "--disable-gpu --disable-gpu-compositing";
 #ifdef Q_OS_WIN
     flags += " --enable-features=OverlayScrollbar,ParallelDownloading --disable-features=DCompPresenter";
 #else

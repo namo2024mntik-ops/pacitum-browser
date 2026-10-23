@@ -42,12 +42,11 @@ svg.i{width:16px;height:16px;flex:none}
 .menu button{display:flex;width:100%;height:34px;align-items:center;gap:10px;padding:0 10px;border-radius:10px;text-align:left}
 .menu button:hover,.menu button:focus-visible{background:var(--surf);outline:0}.menu .a{color:var(--acc);font-weight:600}
 @keyframes pop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-/* 1.8.5 3D: the background blobs float in depth and follow the pointer; shortcut tiles tilt toward it.
-   Only transform/opacity change (GPU-composited), updates are batched per animation frame. */
-.bgl#calm{perspective:900px;transform-style:preserve-3d}
-.blob{will-change:transform;transition:transform .5s cubic-bezier(.22,1,.36,1)}
-.sc.t3{transition:transform .08s linear,background-color .12s var(--out),box-shadow .16s var(--out);will-change:transform}
-html.rm .blob,html.rm .sc{transform:none!important}
+/* 1.8.7 depth: the blurred background blobs drift with the pointer (2D translate only, so Chromium
+   moves the already-blurred layer instead of re-blurring it every frame, which made pages blink).
+   Shortcut tiles no longer tilt: tilting inside the dock's backdrop blur forced a re-blur per frame. */
+.blob{will-change:transform;backface-visibility:hidden;transition:transform .6s cubic-bezier(.22,1,.36,1)}
+html.rm .blob{transform:none!important}
 /* dock */
 .dock{display:flex;gap:4px;padding:10px;border-radius:22px;background:color-mix(in srgb,var(--card) 70%,transparent);box-shadow:inset 0 0 0 1px var(--bord);margin-top:28px;backdrop-filter:blur(20px);max-width:100%;flex-wrap:wrap;justify-content:center}
 .sc{width:96px;height:96px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:9px;font-size:12px;position:relative;color:var(--txt);text-decoration:none;transition:background-color .12s var(--out),box-shadow .16s var(--out);touch-action:none}
@@ -361,23 +360,15 @@ engine();sync();apply();reading();downloads();
 if(/customize/.test(location.hash)||sessionStorage.getItem("pacitum.sheet")){sessionStorage.removeItem("pacitum.sheet");openSheet(true)}
 setInterval(greet,30e3);
 
-/* 1.8.5 3D depth (skipped with reduced motion). One rAF per pointer move, transforms only. */
+/* 1.8.7 depth (skipped with reduced motion): one rAF per pointer move, translate only. */
 (function(){
   if(H.classList.contains("rm"))return;
-  var b1=document.querySelector(".b1"),b2=document.querySelector(".b2"),mx=0,my=0,queued=false,tile=null,tx=0,ty=0;
+  var b1=document.querySelector(".b1"),b2=document.querySelector(".b2"),mx=0,my=0,queued=false;
   function frame(){queued=false;
-    if(b1)b1.style.transform="translate3d("+(mx*-28)+"px,"+(my*-20)+"px,60px) rotateX("+(my*6)+"deg) rotateY("+(mx*-8)+"deg)";
-    if(b2)b2.style.transform="translate3d("+(mx*34)+"px,"+(my*24)+"px,-40px) rotateX("+(my*-5)+"deg) rotateY("+(mx*7)+"deg)";
-    if(tile)tile.style.transform="perspective(500px) rotateX("+(ty*-14)+"deg) rotateY("+(tx*14)+"deg) translateZ(6px)";}
+    if(b1)b1.style.transform="translate3d("+(mx*-36).toFixed(1)+"px,"+(my*-26).toFixed(1)+"px,0)";
+    if(b2)b2.style.transform="translate3d("+(mx*42).toFixed(1)+"px,"+(my*30).toFixed(1)+"px,0)";}
   function ask(){if(!queued){queued=true;requestAnimationFrame(frame);}}
-  function drop(){if(tile){tile.style.transform="";tile.classList.remove("t3");tile=null;}}
-  addEventListener("pointermove",function(e){
-    mx=e.clientX/innerWidth-.5;my=e.clientY/innerHeight-.5;
-    var t=e.target&&e.target.closest?e.target.closest(".sc"):null;
-    if(t&&!t.classList.contains("lift")&&!document.querySelector(".sc.lift")){var r=t.getBoundingClientRect();tx=(e.clientX-r.left)/r.width-.5;ty=(e.clientY-r.top)/r.height-.5;
-      if(tile!==t){drop();tile=t;t.classList.add("t3");}}
-    else drop();
-    ask();},{passive:true});
-  document.addEventListener("pointerleave",function(){mx=my=0;drop();ask();});
+  addEventListener("pointermove",function(e){mx=e.clientX/innerWidth-.5;my=e.clientY/innerHeight-.5;ask();},{passive:true});
+  document.addEventListener("pointerleave",function(){mx=my=0;ask();});
 })();
 </script></body></html>

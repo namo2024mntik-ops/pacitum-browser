@@ -56,6 +56,7 @@ public:
     explicit NotesPanel(QWidget* parent = nullptr);
     void focusEditor();
     void flush();                 // save now
+    void reload();                // re-read notes.txt (after a sync)
 signals:
     void closeRequested();
 private:

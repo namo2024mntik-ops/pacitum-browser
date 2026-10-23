@@ -194,6 +194,14 @@ NotesPanel::NotesPanel(QWidget* parent) : QWidget(parent) {
     connect(m_edit, &QPlainTextEdit::textChanged, this, [this]{ m_status->setText(QStringLiteral("Editing…")); m_save.start(); });
     connect(close, &QToolButton::clicked, this, &NotesPanel::closeRequested);
 }
+void NotesPanel::reload() {
+    QFile f(notesPath());
+    const QString text = f.open(QIODevice::ReadOnly) ? QString::fromUtf8(f.readAll()) : QString();
+    if (text == m_edit->toPlainText()) return;
+    const QSignalBlocker block(m_edit);   // not an edit: don't schedule a save
+    m_edit->setPlainText(text);
+    m_status->setText(QStringLiteral("Updated from sync"));
+}
 void NotesPanel::focusEditor() { m_edit->setFocus(); m_edit->moveCursor(QTextCursor::End); }
 void NotesPanel::flush() {
     m_save.stop();

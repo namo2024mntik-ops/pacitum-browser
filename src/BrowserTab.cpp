@@ -3,6 +3,8 @@
 #include <QContextMenuEvent>
 #include <QWebEngineContextMenuRequest>
 #include "Tools.h"
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QPushButton>
@@ -166,6 +168,23 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
     connect(m_view, &QWebEngineView::loadProgress, this, &BrowserTab::onLoadProgress);
     connect(m_view, &QWebEngineView::loadFinished, this, &BrowserTab::onLoadFinished);
     connect(m_view, &QWebEngineView::iconChanged, this, &BrowserTab::iconChanged);
+    // 1.8.8 speed: hovering a link to another site opens the connection early (DNS + TCP + TLS), so the
+    // click loads sooner. Only a <link rel=preconnect> hint: nothing is downloaded, at most 24 sites a page.
+    connect(m_view, &QWebEngineView::loadStarted, this, [this]{ m_preconnected.clear(); });
+    connect(m_page, &QWebEnginePage::linkHovered, this, [this](const QString& link) {
+        const QUrl u(link);
+        if (u.scheme() != QLatin1String("https") && u.scheme() != QLatin1String("http")) return;
+        const QString origin = u.scheme() + QStringLiteral("://") + u.authority();
+        const QUrl here = m_view->url();
+        if (m_private || origin == here.scheme() + QStringLiteral("://") + here.authority()) return;
+        if (m_preconnected.contains(origin) || m_preconnected.size() >= 24) return;
+        m_preconnected.insert(origin);
+        const QString js = QStringLiteral(
+            "(function(o){if(!document.head)return;var l=document.createElement('link');l.rel='preconnect';l.href=o;"
+            "document.head.appendChild(l);var d=document.createElement('link');d.rel='dns-prefetch';d.href=o;document.head.appendChild(d);})(%1)")
+            .arg(QString::fromUtf8(QJsonDocument(QJsonArray{origin}).toJson(QJsonDocument::Compact)).mid(1).chopped(1));
+        m_page->runJavaScript(js, QWebEngineScript::ApplicationWorld);
+    });
 
     if (!url.isEmpty()) loadUrl(url);
 }

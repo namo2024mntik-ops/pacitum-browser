@@ -11,6 +11,8 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QFileDialog>
+#include <QStandardPaths>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -237,6 +239,23 @@ ProfileEditDialog::ProfileEditDialog(const ProfileInfo& p, bool create, QWidget*
         connect(b, &QToolButton::clicked, this, [this, g]{ m_p.avatar = g; refreshPreview(); Motion::pop(m_avatar); });
         arow->addWidget(b); m_glyphBtns << b;
     }
+    {   // 1.8.8: your own photo (cropped to a circle)
+        auto* b = new QToolButton(form); b->setFixedSize(52, 52); b->setIconSize(QSize(52, 52)); b->setCheckable(true); b->setAutoRaise(true);
+        b->setStyleSheet(QStringLiteral("QToolButton{background:transparent;border:none;padding:0;}"));
+        b->setCursor(Qt::PointingHandCursor); b->setToolTip(QStringLiteral("Use a photo…")); b->setAccessibleName(QStringLiteral("Use a photo"));
+        connect(b, &QToolButton::clicked, this, [this]{
+            const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Choose a profile photo"),
+                QStandardPaths::writableLocation(QStandardPaths::PicturesLocation), QStringLiteral("Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"));
+            if (f.isEmpty()) { refreshPreview(); return; }
+            QImage img(f);
+            if (img.isNull()) { QMessageBox::warning(this, QStringLiteral("Profile photo"), QStringLiteral("That file isn't an image Pacitum can read.")); refreshPreview(); return; }
+            m_photo = ProfileManager::squarePhoto(img);
+            ProfileManager::setPendingPhoto(m_p.id, m_photo);
+            m_p.avatar = QStringLiteral("photo");
+            refreshPreview(); Motion::pop(m_avatar);
+        });
+        arow->addWidget(b); m_photoBtn = b;
+    }
     arow->addStretch(); fl->addLayout(arow); fl->addStretch();
     top->addWidget(form, 1);
     v->addLayout(top, 1);
@@ -308,7 +327,22 @@ void ProfileEditDialog::refreshPreview() {
         b->setIcon(QIcon(ProfileManager::avatarPixmap(q, 44, dpr, sel ? 2 : 0, pal().page)));
         b->setChecked(sel);
     }
+    if (m_photoBtn) {
+        ProfileInfo q = shown; q.avatar = QStringLiteral("photo");
+        const bool sel = m_p.avatar == QStringLiteral("photo");
+        if (!ProfileManager::photoFor(q).isNull()) m_photoBtn->setIcon(QIcon(ProfileManager::avatarPixmap(q, 44, dpr, sel ? 2 : 0, pal().page)));
+        else {   // no photo yet: an "add photo" circle
+            QPixmap s(qRound(52 * dpr), qRound(52 * dpr)); s.setDevicePixelRatio(dpr); s.fill(Qt::transparent);
+            QPainter g(&s); g.setRenderHint(QPainter::Antialiasing);
+            g.setPen(QPen(QColor(pal().borderStrong), 1.5, Qt::DashLine)); g.setBrush(QColor(pal().surface)); g.drawEllipse(QRectF(5, 5, 42, 42));
+            g.drawPixmap(QPointF(16, 16), ThemeManager::icon(QStringLiteral("camera"), pal().textSecondary, 20).pixmap(QSize(20, 20), dpr));
+            g.end(); m_photoBtn->setIcon(QIcon(s));
+        }
+        m_photoBtn->setChecked(sel);
+    }
 }
+
+ProfileEditDialog::~ProfileEditDialog() { ProfileManager::setPendingPhoto(QString(), QImage()); }
 
 void ProfileEditDialog::accept() {
     if (m_name->text().trimmed().isEmpty()) {
@@ -324,7 +358,11 @@ bool ProfileEditDialog::editProfile(const QString& id, QWidget* parent) {
     if (!pm->contains(id)) return false;
     ProfileEditDialog d(pm->profile(id), false, parent);
     const int r = d.exec();
-    if (r == QDialog::Accepted) { pm->update(d.result()); return true; }
+    if (r == QDialog::Accepted) {
+        pm->update(d.result());
+        if (!d.photo().isNull() && d.result().avatar == QStringLiteral("photo")) pm->setPhoto(id, d.photo());
+        return true;
+    }
     return r == 2;
 }
 QString ProfileEditDialog::addProfile(QWidget* parent) {
@@ -337,7 +375,10 @@ QString ProfileEditDialog::addProfile(QWidget* parent) {
     ProfileEditDialog d(p, true, parent);
     if (d.exec() != QDialog::Accepted) return {};
     const ProfileInfo r = d.result();
-    return ProfileManager::instance()->create(r.name, r.colour, r.avatar).id;
+    const bool photo = r.avatar == QStringLiteral("photo") && !d.photo().isNull();
+    const QString id = ProfileManager::instance()->create(r.name, r.colour, photo ? QStringLiteral("initial") : r.avatar).id;
+    if (photo) ProfileManager::instance()->setPhoto(id, d.photo());
+    return id;
 }
 
 // ======================= switcher =======================

@@ -9,6 +9,7 @@
 #include <QFrame>
 #include <QUrl>
 #include <QPointer>
+#include <QSet>
 #include <QPixmap>
 #include <QWebEngineFullScreenRequest>
 class QLabel;
@@ -102,6 +103,7 @@ private:
     QPointer<class PipWindow> m_pip;
     QWidget* m_pipPlaceholder = nullptr;
     int m_viewLayoutIndex = -1;
+    QSet<QString> m_preconnected;        // origins warmed up by hovering links on this page (1.8.8)
     void showSignInBar(const QUrl& target);
     void checkGoogleSignIn(const QUrl& url);
     class InfoBar* m_signInBar = nullptr;

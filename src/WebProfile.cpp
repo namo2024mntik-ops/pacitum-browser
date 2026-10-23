@@ -112,7 +112,7 @@ void configureProfile(QWebEngineProfile* profile, bool persistent) {
     if (persistent) {
         profile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
         profile->setHttpCacheType(QWebEngineProfile::DiskHttpCache);
-        profile->setHttpCacheMaximumSize(250 * 1024 * 1024);
+        profile->setHttpCacheMaximumSize(512 * 1024 * 1024);   // 1.8.8: more repeat visits come from disk
     }
     auto* s = profile->settings();
     s->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);

@@ -79,6 +79,12 @@ public:
     static bool migrateLegacy(const QString& root, QString* log = nullptr, const std::function<void(qint64, qint64)>& progress = {});
 
     static QPixmap avatarPixmap(const ProfileInfo& p, int size, qreal dpr, int ring = 0, const QString& gapColour = QString());
+    // 1.8.8 custom photo: avatar "photo" draws <profile>/avatar.png (a centred square, 256 px).
+    QString photoPath(const QString& id) const;
+    bool setPhoto(const QString& id, const QImage& img);       // crop + save + avatar = "photo" + notify
+    static QImage squarePhoto(const QImage& img);             // centred square crop, 256 px
+    static void setPendingPhoto(const QString& id, const QImage& img);   // edit-dialog preview (null = clear)
+    static QImage photoFor(const ProfileInfo& p);             // pending, else the saved file (cached)
     static int runProfileTest();              // --profile-test (CI): prints PROFILES OK / PROFILES FAIL
 
 signals:

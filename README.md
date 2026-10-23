@@ -2,6 +2,12 @@
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.
+Version 1.8.8:
+- **Google sync**: sign in with Google in Settings › Sync and Google; bookmarks, settings, notes and recent history sync between computers through a private area of your Google Drive. One-time setup of the Google sign-in key: see `SYNC.md`.
+- **Profile photo**: use your own picture (Edit profile › camera button) or your Google account photo as the profile avatar.
+- **Developer tools work again** (F12): the Windows build no longer deletes the developer-tools files.
+- **Faster browsing**: the blocker also stops ad/tracker subdomains (e.g. www.google-analytics.com) and no longer blocks pages you open yourself; hovering a link to another site opens the connection early; the disk cache is 512 MB.
+
 Version 1.8.7:
 - Fix: 3D and animated web pages (and the New Tab page) could blink while moving the mouse. Pacitum no longer forces Chromium's zero-copy and GPU-rasterization modes (Chromium enables them itself where the GPU supports them), the New Tab depth effect moves its blurred background without re-blurring it, and tab-overview snapshots are taken less often. `PACITUM_DISABLE_GPU=1` switches to software rendering for broken graphics drivers.
 - The ⋮ menu is shorter: New tab / New window / Private tab and the built-in tools are one row each.
@@ -82,7 +88,7 @@ Qt Creator: Open `CMakeLists.txt` → Configure → Run.
 - Tabs: drag, close others/right, duplicate, split view (two PacitumTabWidgets in QSplitter), pin/mute, vertical mode (Ctrl+Shift+E)
 - Navigation, history (SQLite), bookmarks (JSON), downloads (QWebEngineDownloadRequest), find (Ctrl+F), zoom 25-500%
 - Ad blocker (host + path interceptor), private mode (NoPersistentCookies), session restore, Do Not Track
-- Hardware acceleration, GPU raster, 250MB disk cache, spellcheck, crash auto-reload
+- Hardware acceleration, GPU raster, 512 MB disk cache, spellcheck, crash auto-reload
 
 Made by Ai (Grok bot + opencode-BaseApp + claude code)
 

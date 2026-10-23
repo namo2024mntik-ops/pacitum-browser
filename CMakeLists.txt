@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.8.7 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.8.8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,6 +55,7 @@ set(SOURCES
     src/ExtensionManager.cpp
     src/Tools.cpp
     src/TabOverview.cpp
+    src/SyncManager.cpp
     third_party/qrcodegen/qrcodegen.cpp
 )
 
@@ -91,6 +92,7 @@ set(HEADERS
     include/ExtensionManager.h
     include/Tools.h
     include/TabOverview.h
+    include/SyncManager.h
 )
 
 # Resources
@@ -112,6 +114,14 @@ endif()
 
 add_executable(PacitumBrowser ${SOURCES} ${HEADERS} ${RESOURCES} ${APP_RC} ${APP_ICNS})
 target_compile_definitions(PacitumBrowser PRIVATE PACITUM_VERSION="${PROJECT_VERSION}")
+# 1.8.8 Google Drive sync: a Google Cloud OAuth client of type "Desktop app" (see SYNC.md).
+# Leave empty to let users paste their own in Settings › Sync › Advanced.
+set(PACITUM_GOOGLE_CLIENT_ID "" CACHE STRING "Google OAuth client ID (Desktop app) for sync")
+set(PACITUM_GOOGLE_CLIENT_SECRET "" CACHE STRING "Google OAuth client secret for sync")
+if(PACITUM_GOOGLE_CLIENT_ID)
+    target_compile_definitions(PacitumBrowser PRIVATE
+        PACITUM_GOOGLE_CLIENT_ID="${PACITUM_GOOGLE_CLIENT_ID}" PACITUM_GOOGLE_CLIENT_SECRET="${PACITUM_GOOGLE_CLIENT_SECRET}")
+endif()
 
 target_link_libraries(PacitumBrowser PRIVATE
     Qt6::Widgets

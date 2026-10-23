@@ -94,6 +94,7 @@
 #include "ExtensionManager.h"
 #include "Tools.h"
 #include "TabOverview.h"
+#include "SyncManager.h"
 #include <QHBoxLayout>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -133,6 +134,7 @@ BrowserWindow::BrowserWindow(QWidget* parent) : QMainWindow(parent) {
     restoreOrNewTab();
     updateDownloadsButton();
     installPopupFactory();
+    setupSync();
     qApp->installEventFilter(this);
     m_noBackgroundUpdates = qApp->arguments().contains(QStringLiteral("--smoke-test")) || qApp->arguments().contains(QStringLiteral("--stress-test")) || qApp->arguments().contains(QStringLiteral("--resize-test")) || qApp->arguments().contains(QStringLiteral("--permissions-test"));
     setupUpdater();
@@ -212,6 +214,8 @@ void BrowserWindow::installPopupFactory() {
 
 BrowserWindow::~BrowserWindow() {
     qApp->removeEventFilter(this);
+    if (auto* sm = SyncManager::instance(); sm->history() == m_history) sm->setHistory(nullptr);   // m_history is deleted below
+    SyncManager::instance()->disconnect(this);
     // Child widgets (tab bars, tabs) are deleted after this body and after our members are gone.
     // Cut their signals to us now, so no handler runs against freed members (m_thumbs, m_thumbTimer)
     // while the window is being torn down.
@@ -522,6 +526,22 @@ void BrowserWindow::showExtensionsMenu() {
     const QSize sz = m.sizeHint();
     QPoint anchor = m_splitBtn->mapToGlobal(QPoint(m_splitBtn->width(), m_splitBtn->height() + 6));
     m.exec(QPoint(anchor.x() - sz.width(), anchor.y()));
+}
+
+// ---------------------------------------------------------------- 1.8.8 Google Drive sync
+void BrowserWindow::setupSync() {
+    auto* sm = SyncManager::instance();
+    if (!sm->history()) sm->setHistory(m_history);
+    connect(sm, &SyncManager::aboutToCollect, this, [this]{ if (m_notes) m_notes->flush(); m_history->flush(); });
+    connect(sm, &SyncManager::applied, this, [this](const QStringList& kinds){
+        if (kinds.contains(QStringLiteral("bookmarks"))) {
+            m_bookmarks->load();
+            if (m_bookmarksBar) m_bookmarksBar->refresh();
+            if (auto* t = activeTab()) m_addressBar->setBookmarked(m_bookmarks->isBookmarked(t->currentUrl()));
+        }
+        if (kinds.contains(QStringLiteral("settings"))) { loadSettings(); applyTheme(); }
+        if (kinds.contains(QStringLiteral("notes")) && m_notes) m_notes->reload();
+    });
 }
 
 // ---------------------------------------------------------------- 1.8.5 tools + 3D overview
@@ -1129,11 +1149,16 @@ void BrowserWindow::showMenu() {
         hdr->setFixedHeight(52); hdr->setCursor(Qt::PointingHandCursor);
         auto* hl = new QHBoxLayout(hdr); hl->setContentsMargins(10, 8, 10, 8); hl->setSpacing(12);
         const QString name = ProfileManager::instance()->current().name;
-        auto* av = new QLabel(name.left(1).toUpper(), hdr); av->setObjectName(QStringLiteral("MenuAvatar"));
+        auto* av = new QLabel(hdr);   // 1.8.8: same avatar as everywhere else (photo, glyph or initial)
         av->setFixedSize(36, 36); av->setAlignment(Qt::AlignCenter);
+        av->setPixmap(ProfileManager::avatarPixmap(ProfileManager::instance()->current(), 36, devicePixelRatioF()));
         auto* col = new QVBoxLayout; col->setSpacing(1); col->setContentsMargins(0, 0, 0, 0);
         auto* nl = new QLabel(name, hdr); nl->setObjectName(QStringLiteral("MenuProfileName"));
-        auto* sl = new QLabel(m_privateBadge->isVisible() ? QStringLiteral("Private browsing") : QStringLiteral("Local profile · Not syncing"), hdr);
+        const auto* sync = SyncManager::instance();
+        const QString subtitle = m_privateBadge->isVisible() ? QStringLiteral("Private browsing")
+                               : sync->signedIn() ? QStringLiteral("Syncing · %1").arg(sync->account().email.isEmpty() ? QStringLiteral("Google account") : sync->account().email)
+                               : QStringLiteral("Local profile · Not syncing");
+        auto* sl = new QLabel(subtitle, hdr);
         sl->setObjectName(QStringLiteral("MenuProfileSub"));
         col->addWidget(nl); col->addWidget(sl);
         auto* chev = new QLabel(hdr); chev->setPixmap(m_theme->secondaryIcon(QStringLiteral("chevron-right"), 16).pixmap(QSize(16, 16), devicePixelRatioF()));

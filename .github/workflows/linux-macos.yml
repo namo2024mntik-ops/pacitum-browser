@@ -29,8 +29,11 @@ jobs:
             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 \
             libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libasound2 xvfb libfuse2 file
       - name: Build
+        env:   # Google sync OAuth client (repo secrets; empty = users paste their own in Settings)
+          GOOGLE_ID: ${{ secrets.PACITUM_GOOGLE_CLIENT_ID }}
+          GOOGLE_SECRET: ${{ secrets.PACITUM_GOOGLE_CLIENT_SECRET }}
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr "-DPACITUM_GOOGLE_CLIENT_ID=$GOOGLE_ID" "-DPACITUM_GOOGLE_CLIENT_SECRET=$GOOGLE_SECRET"
           cmake --build build
       - name: Smoke test (window opens and stays up)
         env:
@@ -81,9 +84,12 @@ jobs:
           modules: 'qtwebengine qtwebchannel qtpositioning qtserialport qtconnectivity'
           cache: true
       - name: Build
+        env:
+          GOOGLE_ID: ${{ secrets.PACITUM_GOOGLE_CLIENT_ID }}
+          GOOGLE_SECRET: ${{ secrets.PACITUM_GOOGLE_CLIENT_SECRET }}
         run: |
           brew list ninja >/dev/null 2>&1 || brew install ninja
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0 "-DPACITUM_GOOGLE_CLIENT_ID=$GOOGLE_ID" "-DPACITUM_GOOGLE_CLIENT_SECRET=$GOOGLE_SECRET"
           cmake --build build
       - name: Bundle Qt into the app + ad-hoc sign
         run: |

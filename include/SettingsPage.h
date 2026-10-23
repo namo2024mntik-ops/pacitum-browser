@@ -36,6 +36,7 @@ private:
     QWidget* contentPage();
     QWidget* downloadsPage();
     QWidget* aboutPage();
+    QWidget* syncPage();
 
     class SitePermissionsPage* m_sitePerms = nullptr;
     QListWidget* m_nav = nullptr;

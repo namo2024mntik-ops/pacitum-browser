@@ -23,6 +23,8 @@
 #include <QLockFile>
 #include <QPainter>
 #include <QPainterPath>
+#include <QImage>
+#include <QHash>
 #include <QProcess>
 #include <QSaveFile>
 #include <QTcpServer>
@@ -71,6 +73,44 @@ ProfileManager* ProfileManager::instance() { static auto* m = new ProfileManager
 ProfileManager::ProfileManager(QObject* parent) : QObject(parent) {}
 
 QString ProfileManager::profileDir(const QString& id) const { return m_root + QStringLiteral("/profiles/") + id; }
+
+// ---- 1.8.8 custom profile photo ----
+namespace { QString s_pendingId; QImage s_pendingPhoto; bool s_hasPending = false; }
+QString ProfileManager::photoPath(const QString& id) const { return profileDir(id) + QStringLiteral("/avatar.png"); }
+QImage ProfileManager::squarePhoto(const QImage& src) {
+    if (src.isNull()) return {};
+    const int side = qMin(src.width(), src.height());
+    const QImage sq = src.copy((src.width() - side) / 2, (src.height() - side) / 2, side, side);
+    return sq.scaled(256, 256, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).convertToFormat(QImage::Format_ARGB32_Premultiplied);
+}
+void ProfileManager::setPendingPhoto(const QString& id, const QImage& img) {
+    s_hasPending = !img.isNull(); s_pendingId = id; s_pendingPhoto = img;
+}
+QImage ProfileManager::photoFor(const ProfileInfo& p) {
+    if (s_hasPending && p.id == s_pendingId) return s_pendingPhoto;
+    if (p.id.isEmpty()) return {};
+    static QHash<QString, QPair<qint64, QImage>> cache;   // path -> (mtime, image)
+    const QString path = instance()->photoPath(p.id);
+    const QFileInfo fi(path);
+    if (!fi.exists()) return {};
+    const qint64 stamp = fi.lastModified().toMSecsSinceEpoch() ^ fi.size();
+    auto it = cache.find(path);
+    if (it != cache.end() && it->first == stamp) return it->second;
+    QImage img(path);
+    cache.insert(path, qMakePair(stamp, img));
+    return img;
+}
+bool ProfileManager::setPhoto(const QString& id, const QImage& img) {
+    if (!contains(id)) return false;
+    const QImage sq = squarePhoto(img);
+    if (sq.isNull()) return false;
+    QDir().mkpath(profileDir(id));
+    if (!sq.save(photoPath(id), "PNG")) return false;
+    ProfileInfo p = profile(id);
+    p.avatar = QStringLiteral("photo");
+    update(p);   // notifies windows (avatar repaint)
+    return true;
+}
 
 QJsonObject ProfileManager::readRegistry() const {
     const QFileInfo fi(m_root + QLatin1Char('/') + kRegistry);
@@ -456,9 +496,19 @@ QPixmap ProfileManager::avatarPixmap(const ProfileInfo& p, int size, qreal dpr, 
                      ThemeManager::icon(QStringLiteral("profile-guest"), pal.textSecondary, gs).pixmap(QSize(gs, gs), dpr));
         return pm;
     }
+    if (p.avatar == QStringLiteral("photo")) {
+        const QImage img = photoFor(p);
+        if (!img.isNull()) {
+            QPainterPath clip; clip.addEllipse(r);
+            g.setClipPath(clip);
+            g.setRenderHint(QPainter::SmoothPixmapTransform);
+            g.drawImage(r, img);
+            return pm;
+        }
+    }
     QLinearGradient lg(r.topLeft(), r.bottomRight()); lg.setColorAt(0, c.lighter(115)); lg.setColorAt(1, c.darker(125));
     g.setPen(Qt::NoPen); g.setBrush(lg); g.drawEllipse(r);
-    if (p.avatar.isEmpty() || p.avatar == QStringLiteral("initial")) {
+    if (p.avatar.isEmpty() || p.avatar == QStringLiteral("initial") || p.avatar == QStringLiteral("photo")) {
         QFont f = g.font(); f.setPixelSize(qMax(8, qRound(size * 0.44))); f.setWeight(QFont::DemiBold); g.setFont(f);
         g.setPen(Qt::white);
         g.drawText(r, Qt::AlignCenter, p.name.trimmed().left(1).toUpper());

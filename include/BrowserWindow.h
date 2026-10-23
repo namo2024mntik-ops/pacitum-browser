@@ -109,6 +109,7 @@ private slots:
     void showTabOverview();
     void captureActiveThumb();
     void showNotice(const QString& text);
+    void setupSync();
     void duplicateTab(int index);
     void muteTab(int index, bool muted);
     void pinTab(int index, bool pinned);

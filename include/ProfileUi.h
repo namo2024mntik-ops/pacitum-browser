@@ -1,4 +1,5 @@
 #pragma once
+#include <QImage>
 #include <QWidget>
 #include <QDialog>
 #include <QFrame>
@@ -47,6 +48,12 @@ private:
     QLineEdit* m_name = nullptr; QLabel* m_error = nullptr;
     QLabel* m_avatar = nullptr; QLabel* m_previewName = nullptr; QWidget* m_mini = nullptr;
     QList<QAbstractButton*> m_colourBtns, m_glyphBtns;
+    QAbstractButton* m_photoBtn = nullptr;
+    QImage m_photo;                       // chosen in this dialog, saved on accept
+public:
+    QImage photo() const { return m_photo; }
+    ~ProfileEditDialog() override;
+private:
 };
 
 // §2.2 toolbar profile switcher popup.

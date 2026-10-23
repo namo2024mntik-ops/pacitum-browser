@@ -1,6 +1,9 @@
 #include "SettingsPage.h"
 #include "ThemeManager.h"
 #include "Widgets.h"
+#include "SyncManager.h"
+#include "ProfileManager.h"
+#include <QMessageBox>
 #include <QListWidget>
 #include <QStackedWidget>
 #include <QScrollArea>
@@ -25,6 +28,7 @@
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
 #include <QPointer>
+#include <QLocale>
 #include <algorithm>
 
 #include "AppSettings.h"
@@ -63,6 +67,7 @@ SettingsPage::SettingsPage(QWidget* parent) : QWidget(parent) {
     struct S { const char* icon; const char* name; QWidget* (SettingsPage::*fn)(); };
     const S sections[] = {
         {"settings-appearance", "Appearance", &SettingsPage::appearancePage},
+        {"sync-devices", "Sync and Google", &SettingsPage::syncPage},
         {"settings-search", "Search engine", &SettingsPage::searchPage},
         {"settings-startup", "On startup", &SettingsPage::startupPage},
         {"settings-privacy", "Privacy and security", &SettingsPage::privacyPage},
@@ -304,6 +309,91 @@ QWidget* SettingsPage::downloadsPage() {
     addRow(c, QStringLiteral("Location"), QString(), w);
     addRow(c, QStringLiteral("Ask where to save each file before downloading"), QString(), makeSwitch(QStringLiteral("ask_download_location"), false));
     addRow(c, QStringLiteral("Always show downloads button"), QStringLiteral("Otherwise it appears after the first download"), makeSwitch(QStringLiteral("pin_downloads_button"), false));
+    return page;
+}
+
+// 1.8.8 Google Drive sync
+QWidget* SettingsPage::syncPage() {
+    QVBoxLayout* l; QWidget* page = section(QStringLiteral("Sync and Google"), &l);
+    auto* sm = SyncManager::instance();
+    auto* intro = new QLabel(QStringLiteral("Sign in with Google to keep bookmarks, settings, notes and history the same on every computer "
+                                            "where you use Pacitum. They're stored in a private Pacitum area of your Google Drive that "
+                                            "only Pacitum can read; they don't appear in your Drive files."));
+    intro->setObjectName(QStringLiteral("RowSub")); intro->setWordWrap(true);
+    l->addWidget(intro); l->addSpacing(6);
+
+    auto* c = card(l, QString());
+    auto* acct = new QWidget(); auto* al = new QHBoxLayout(acct); al->setContentsMargins(0, 0, 0, 0); al->setSpacing(10);
+    auto* status = new QLabel(acct); status->setObjectName(QStringLiteral("RowSub")); status->setWordWrap(true); status->setMinimumWidth(220);
+    auto* signIn = new QPushButton(QStringLiteral("Sign in with Google"), acct); signIn->setObjectName(QStringLiteral("PrimaryButton"));
+    auto* syncNow = new QPushButton(QStringLiteral("Sync now"), acct);
+    auto* signOut = new QPushButton(QStringLiteral("Sign out"), acct);
+    for (auto* b : {signIn, syncNow, signOut}) b->setCursor(Qt::PointingHandCursor);
+    al->addWidget(status, 1); al->addWidget(signIn); al->addWidget(syncNow); al->addWidget(signOut);
+    addRow(c, QStringLiteral("Google account"), QString(), acct);
+    auto* usePhoto = new QPushButton(QStringLiteral("Use Google photo"));
+    usePhoto->setCursor(Qt::PointingHandCursor);
+    addRow(c, QStringLiteral("Profile photo"), QStringLiteral("Show your Google account picture as this profile's avatar"), usePhoto);
+    QWidget* photoRow = usePhoto->parentWidget();
+
+    auto* what = card(l, QStringLiteral("What to sync"));
+    const struct { const char* key; const char* title; const char* sub; } kinds[] = {
+        {"bookmarks", "Bookmarks", "Added and deleted bookmarks follow you"},
+        {"settings", "Settings", "Theme, accent, search engine, home page, privacy switches (not folders or update settings)"},
+        {"notes", "Notes", "The Notes side panel"},
+        {"history", "History", "Your 500 most recent pages (deleting history isn't synced)"},
+    };
+    for (const auto& k : kinds) {
+        auto* sw = new ToggleSwitch(); sw->setChecked(sm->syncs(QString::fromLatin1(k.key)));
+        const QString key = QString::fromLatin1(k.key);
+        connect(sw, &ToggleSwitch::toggled, this, [key](bool on){ SyncManager::instance()->setSyncs(key, on); });
+        addRow(what, QString::fromLatin1(k.title), QString::fromLatin1(k.sub), sw);
+    }
+
+    auto* adv = card(l, QStringLiteral("Advanced"));
+    auto* idEdit = new QLineEdit(sm->clientId()); idEdit->setPlaceholderText(QStringLiteral("…apps.googleusercontent.com")); idEdit->setMinimumWidth(320);
+    auto* secretEdit = new QLineEdit(read().value(QStringLiteral("sync_client_secret")).toString()); secretEdit->setEchoMode(QLineEdit::Password);
+    secretEdit->setPlaceholderText(QStringLiteral("Client secret")); secretEdit->setMinimumWidth(320);
+    auto saveClient = [idEdit, secretEdit]{ SyncManager::instance()->setClient(idEdit->text(), secretEdit->text()); };
+    connect(idEdit, &QLineEdit::editingFinished, this, saveClient);
+    connect(secretEdit, &QLineEdit::editingFinished, this, saveClient);
+    addRow(adv, QStringLiteral("Google OAuth client ID"),
+           QStringLiteral("Only needed if this build doesn't include one: create a \"Desktop app\" OAuth client with the Google Drive API in Google Cloud (see SYNC.md)."), idEdit);
+    addRow(adv, QStringLiteral("Client secret"), QString(), secretEdit);
+
+    auto refresh = [sm, status, signIn, syncNow, signOut, photoRow]{
+        const bool in = sm->signedIn();
+        QString text;
+        if (in) {
+            const auto a = sm->account();
+            text = a.email.isEmpty() ? QStringLiteral("Signed in") : QStringLiteral("Signed in as %1").arg(a.email);
+            if (sm->lastSync().isValid()) text += QStringLiteral(" · last synced %1").arg(QLocale().toString(sm->lastSync(), QLocale::ShortFormat));
+        } else text = sm->hasClient() ? QStringLiteral("Not signed in") : QStringLiteral("Not available yet: add an OAuth client ID under Advanced");
+        if (!sm->status().isEmpty()) text += QStringLiteral("\n") + sm->status();
+        status->setText(text);
+        signIn->setVisible(!in); signIn->setEnabled(sm->hasClient());
+        syncNow->setVisible(in); syncNow->setEnabled(!sm->busy());
+        signOut->setVisible(in);
+        if (photoRow) photoRow->setVisible(in && !sm->account().picture.isEmpty());
+    };
+    connect(sm, &SyncManager::changed, page, refresh);
+    connect(signIn, &QPushButton::clicked, this, []{ SyncManager::instance()->signIn(); });
+    connect(syncNow, &QPushButton::clicked, this, []{ SyncManager::instance()->syncNow(); });
+    connect(signOut, &QPushButton::clicked, this, [this]{
+        if (QMessageBox::question(this, QStringLiteral("Sign out"), QStringLiteral("Stop syncing this profile? Your data stays on this computer and in your Google Drive.")) == QMessageBox::Yes)
+            SyncManager::instance()->signOut();
+    });
+    connect(usePhoto, &QPushButton::clicked, this, [usePhoto]{
+        usePhoto->setEnabled(false);
+        QPointer<QPushButton> guard(usePhoto);
+        SyncManager::instance()->fetchPhoto([guard](const QImage& img){
+            if (guard) guard->setEnabled(true);
+            if (img.isNull()) return;
+            auto* pm = ProfileManager::instance();
+            pm->setPhoto(pm->currentId(), img);
+        });
+    });
+    refresh();
     return page;
 }
 

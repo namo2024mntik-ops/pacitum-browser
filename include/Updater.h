@@ -3,16 +3,12 @@
 #include <QString>
 #include <QUrl>
 #include <QPointer>
-#include <QDialog>
+#include <QStringList>
 
 class QNetworkAccessManager;
 #include <QNetworkReply>
 class QTimer;
 class QFile;
-class QLabel;
-class QProgressBar;
-class QPushButton;
-class QTextBrowser;
 
 // Built-in updater (1.5.2).
 //
@@ -22,8 +18,10 @@ class QTextBrowser;
 // Overrides (first wins): env PACITUM_UPDATE_FEED, setting "update_feed_url".
 // Flow: check -> compare versions -> prompt with release notes -> download the Setup .exe with
 // progress -> verify size (and SHA256 when a "<installer>.sha256" or "SHA256SUMS" asset exists) ->
-// quit and run the Inno installer with /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1
-// (same AppId: in-place upgrade) -> the installer starts the new version.
+// "Restart now" -> startInstall(): a helper (PacitumUpdateHelper.exe on Windows, the new AppImage
+// with --update-overlay on Linux) shows the "Installing update…" pop-up, waits for the browser to
+// exit, runs Setup /VERYSILENT … /RELAUNCH=1 (same AppId: in-place upgrade) and stays on screen
+// until the new version writes markerFile(). The new version then shows "Update done" (1.8.9).
 struct UpdateInfo {
     QString version;        // "1.5.3"
     QString tag;            // "v1.5.3"
@@ -51,7 +49,14 @@ public:
     void check(bool userInitiated);
     void download(const UpdateInfo& info);
     void cancelDownload();
-    bool installAndRelaunch();          // Windows: starts the installer helper and quits the app
+    // Starts the install helper with these extra pop-up arguments (--cx/--cy/--colors…). False when
+    // nothing could be started: macOS opens the disk image instead, other cases keep the app open.
+    bool startInstall(const QStringList& overlayArgs);
+    static QString workDir();           // <temp>/PacitumUpdate: download, helper copy, hand-off files
+    static QString readyFile() { return workDir() + QStringLiteral("/overlay-ready"); }    // helper's pop-up is on screen
+    static QString markerFile() { return workDir() + QStringLiteral("/relaunched"); }      // new version is running
+    static QString pendingFile() { return workDir() + QStringLiteral("/pending.json"); }   // what was installed (for "Update done")
+    static QStringList noteLines(const QString& markdown, int max = 4);   // release-note bullets as plain text
     const UpdateInfo& latest() const { return m_latest; }
     QString downloadedPath() const { return m_file; }
     bool busy() const { return m_reply != nullptr; }
@@ -80,20 +85,4 @@ private:
     QFile* m_out = nullptr;
     QString m_file;
     QString m_status;
-};
-
-// Prompt: version, release notes, progress bar, Update now / Later / Skip this version.
-class UpdateDialog : public QDialog {
-    Q_OBJECT
-public:
-    UpdateDialog(const UpdateInfo& info, QWidget* parent = nullptr);
-private:
-    void startDownload();
-    UpdateInfo m_info;
-    QLabel* m_status = nullptr;
-    QProgressBar* m_bar = nullptr;
-    QPushButton* m_update = nullptr;
-    QPushButton* m_later = nullptr;
-    QPushButton* m_skip = nullptr;
-    QTextBrowser* m_notes = nullptr;
 };

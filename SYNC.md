@@ -4,6 +4,17 @@ Pacitum syncs bookmarks, settings, notes and recent history through **your own G
 (a hidden app-data area only Pacitum can read). To sign users in, Google needs an
 **OAuth client** for the app. You create it once, for free.
 
+**Easiest:** in Pacitum open **Settings › Sync and Google › Start the guide**. It walks through the steps below
+with a picture of each page, opens the right Google Cloud page for you and reads the downloaded client file.
+
+| | |
+|---|---|
+| ![Create a project](resources/sync-guide/step1-project.png) | ![Turn on the Drive API](resources/sync-guide/step2-drive.png) |
+| ![Sign-in screen](resources/sync-guide/step3-branding.png) | ![Test users](resources/sync-guide/step4-testers.png) |
+| ![Desktop client](resources/sync-guide/step5-client.png) | ![Signing in](resources/sync-guide/step7-consent.png) |
+
+(Drawings of the Google pages; the real ones may look slightly different.)
+
 ## 1. Create the OAuth client (Google Cloud Console)
 1. Open <https://console.cloud.google.com/> and create a project (for example *Pacitum Browser*).
 2. **APIs & Services → Library** → enable **Google Drive API**.

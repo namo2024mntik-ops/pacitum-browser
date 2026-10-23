@@ -171,7 +171,7 @@ private:
     void setupUpdater();
     void showUpdatePrompt(const struct UpdateInfo& info);
     class Updater* m_updater = nullptr;
-    QPointer<class UpdateDialog> m_updateDialog;
+    class UpdatePill* m_updatePill = nullptr;   // toolbar: "Update" / download ring / "Restart"
     bool m_pendingUpdatePrompt = false;
     bool m_noBackgroundUpdates = false;
     // 1.6 home page bridge

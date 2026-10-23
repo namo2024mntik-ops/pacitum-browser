@@ -32,6 +32,7 @@
 #include <algorithm>
 
 #include "AppSettings.h"
+#include "SyncGuide.h"
 #include "PermissionSettings.h"
 #include "SitePermissions.h"
 
@@ -322,6 +323,14 @@ QWidget* SettingsPage::syncPage() {
     intro->setObjectName(QStringLiteral("RowSub")); intro->setWordWrap(true);
     l->addWidget(intro); l->addSpacing(6);
 
+    // 1.8.9: builds without a built-in Google client get a guided setup with pictures
+    auto* setup = card(l, QString());
+    auto* startGuide = new QPushButton(QStringLiteral("Start the guide")); startGuide->setObjectName(QStringLiteral("PrimaryButton"));
+    startGuide->setCursor(Qt::PointingHandCursor);
+    addRow(setup, QStringLiteral("Set up Google sync"),
+           QStringLiteral("A step-by-step guide with pictures connects Pacitum to your Google account. About 5 minutes, once."), startGuide);
+    connect(startGuide, &QPushButton::clicked, this, [this]{ SyncGuide::open(window()); });
+
     auto* c = card(l, QString());
     auto* acct = new QWidget(); auto* al = new QHBoxLayout(acct); al->setContentsMargins(0, 0, 0, 0); al->setSpacing(10);
     auto* status = new QLabel(acct); status->setObjectName(QStringLiteral("RowSub")); status->setWordWrap(true); status->setMinimumWidth(220);
@@ -360,24 +369,37 @@ QWidget* SettingsPage::syncPage() {
     addRow(adv, QStringLiteral("Google OAuth client ID"),
            QStringLiteral("Only needed if this build doesn't include one: create a \"Desktop app\" OAuth client with the Google Drive API in Google Cloud (see SYNC.md)."), idEdit);
     addRow(adv, QStringLiteral("Client secret"), QString(), secretEdit);
+    auto* guideBtn = new QPushButton(QStringLiteral("Open the setup guide")); guideBtn->setCursor(Qt::PointingHandCursor);
+    connect(guideBtn, &QPushButton::clicked, this, [this]{ SyncGuide::open(window()); });
+    addRow(adv, QStringLiteral("Setup guide"), QStringLiteral("Pictures of each Google Cloud page and where to click"), guideBtn);
+    connect(SyncManager::instance(), &SyncManager::changed, idEdit, [idEdit, secretEdit]{   // the guide saved a client
+        if (idEdit->hasFocus() || secretEdit->hasFocus()) return;
+        idEdit->setText(SyncManager::instance()->clientId());
+        secretEdit->setText(AppSettings::get(QStringLiteral("sync_client_secret")).toString());
+    });
 
-    auto refresh = [sm, status, signIn, syncNow, signOut, photoRow]{
+    auto refresh = [sm, status, signIn, syncNow, signOut, photoRow, setup]{
         const bool in = sm->signedIn();
         QString text;
         if (in) {
             const auto a = sm->account();
             text = a.email.isEmpty() ? QStringLiteral("Signed in") : QStringLiteral("Signed in as %1").arg(a.email);
             if (sm->lastSync().isValid()) text += QStringLiteral(" · last synced %1").arg(QLocale().toString(sm->lastSync(), QLocale::ShortFormat));
-        } else text = sm->hasClient() ? QStringLiteral("Not signed in") : QStringLiteral("Not available yet: add an OAuth client ID under Advanced");
+        } else text = sm->hasClient() ? QStringLiteral("Not signed in") : QStringLiteral("Needs a one-time setup first");
         if (!sm->status().isEmpty()) text += QStringLiteral("\n") + sm->status();
         status->setText(text);
-        signIn->setVisible(!in); signIn->setEnabled(sm->hasClient());
+        signIn->setVisible(!in); signIn->setEnabled(!sm->busy());
+        signIn->setText(sm->hasClient() ? QStringLiteral("Sign in with Google") : QStringLiteral("Set up sync"));
+        if (QWidget* sc = setup) sc->setVisible(!sm->hasClient() && !in);
         syncNow->setVisible(in); syncNow->setEnabled(!sm->busy());
         signOut->setVisible(in);
         if (photoRow) photoRow->setVisible(in && !sm->account().picture.isEmpty());
     };
     connect(sm, &SyncManager::changed, page, refresh);
-    connect(signIn, &QPushButton::clicked, this, []{ SyncManager::instance()->signIn(); });
+    connect(signIn, &QPushButton::clicked, this, [this]{
+        if (SyncManager::instance()->hasClient()) SyncManager::instance()->signIn();
+        else SyncGuide::open(window());
+    });
     connect(syncNow, &QPushButton::clicked, this, []{ SyncManager::instance()->syncNow(); });
     connect(signOut, &QPushButton::clicked, this, [this]{
         if (QMessageBox::question(this, QStringLiteral("Sign out"), QStringLiteral("Stop syncing this profile? Your data stays on this computer and in your Google Drive.")) == QMessageBox::Yes)

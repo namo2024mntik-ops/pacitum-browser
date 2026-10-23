@@ -2,6 +2,10 @@
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.
+Version 1.8.9:
+- **New updater**: an "update available" card under the toolbar, one progress ring while downloading (Show details for MB, speed and time left; Hide puts the progress in the toolbar), a "Restart now" prompt, then the window shrinks away while an "Installing update…" pop-up stays on screen until the new version is running, which greets you with "Update done" and what's new from the GitHub release. If the old version hangs while closing, it is ended after 25 s instead of blocking the update.
+- **Google sync setup guide**: Settings › Sync and Google › Start the guide. Seven steps with a picture of each Google Cloud page, numbered highlights showing where to click, buttons that open the right page, and a drop zone for the downloaded client file (or it picks the Client ID up from the clipboard).
+
 Version 1.8.8:
 - **Google sync**: sign in with Google in Settings › Sync and Google; bookmarks, settings, notes and recent history sync between computers through a private area of your Google Drive. One-time setup of the Google sign-in key: see `SYNC.md`.
 - **Profile photo**: use your own picture (Edit profile › camera button) or your Google account photo as the profile avatar.

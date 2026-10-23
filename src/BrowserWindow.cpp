@@ -212,6 +212,12 @@ void BrowserWindow::installPopupFactory() {
 
 BrowserWindow::~BrowserWindow() {
     qApp->removeEventFilter(this);
+    // Child widgets (tab bars, tabs) are deleted after this body and after our members are gone.
+    // Cut their signals to us now, so no handler runs against freed members (m_thumbs, m_thumbTimer)
+    // while the window is being torn down.
+    m_thumbTimer.stop();
+    for (auto* tw : {m_tabs, m_splitTabs}) if (tw) tw->disconnect(this);
+    for (auto* t : findChildren<BrowserTab*>()) t->disconnect(this);
     if (m_firstRun) m_firstRun->waitForImport();   // the import worker writes into m_history
     if (m_updater) m_updater->disconnect(this);
     delete m_history; delete m_bookmarks; delete m_theme; delete m_session;
@@ -571,6 +577,7 @@ void BrowserWindow::captureActiveThumb() {
 }
 
 void BrowserWindow::showTabOverview() {
+    if (findChild<TabOverview*>(QString(), Qt::FindDirectChildrenOnly)) return;   // already open
     if (m_tabs->count() < 2) { showNotice(QStringLiteral("Open more tabs to use the overview")); return; }
     captureActiveThumb();
     QList<TabOverview::Card> cards;
@@ -583,8 +590,16 @@ void BrowserWindow::showTabOverview() {
         if (c.shot.isNull() && w && w->isVisible() && !qobject_cast<BrowserTab*>(w)) c.shot = w->grab();   // settings / downloads page
         cards << c;
     }
+    // Remember the tabs themselves: one may close while the overview is open, shifting the indexes.
+    QList<QPointer<QWidget>> widgets;
+    for (int i = 0; i < m_tabs->count(); ++i) widgets << m_tabs->widget(i);
     auto* ov = new TabOverview(cards, m_tabs->currentIndex(), this);
-    connect(ov, &TabOverview::chosen, this, [this](int i){ if (i >= 0 && i < m_tabs->count()) m_tabs->setCurrentIndex(i); });
+    ov->setObjectName(QStringLiteral("PacitumWindowOverlay"));   // resizeEvent keeps it at the window size
+    connect(ov, &TabOverview::chosen, this, [this, widgets](int i){
+        if (i < 0 || i >= widgets.size() || !widgets[i]) return;
+        const int at = m_tabs->indexOf(widgets[i]);
+        if (at >= 0) m_tabs->setCurrentIndex(at);
+    });
     ov->open();
 }
 

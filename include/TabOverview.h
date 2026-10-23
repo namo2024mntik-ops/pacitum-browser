@@ -22,6 +22,7 @@ protected:
     void wheelEvent(QWheelEvent* e) override;
     void mousePressEvent(QMouseEvent* e) override;
     void resizeEvent(QResizeEvent* e) override;
+    bool focusNextPrevChild(bool) override { return false; }   // Tab / Shift+Tab browse cards, not move focus away
 private:
     void select(int i, bool animate = true);
     void finish(int index);
@@ -34,6 +35,7 @@ private:
     qreal m_pos = 0.0;          // animated carousel position (card index at the centre)
     qreal m_show = 0.0;         // 0..1 open/close progress
     int m_result = -1;
+    bool m_closing = false;
     QVariantAnimation m_posAnim, m_showAnim;
     qreal m_wheelAcc = 0.0;
 };

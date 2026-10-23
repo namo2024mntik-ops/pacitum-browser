@@ -145,6 +145,11 @@ QMenu QLabel { background: transparent; }
 #MenuProfileSub { color: @textSecondary; font-size: 12px; }
 #MenuAvatar { border-radius: 18px; color: #FFFFFF; font-weight: 600; font-size: 14px;
           background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2DD4BF, stop:1 #3B82F6); }
+#MenuTiles { background: transparent; }
+#MenuTiles QToolButton { background: transparent; border: none; border-radius: 10px; padding: 6px 0 4px 0; font-size: 12px; color: @text; }
+#MenuTiles QToolButton:hover { background: @surface; }
+#MenuTiles QToolButton:pressed { background: @pressed; }
+#MenuTiles QToolButton:focus { background: @surface; }
 #ZoomPill { background: @surface; border-radius: 15px; }
 #ZoomPill QLabel { font-weight: 600; font-size: 12px; }
 #InfoBarWrap { background: @page; }

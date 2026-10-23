@@ -1146,22 +1146,45 @@ void BrowserWindow::showMenu() {
         hdr->installEventFilter(cf);
         hdr->setToolTip(QStringLiteral("Profile settings"));
     }
+    // A row of side-by-side buttons (icon over a short label) in place of several full-width rows,
+    // so the menu stays short enough to never wrap into a second column.
+    struct Tile { QString icon, label, tip; std::function<void()> fn; };
+    auto addTiles = [&](const QList<Tile>& tiles) {
+        auto* row = new QWidget(&m); row->setObjectName(QStringLiteral("MenuTiles"));
+        auto* rl = new QHBoxLayout(row); rl->setContentsMargins(2, 2, 2, 2); rl->setSpacing(4);
+        for (const Tile& t : tiles) {
+            auto* b = new QToolButton(row);
+            b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            b->setIcon(m_theme->secondaryIcon(t.icon, 20)); b->setIconSize(QSize(20, 20));
+            b->setText(t.label); b->setToolTip(t.tip); b->setAccessibleName(t.tip);
+            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); b->setFixedHeight(54);
+            b->setCursor(Qt::PointingHandCursor); b->setFocusPolicy(Qt::TabFocus);
+            const auto fn = t.fn;
+            connect(b, &QToolButton::clicked, this, [this, &m, fn]{ m.close(); QTimer::singleShot(0, this, fn); });
+            rl->addWidget(b);
+        }
+        auto* wa = new QWidgetAction(&m); wa->setDefaultWidget(row); m.addAction(wa);
+    };
     m.addSeparator();
-    add(QStringLiteral("tab-new"), QStringLiteral("New tab"), QStringLiteral("Ctrl+T"), [this]{ newTab(); });
-    add(QStringLiteral("window"), QStringLiteral("New window"), QStringLiteral("Ctrl+N"), [this]{ auto* w = new BrowserWindow(); w->setAttribute(Qt::WA_DeleteOnClose); w->show(); });
-    add(QStringLiteral("private"), QStringLiteral("New private tab"), QStringLiteral("Ctrl+Shift+N"), [this]{ newPrivateTab(); });
+    addTiles({
+        {QStringLiteral("tab-new"), QStringLiteral("New tab"), QStringLiteral("New tab (Ctrl+T)"), [this]{ newTab(); }},
+        {QStringLiteral("window"), QStringLiteral("New window"), QStringLiteral("New window (Ctrl+N)"), [this]{ auto* w = new BrowserWindow(); w->setAttribute(Qt::WA_DeleteOnClose); w->show(); }},
+        {QStringLiteral("private"), QStringLiteral("Private tab"), QStringLiteral("New private tab (Ctrl+Shift+N)"), [this]{ newPrivateTab(); }},
+    });
     m.addSeparator();
     add(QStringLiteral("history"), QStringLiteral("History"), QStringLiteral("Ctrl+H"), [this]{ showHistory(); });
     add(QStringLiteral("download"), QStringLiteral("Downloads"), QStringLiteral("Ctrl+J"), [this]{ showDownloads(); });
     add(QStringLiteral("bookmarks"), QStringLiteral("Bookmarks"), QStringLiteral("Ctrl+Shift+O"), [this]{ showBookmarksDialog(); });
     add(QStringLiteral("extensions"), QStringLiteral("Extensions"), QString(), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showExtensionsMenu); });
     m.addSeparator();
-    // 1.8.5 built-in tools
-    add(QStringLiteral("grid"), QStringLiteral("Tab overview (3D)"), QStringLiteral("Ctrl+Shift+Space"), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showTabOverview); });
-    add(QStringLiteral("screenshot"), QStringLiteral("Screenshot"), QStringLiteral("Ctrl+Shift+S"), [this]{ QTimer::singleShot(0, this, &BrowserWindow::takeScreenshot); });
-    add(QStringLiteral("picture-in-picture"), QStringLiteral("Picture-in-picture"), QStringLiteral("Alt+P"), [this]{ togglePictureInPicture(); });
-    add(QStringLiteral("notes"), QStringLiteral("Notes"), QStringLiteral("Ctrl+Shift+Y"), [this]{ toggleNotes(); });
-    add(QStringLiteral("qr-code"), QStringLiteral("QR code for this page"), QString(), [this]{ QTimer::singleShot(0, this, &BrowserWindow::showPageQr); });
+    // 1.8.5 built-in tools, one row
+    addTiles({
+        {QStringLiteral("grid"), QStringLiteral("Overview"), QStringLiteral("3D tab overview (Ctrl+Shift+Space)"), [this]{ showTabOverview(); }},
+        {QStringLiteral("screenshot"), QStringLiteral("Screenshot"), QStringLiteral("Screenshot (Ctrl+Shift+S)"), [this]{ takeScreenshot(); }},
+        {QStringLiteral("picture-in-picture"), QStringLiteral("PiP"), QStringLiteral("Picture-in-picture (Alt+P)"), [this]{ togglePictureInPicture(); }},
+        {QStringLiteral("notes"), QStringLiteral("Notes"), QStringLiteral("Notes (Ctrl+Shift+Y)"), [this]{ toggleNotes(); }},
+        {QStringLiteral("qr-code"), QStringLiteral("QR code"), QStringLiteral("QR code for this page"), [this]{ showPageQr(); }},
+    });
     m.addSeparator();
 
     // Zoom row: [zoom] Zoom ......  ( −  100 %  + )  [⛶]

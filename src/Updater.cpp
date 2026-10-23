@@ -1,6 +1,5 @@
 #include "Updater.h"
 #include "AppSettings.h"
-#include "ThemeManager.h"
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -17,13 +16,7 @@
 #include <QFile>
 #include <QDir>
 #include <QFileInfo>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QProgressBar>
-#include <QPushButton>
-#include <QTextBrowser>
-#include <QDesktopServices>
+#include <QDateTime>
 
 void pacitumLog(const QString& line);   // main.cpp (startup.log)
 
@@ -181,8 +174,7 @@ void Updater::check(bool userInitiated) {
 void Updater::download(const UpdateInfo& info) {
     if (m_reply || !info.valid()) return;
     m_pending = info;
-    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/PacitumUpdate");
-    QDir().mkpath(dir);
+    const QString dir = workDir();
     QString name = QFileInfo(info.installerName).fileName();
     name.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]")));
 #if defined(Q_OS_WIN)
@@ -289,117 +281,88 @@ void Updater::verifyAndFinish(const QByteArray& expectedHex) {
     emit downloadFinished(true, {});
 }
 
-bool Updater::installAndRelaunch() {
-#ifdef Q_OS_WIN
+QString Updater::workDir() {
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/PacitumUpdate");
+    QDir().mkpath(dir);
+    return dir;
+}
+
+QStringList Updater::noteLines(const QString& markdown, int max) {
+    static const QRegularExpression bullet(QStringLiteral("^\\s*(?:[-*+•·]|\\d+[.)])\\s+(.+)$"));
+    static const QRegularExpression link(QStringLiteral("\\[([^\\]]+)\\]\\([^)]*\\)"));
+    static const QRegularExpression marks(QStringLiteral("[*_`]+|<[^>]+>"));
+    auto clean = [](QString t){ t.replace(link, QStringLiteral("\\1")); t.remove(marks); return t.simplified(); };
+    QStringList bullets, plain;
+    for (const QString& raw : markdown.split(QLatin1Char('\n'))) {
+        const QString line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith(QLatin1Char('#')) || line.startsWith(QLatin1Char('|')) || line.startsWith(QLatin1Char('>'))) continue;
+        if (const auto m = bullet.match(line); m.hasMatch()) { if (const QString t = clean(m.captured(1)); !t.isEmpty()) bullets << t; }
+        else if (const QString t = clean(line); !t.isEmpty()) plain << t;
+    }
+    QStringList out = bullets.isEmpty() ? plain : bullets;
+    for (QString& t : out) if (t.size() > 90) t = t.left(87).trimmed() + QStringLiteral("…");
+    if (max <= 1) return out.mid(0, qMax(0, max));
+    if (out.size() > max) { const int more = out.size() - (max - 1); out = out.mid(0, max - 1); out << tr("…and %n more", nullptr, more); }
+    return out;
+}
+
+bool Updater::startInstall(const QStringList& overlayArgs) {
     if (m_file.isEmpty() || !QFile::exists(m_file)) return false;
-    // The installer refuses to run while our AppMutex is held, so a tiny hidden PowerShell helper
-    // waits for this process to exit, then runs Setup silently. Setup's [Run] entry with
-    // /RELAUNCH=1 starts the new version when it is done.
+    const QString log = QDir::currentPath() + QStringLiteral("/startup.log");
+    QStringList args = overlayArgs;
+    args << QStringLiteral("--pid") << QString::number(QCoreApplication::applicationPid())
+         << QStringLiteral("--version") << m_pending.version
+         << QStringLiteral("--ready") << readyFile() << QStringLiteral("--marker") << markerFile()
+         << QStringLiteral("--log") << log;
+    QFile::remove(readyFile()); QFile::remove(markerFile());
+#ifdef Q_OS_WIN
+    // The helper runs from a copy in the temp folder with the few Qt files it needs, so Setup can
+    // replace everything in the install folder while the "Installing" pop-up is on screen.
+    const QString appDir = QCoreApplication::applicationDirPath(), helperDir = workDir() + QStringLiteral("/helper");
+    QDir(helperDir).removeRecursively();
+    QDir().mkpath(helperDir + QStringLiteral("/platforms"));
+    bool copied = QFile::copy(appDir + QStringLiteral("/PacitumUpdateHelper.exe"), helperDir + QStringLiteral("/PacitumUpdateHelper.exe"));
+    for (const char* f : {"Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "platforms/qwindows.dll"})
+        copied = copied && QFile::copy(appDir + QLatin1Char('/') + QLatin1String(f), helperDir + QLatin1Char('/') + QLatin1String(f));
+    for (const QString& f : QDir(appDir).entryList({QStringLiteral("vcruntime*.dll"), QStringLiteral("msvcp*.dll"), QStringLiteral("concrt*.dll")}, QDir::Files))
+        QFile::copy(appDir + QLatin1Char('/') + f, helperDir + QLatin1Char('/') + f);
+    if (copied) {
+        args << QStringLiteral("--installer") << QDir::toNativeSeparators(m_file)
+             << QStringLiteral("--app") << QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+        const bool ok = QProcess::startDetached(helperDir + QStringLiteral("/PacitumUpdateHelper.exe"), args, helperDir);
+        pacitumLog(QStringLiteral("update: helper started=%1").arg(ok));
+        if (ok) return true;
+    } else pacitumLog(QStringLiteral("update: couldn't copy the helper; falling back to the hidden installer"));
+    // Fallback (developer builds without the helper): a hidden PowerShell waits for us, then runs Setup.
     auto q = [](QString s){ return QStringLiteral("'") + s.replace(QLatin1Char('\''), QStringLiteral("''")) + QStringLiteral("'"); };
     const QString script = QStringLiteral(
-        "$ErrorActionPreference='SilentlyContinue'; Wait-Process -Id %1 -Timeout 120; Start-Sleep -Milliseconds 500; "
+        "$ErrorActionPreference='SilentlyContinue'; Wait-Process -Id %1 -Timeout 30; Stop-Process -Id %1 -Force; Start-Sleep -Milliseconds 500; "
         "Start-Process -FilePath %2 -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/NORESTARTAPPLICATIONS','/RELAUNCH=1'")
         .arg(QCoreApplication::applicationPid()).arg(q(QDir::toNativeSeparators(m_file)));
     const bool ok = QProcess::startDetached(QStringLiteral("powershell.exe"),
         {QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-Command"), script});
-    pacitumLog(QStringLiteral("update: installer helper started=%1").arg(ok));
-    if (ok) QTimer::singleShot(0, qApp, []{ for (auto* w : QApplication::topLevelWidgets()) w->close(); QCoreApplication::quit(); });
+    pacitumLog(QStringLiteral("update: installer helper (PowerShell) started=%1").arg(ok));
     return ok;
 #elif defined(Q_OS_MACOS)
     // macOS: open the downloaded disk image; the user drags the new app over the old one.
-    if (m_file.isEmpty() || !QFile::exists(m_file)) return false;
     const bool ok = QProcess::startDetached(QStringLiteral("/usr/bin/open"), {m_file});
     pacitumLog(QStringLiteral("update: opened %1 ok=%2").arg(m_file).arg(ok));
-    return false;   // nothing replaced in place; the dialog shows where the file was saved
+    Q_UNUSED(args);
+    return false;
 #else
-    // Linux AppImage: swap the running AppImage file for the new one and restart it.
+    // Linux AppImage: swap the AppImage file now; the new AppImage, started in --update-overlay
+    // mode, shows the pop-up, waits for us to exit and starts itself normally.
     const QString current = qEnvironmentVariable("APPIMAGE");
-    if (m_file.isEmpty() || !QFile::exists(m_file) || current.isEmpty() || !QFileInfo(current).isWritable()) return false;
+    if (current.isEmpty() || !QFileInfo(current).isWritable()) return false;
     const QString staged = current + QStringLiteral(".new");
     QFile::remove(staged);
     if (!QFile::copy(m_file, staged)) return false;
     QFile::setPermissions(staged, QFile::permissions(current) | QFileDevice::ExeOwner | QFileDevice::ExeUser);
     if (!QFile::remove(current) || !QFile::rename(staged, current)) { pacitumLog(QStringLiteral("update: could not replace %1").arg(current)); return false; }
-    const bool ok = QProcess::startDetached(current, {});
-    pacitumLog(QStringLiteral("update: replaced %1, relaunch=%2").arg(current).arg(ok));
-    if (ok) QTimer::singleShot(0, qApp, []{ for (auto* w : QApplication::topLevelWidgets()) w->close(); QCoreApplication::quit(); });
+    args << QStringLiteral("--relaunch") << current << QStringLiteral("--app") << current;
+    bool ok = QProcess::startDetached(current, QStringList{QStringLiteral("--update-overlay")} + args);
+    pacitumLog(QStringLiteral("update: replaced %1, overlay=%2").arg(current).arg(ok));
+    if (!ok) ok = QProcess::startDetached(current, {});   // no pop-up, but still restart
     return ok;
 #endif
-}
-
-// ---------------------------------------------------------------------------------------------
-UpdateDialog::UpdateDialog(const UpdateInfo& info, QWidget* parent) : QDialog(parent), m_info(info) {
-    setObjectName(QStringLiteral("UpdateDialog"));
-    setWindowTitle(tr("Update Pacitum"));
-    setAttribute(Qt::WA_DeleteOnClose);
-    setMinimumWidth(480);
-    const auto& p = ThemeManager::current();
-    setStyleSheet(QStringLiteral(
-        "#UpdateDialog{background:%1;} QLabel{color:%2;} QLabel#UpdSub{color:%3;}"
-        "QTextBrowser{background:%4;color:%2;border:1px solid %5;border-radius:10px;padding:8px;}"
-        "QProgressBar{background:%4;border:none;border-radius:3px;max-height:6px;} QProgressBar::chunk{background:%6;border-radius:3px;}"
-        "QPushButton{padding:7px 16px;border-radius:8px;border:1px solid %5;background:%4;color:%2;}"
-        "QPushButton#UpdPrimary{background:%6;color:%7;border:none;font-weight:600;}")
-        .arg(p.toolbar, p.text, p.textSecondary, p.surface, p.border, p.accent, p.onAccent));
-    auto* l = new QVBoxLayout(this); l->setContentsMargins(24, 22, 24, 18); l->setSpacing(10);
-    auto* head = new QHBoxLayout(); head->setSpacing(14);
-    auto* logo = new QLabel(this); logo->setPixmap(QIcon(QStringLiteral(":/icons/pacitum-icon-128.png")).pixmap(QSize(44, 44), devicePixelRatioF()));
-    head->addWidget(logo, 0, Qt::AlignTop);
-    auto* tl = new QVBoxLayout(); tl->setSpacing(2);
-    auto* title = new QLabel(tr("Pacitum %1 is available").arg(info.version), this);
-    QFont f = title->font(); f.setPointSizeF(f.pointSizeF() * 1.3); f.setWeight(QFont::DemiBold); title->setFont(f);
-    auto* sub = new QLabel(tr("You have %1. The update installs in the background and Pacitum restarts with your tabs.").arg(Updater::currentVersion()), this);
-    sub->setObjectName(QStringLiteral("UpdSub")); sub->setWordWrap(true);
-    tl->addWidget(title); tl->addWidget(sub);
-    head->addLayout(tl, 1);
-    l->addLayout(head);
-    m_notes = new QTextBrowser(this);
-    m_notes->setOpenExternalLinks(true);
-    m_notes->setMarkdown(info.notes.isEmpty() ? tr("_No release notes._") : info.notes);
-    m_notes->setMinimumHeight(180);
-    l->addWidget(m_notes, 1);
-    m_bar = new QProgressBar(this); m_bar->setTextVisible(false); m_bar->setRange(0, 1000); m_bar->hide();
-    l->addWidget(m_bar);
-    m_status = new QLabel(this); m_status->setObjectName(QStringLiteral("UpdSub")); m_status->setWordWrap(true); m_status->hide();
-    l->addWidget(m_status);
-    auto* btns = new QHBoxLayout(); btns->setSpacing(8);
-    m_skip = new QPushButton(tr("Skip this version"), this);
-    m_later = new QPushButton(tr("Later"), this);
-    m_update = new QPushButton(tr("Update now"), this); m_update->setObjectName(QStringLiteral("UpdPrimary")); m_update->setDefault(true);
-    btns->addWidget(m_skip); btns->addStretch(1); btns->addWidget(m_later); btns->addWidget(m_update);
-    l->addLayout(btns);
-    connect(m_skip, &QPushButton::clicked, this, [this]{ AppSettings::set(QStringLiteral("update_skipped_version"), m_info.version); reject(); });
-    connect(m_later, &QPushButton::clicked, this, [this]{ Updater::instance()->cancelDownload(); reject(); });
-    connect(m_update, &QPushButton::clicked, this, &UpdateDialog::startDownload);
-    auto* up = Updater::instance();
-    connect(up, &Updater::downloadProgress, this, [this](qint64 r, qint64 t){
-        if (t > 0) { m_bar->setRange(0, 1000); m_bar->setValue(int(r * 1000 / t)); } else m_bar->setRange(0, 0);
-        m_status->setText(tr("Downloading… %1 of %2 MB").arg(r / 1048576.0, 0, 'f', 1).arg(t > 0 ? QString::number(t / 1048576.0, 'f', 1) : QStringLiteral("?")));
-    });
-    connect(up, &Updater::downloadFinished, this, [this](bool ok, const QString& err){
-        if (!ok) {
-            m_status->setText(tr("Update failed: %1").arg(err));
-            m_update->setEnabled(true); m_update->setText(tr("Try again")); m_skip->setEnabled(true);
-            return;
-        }
-        m_bar->setValue(1000);
-        m_status->setText(tr("Installing… Pacitum will restart in a moment."));
-        if (!Updater::instance()->installAndRelaunch()) {
-            const QString where = QDir::toNativeSeparators(Updater::instance()->downloadedPath());
-#if defined(Q_OS_MACOS)
-            m_status->setText(tr("Downloaded. Drag Pacitum Browser from the opened window into Applications. (Saved to %1)").arg(where));
-#elif defined(Q_OS_WIN)
-            m_status->setText(tr("Couldn't start the installer. It was saved to %1").arg(where));
-#else
-            m_status->setText(tr("Downloaded to %1. Replace your Pacitum AppImage with it and start it again.").arg(where));
-#endif
-            m_update->setEnabled(true);
-        }
-    });
-}
-
-void UpdateDialog::startDownload() {
-    m_update->setEnabled(false); m_skip->setEnabled(false);
-    m_bar->show(); m_status->show(); m_status->setText(tr("Starting download…"));
-    Updater::instance()->download(m_info);
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.8.8 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.8.9 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -42,6 +42,9 @@ set(SOURCES
     src/FirstRun.cpp
     src/AppSettings.cpp
     src/Updater.cpp
+    src/UpdateOverlay.cpp
+    src/UpdateUi.cpp
+    src/SyncGuide.cpp
     src/StressTest.cpp
     src/PerfTest.cpp
     src/ResizeTest.cpp
@@ -83,6 +86,9 @@ set(HEADERS
     include/FirstRun.h
     include/AppSettings.h
     include/Updater.h
+    include/UpdateOverlay.h
+    include/UpdateUi.h
+    include/SyncGuide.h
     include/SitePermissions.h
     include/PermissionUi.h
     include/PermissionDevices.h
@@ -142,6 +148,14 @@ if(TARGET Qt6::Bluetooth)
 endif()
 if(WIN32)
     target_link_libraries(PacitumBrowser PRIVATE user32 dwmapi shell32 psapi setupapi ole32)
+endif()
+
+# 1.8.9: Windows install helper. Runs from a copy in the temp folder (Qt Core/Gui/Widgets only), shows
+# the "Installing update…" pop-up while Setup replaces the browser, then waits for the new version.
+if(WIN32)
+    add_executable(PacitumUpdateHelper WIN32 src/UpdateHelperMain.cpp src/UpdateOverlay.cpp include/UpdateOverlay.h ${APP_RC})
+    target_link_libraries(PacitumUpdateHelper PRIVATE Qt6::Widgets shell32)
+    install(TARGETS PacitumUpdateHelper RUNTIME DESTINATION bin)
 endif()
 
 # Platform specific

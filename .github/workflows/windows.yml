@@ -27,6 +27,8 @@ jobs:
           New-Item -ItemType Directory dist | Out-Null
           $exe = Get-ChildItem build -Recurse -Filter PacitumBrowser.exe | Select-Object -First 1
           Copy-Item $exe.FullName dist/
+          # 1.8.9 updater: the small helper that shows "Installing update…" while Setup runs
+          Copy-Item (Get-ChildItem build -Recurse -Filter PacitumUpdateHelper.exe | Select-Object -First 1).FullName dist/
           windeployqt --release --no-translations --no-system-d3d-compiler --no-quick-import --skip-plugin-types qmltooling,generic,networkinformation,position,sqldrivers dist/PacitumBrowser.exe
           # keep the SQLite driver only; drop unused image formats
           # (qtwebengine_devtools_resources.pak stays: without it Developer tools opens blank)

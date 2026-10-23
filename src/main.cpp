@@ -14,6 +14,7 @@
 #include <QCoreApplication>
 #include <QtGlobal>
 #include "BrowserWindow.h"
+#include "UpdateOverlay.h"
 #include "ProfileManager.h"
 #include "ProfileUi.h"
 #include <QMessageBox>
@@ -222,6 +223,12 @@ static void runHandoffTest(BrowserWindow* w) {
 void runPermissionTest(BrowserWindow* w);
 
 int main(int argc, char *argv[]) {
+    // Linux updater (1.8.9): the new AppImage first runs as the "Installing update…" pop-up, waits
+    // for the old browser to exit and starts itself normally. No browser code runs in this mode.
+    for (int i = 1; i < argc; ++i) if (qstrcmp(argv[i], "--update-overlay") == 0) {
+        QApplication overlayApp(argc, argv);
+        return UpdUi::runInstallOverlay(overlayApp.arguments());
+    }
     installLogging();
     bool smoke = false;
     bool stress = false;

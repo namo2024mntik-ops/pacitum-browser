@@ -283,5 +283,11 @@
         <file>fonts/Inter-Medium.ttf</file>
         <file>fonts/Inter-SemiBold.ttf</file>
         <file>fonts/Inter-Bold.ttf</file>
+        <file>sync-guide/step1-project.png</file>
+        <file>sync-guide/step2-drive.png</file>
+        <file>sync-guide/step3-branding.png</file>
+        <file>sync-guide/step4-testers.png</file>
+        <file>sync-guide/step5-client.png</file>
+        <file>sync-guide/step7-consent.png</file>
     </qresource>
 </RCC>

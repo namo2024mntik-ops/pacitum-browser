@@ -15,6 +15,7 @@
 #include "HistoryManager.h"
 #include "AppSettings.h"
 #include "Updater.h"
+#include "UpdateUi.h"
 #include <QShowEvent>
 #include <QScreen>
 #include <QWindow>
@@ -188,19 +189,21 @@ void BrowserWindow::setupUpdater() {
         if (!user && (m_chromeHidden || !isActiveWindow())) {   // don't interrupt fullscreen video or another app
             m_pendingUpdatePrompt = true; return;
         }
-        showUpdatePrompt(info);
+        m_pendingUpdatePrompt = false;
+        UpdateFlow::instance()->offer(info, this, user);
     });
     connect(m_updater, &Updater::upToDate, this, [this](bool user){ if (user) statusBar()->showMessage(m_updater->lastStatus(), 4000); });
     connect(m_updater, &Updater::checkFailed, this, [this](const QString& err, bool user){ if (user) statusBar()->showMessage(tr("Update check failed: %1").arg(err), 6000); });
     if (!m_noBackgroundUpdates) m_updater->setAutoCheck(AppSettings::get(QStringLiteral("auto_check_updates")).toBool(true));
     if (qApp->arguments().contains(QStringLiteral("--check-updates"))) QTimer::singleShot(1500, m_updater, [this]{ m_updater->check(true); });
+    UpdateFlow::instance()->attach(this, m_updatePill, m_menuBtn);
+    // Started by the updater: tell the install helper we're up and show "Update done".
+    if (!m_noBackgroundUpdates) QTimer::singleShot(700, this, [this]{ if (isVisible()) UpdateFlow::instance()->afterStartup(this); });
 }
 
 void BrowserWindow::showUpdatePrompt(const UpdateInfo& info) {
     m_pendingUpdatePrompt = false;
-    if (m_updateDialog) { m_updateDialog->raise(); m_updateDialog->activateWindow(); return; }
-    m_updateDialog = new UpdateDialog(info, this);
-    m_updateDialog->show();
+    UpdateFlow::instance()->offer(info, this, false);   // a background offer that waited for the window
 }
 
 void BrowserWindow::installPopupFactory() {
@@ -384,6 +387,8 @@ void BrowserWindow::createToolbar() {
     lay->addSpacing(6);
     lay->addWidget(m_addressBar, 1);
     lay->addSpacing(6);
+    m_updatePill = new UpdatePill(m_toolbar);
+    lay->addWidget(m_updatePill);
     lay->addWidget(m_downloadsBtn); lay->addWidget(m_splitBtn); lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
 }
 

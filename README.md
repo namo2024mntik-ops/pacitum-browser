@@ -84,10 +84,32 @@ Qt Creator: Open `CMakeLists.txt` → Configure → Run.
 - Ad blocker (host + path interceptor), private mode (NoPersistentCookies), session restore, Do Not Track
 - Hardware acceleration, GPU raster, 250MB disk cache, spellcheck, crash auto-reload
 
-Made by Ai (Grok bot + opencode-BaseApp)
+Made by Ai (Grok bot + opencode-BaseApp + claude code)
 
 ## Settings
 Stored in `browser_settings.json`, `bookmarks.json`, `browser_session.json`, `browser_history.db` (identical filenames to Python so data migrates).
 
 ## Windows installer
 GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 LTS MSVC 2022, bundles it with windeployqt and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`, 16–256 px) is embedded through `resources/app.rc`.
+
+## System requirements
+since Pacitum Browser 1.8.7 I have added support to MacOS(Apple silicon) And Linux so here is requirement
+
+| | Windows | Linux | macOS |
+|---|---|---|---|
+| **OS** | Windows 10 (1809+) or Windows 11, 64-bit | x86_64 distro with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer) | macOS 12 Monterey or newer |
+| **CPU** | x86_64 | x86_64 | Apple silicon (M1 or newer) |
+| **Download** | `PacitumBrowser-Setup-<ver>.exe` | `PacitumBrowser-<ver>-linux-x86_64.AppImage` | `PacitumBrowser-<ver>-macOS-arm64.dmg` |
+
+- **Memory:** 4 GB RAM minimum, 8 GB recommended (each site runs in its own Chromium process; Pacitum caps this at 8).
+- **Disk:** about 500 MB free for the app plus space for cache and profile data.
+- **Graphics:** a GPU with Direct3D 11 (Windows), OpenGL (Linux) or Metal (macOS) support. With a broken driver, start with `PACITUM_DISABLE_GPU=1` to use software rendering.
+- **Linux AppImage:** needs FUSE (`libfuse2`) to run, or run it with `--appimage-extract-and-run`.
+- **macOS:** the app isn't notarized; the first time, right-click → **Open**.
+
+### Building from source
+- Qt **6.8 or newer** with Qt WebEngine, Qt WebChannel and Qt Positioning (optional: Qt Serial Port, Qt Connectivity)
+- CMake 3.16+ and Ninja
+- A C++17 compiler: MSVC 2019+ (Windows), GCC 11+ (Linux), Xcode / Apple Clang (macOS)
+
+See `BUILD.md` for the steps on each system.

@@ -23,7 +23,7 @@ jobs:
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag: $TAG"; exit 1; }
           [ -f "release-notes/$TAG.md" ] || { echo "missing release-notes/$TAG.md"; exit 1; }
           bash .github/ensure-release.sh "$TAG" "${{ github.repository }}"
-          gh release view "$TAG" --repo "${{ github.repository }}" --json tagName,url,isLatest
+          gh release view "$TAG" --repo "${{ github.repository }}" --json tagName,url,name
       - name: Start the builds for the tag
         env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ inputs.tag }}" }
         run: |

@@ -1,0 +1,31 @@
+name: Release
+# Actions → Release → Run workflow, with a tag such as v1.9.0 or v1.8.12:
+# creates the tag on this commit and the GitHub release (text from release-notes/<tag>.md), then
+# starts the Windows and Linux + macOS builds for that tag; they attach their files to the release.
+# (A tag made with the workflow token doesn't start other workflows by itself, hence the dispatch.)
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag, e.g. v1.9.0 or v1.8.12 (needs release-notes/<tag>.md)'
+        required: true
+permissions:
+  contents: write
+  actions: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Create tag + release
+        env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ inputs.tag }}", TARGET: "${{ github.sha }}" }
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a version tag: $TAG"; exit 1; }
+          [ -f "release-notes/$TAG.md" ] || { echo "missing release-notes/$TAG.md"; exit 1; }
+          bash .github/ensure-release.sh "$TAG" "${{ github.repository }}"
+          gh release view "$TAG" --repo "${{ github.repository }}" --json tagName,url,isLatest
+      - name: Start the builds for the tag
+        env: { GH_TOKEN: "${{ github.token }}", TAG: "${{ inputs.tag }}" }
+        run: |
+          gh workflow run windows.yml --ref "$TAG" --repo "${{ github.repository }}"
+          gh workflow run linux-macos.yml --ref "$TAG" --repo "${{ github.repository }}"

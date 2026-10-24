@@ -178,6 +178,7 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
 
     m_completer = new QCompleter(this);
     m_completer->popup()->setProperty("_pmNoSlide", true);   // re-positioned while typing: fade only
+    m_completer->popup()->setProperty("_pmNoZoom", true);    // (and no zoom on every keystroke)
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
     // 1.8.10: rows are chosen here (search-engine keywords + history), so the completer shows them
     // all instead of filtering ("goggle" still lists "google search").

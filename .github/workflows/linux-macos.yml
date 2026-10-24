@@ -12,11 +12,18 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-22.04   # older glibc = the AppImage runs on more distributions
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { line: main,   qt: '6.11.*' }
+          - { line: legacy, qt: '6.8.*' }
+    name: linux (${{ matrix.line }}, Qt ${{ matrix.qt }})
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: ${{ matrix.qt }}
           host: linux
           target: desktop
           arch: linux_gcc_64
@@ -45,7 +52,7 @@ jobs:
           grep -q "SMOKE OK" "$log"
       - name: AppImage
         run: |
-          ver=$(sed -n 's/^project(PacitumBrowser VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          ver=$(cat build/pacitum-version.txt)   # 1.9.x (Qt 6.11) or 1.8.x (legacy, Qt 6.8)
           DESTDIR="$PWD/AppDir" cmake --install build
           # SQL drivers we don't ship pull in client libraries the AppImage tool can't find
           find "$QT_ROOT_DIR/plugins/sqldrivers" -name '*.so' ! -name 'libqsqlite.so' -delete
@@ -53,7 +60,15 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
-          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          # Wayland platform plugins: Qt 6.8 ships libqwayland-egl / -generic, Qt 6.11 renamed them
+          # (one libqwayland.so). Bundle whichever exist so both editions run on Wayland desktops.
+          plugins=""
+          for p in libqwayland-egl.so libqwayland-generic.so libqwayland.so; do
+            [ -f "$QT_ROOT_DIR/plugins/platforms/$p" ] && plugins="${plugins:+$plugins;}$p"
+          done
+          ls "$QT_ROOT_DIR/plugins/platforms/"
+          echo "extra platform plugins: ${plugins:-none}"
+          [ -n "$plugins" ] && export EXTRA_PLATFORM_PLUGINS="$plugins"
           export OUTPUT="PacitumBrowser-$ver-linux-x86_64.AppImage"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir -e AppDir/usr/bin/PacitumBrowser \
             -d resources/linux/pacitum-browser.desktop -i resources/linux/pacitum-browser.png --plugin qt --output appimage
@@ -61,23 +76,31 @@ jobs:
           ls -la "$OUTPUT"
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: PacitumBrowser-Linux
+          name: PacitumBrowser-Linux-${{ matrix.line }}
           path: PacitumBrowser-*.AppImage*
           retention-days: 3
       - name: Attach to the release (tag builds)
         if: startsWith(github.ref, 'refs/tags/v')
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
+          [ "${{ github.ref_name }}" = "v$(cat build/pacitum-version.txt)" ] || { echo "tag is for the other line; skipping"; exit 0; }
           gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || { echo "no release yet; skipping"; exit 0; }
           gh release upload "${{ github.ref_name }}" PacitumBrowser-*.AppImage* --clobber --repo "${{ github.repository }}"
 
   macos:
     runs-on: macos-14   # Apple silicon
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { line: main,   qt: '6.11.*' }
+          - { line: legacy, qt: '6.8.*' }
+    name: macos (${{ matrix.line }}, Qt ${{ matrix.qt }})
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.*'
+          version: ${{ matrix.qt }}
           host: mac
           target: desktop
           arch: clang_64
@@ -106,7 +129,7 @@ jobs:
           grep -q "SMOKE OK" "$log"
       - name: Disk image
         run: |
-          ver=$(sed -n 's/^project(PacitumBrowser VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          ver=$(cat build/pacitum-version.txt)   # 1.9.x (Qt 6.11) or 1.8.x (legacy, Qt 6.8)
           out="PacitumBrowser-$ver-macOS-arm64.dmg"
           mkdir dmg && cp -R build/PacitumBrowser.app "dmg/Pacitum Browser.app" && ln -s /Applications dmg/Applications
           hdiutil create -volname "Pacitum Browser" -srcfolder dmg -ov -format UDZO "$out"
@@ -114,12 +137,13 @@ jobs:
           ls -la "$out"
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: PacitumBrowser-macOS
+          name: PacitumBrowser-macOS-${{ matrix.line }}
           path: PacitumBrowser-*.dmg*
           retention-days: 3
       - name: Attach to the release (tag builds)
         if: startsWith(github.ref, 'refs/tags/v')
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
+          [ "${{ github.ref_name }}" = "v$(cat build/pacitum-version.txt)" ] || { echo "tag is for the other line; skipping"; exit 0; }
           gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || { echo "no release yet; skipping"; exit 0; }
           gh release upload "${{ github.ref_name }}" PacitumBrowser-*.dmg* --clobber --repo "${{ github.repository }}"

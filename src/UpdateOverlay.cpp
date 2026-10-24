@@ -356,11 +356,12 @@ void Sheet::runScale(double from, double to, double opFrom, double opTo, int ms,
     m_zooming = true; m_body->hide(); m_cover->hide();
     auto* a = new QVariantAnimation(this); m_anim = a;
     a->setStartValue(0.0); a->setEndValue(1.0); a->setDuration(m_reduced ? qMin(ms, 160) : ms);
-    a->setEasingCurve(to >= from ? QEasingCurve::OutQuint : QEasingCurve::InCubic);
+    if (to >= from) { QEasingCurve back(QEasingCurve::OutBack); back.setOvershoot(1.25); a->setEasingCurve(back); }   // 1.9.0: soft overshoot
+    else a->setEasingCurve(QEasingCurve::InCubic);
     connect(a, &QVariantAnimation::valueChanged, this, [this, from, to, opFrom, opTo](const QVariant& v){
         const double t = v.toDouble();
         m_scale = m_reduced ? 1.0 : from + (to - from) * t;
-        m_opacity = opFrom + (opTo - opFrom) * t;
+        m_opacity = qBound(0.0, opFrom + (opTo - opFrom) * qMin(1.0, t * 1.4), 1.0);
         update();
     });
     connect(a, &QVariantAnimation::finished, this, [this, hideAfter, done]{

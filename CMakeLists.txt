@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PacitumBrowser VERSION 1.8.10 LANGUAGES CXX)
+project(PacitumBrowser VERSION 1.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,20 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel
 # 1.7.6 site permissions: Web Serial I/O (QSerialPort) and the Web Bluetooth chooser (QtBluetooth).
 # Optional so a Qt without these modules still builds; the shims then report NotSupportedError.
 find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
+
+# Two release lines from one source (1.9.0 / 1.8.11):
+#   Qt 6.11 or newer -> Pacitum 1.9.x (newer Chromium, Chrome extensions)
+#   Qt 6.8 LTS       -> Pacitum 1.8.x "legacy" for computers that can't run the Qt 6.11 build
+# The updater of each line only offers releases of the same line (PACITUM_UPDATE_TRACK).
+if(Qt6Core_VERSION VERSION_GREATER_EQUAL 6.11)
+    set(PACITUM_APP_VERSION ${PROJECT_VERSION})
+    set(PACITUM_UPDATE_TRACK "")
+else()
+    set(PACITUM_APP_VERSION 1.8.11)
+    set(PACITUM_UPDATE_TRACK "1.8")
+endif()
+message(STATUS "Pacitum ${PACITUM_APP_VERSION} with Qt ${Qt6Core_VERSION}")
+file(WRITE ${CMAKE_BINARY_DIR}/pacitum-version.txt ${PACITUM_APP_VERSION})   # read by CI (installer / AppImage / dmg names)
 
 # Include dirs
 include_directories(${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR}/third_party/qrcodegen)
@@ -45,6 +59,7 @@ set(SOURCES
     src/UpdateOverlay.cpp
     src/UpdateUi.cpp
     src/SyncGuide.cpp
+    src/ChromeExtensions.cpp
     src/StressTest.cpp
     src/PerfTest.cpp
     src/ResizeTest.cpp
@@ -89,6 +104,7 @@ set(HEADERS
     include/UpdateOverlay.h
     include/UpdateUi.h
     include/SyncGuide.h
+    include/ChromeExtensions.h
     include/SitePermissions.h
     include/PermissionUi.h
     include/PermissionDevices.h
@@ -119,7 +135,7 @@ if(APPLE)
 endif()
 
 add_executable(PacitumBrowser ${SOURCES} ${HEADERS} ${RESOURCES} ${APP_RC} ${APP_ICNS})
-target_compile_definitions(PacitumBrowser PRIVATE PACITUM_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(PacitumBrowser PRIVATE PACITUM_VERSION="${PACITUM_APP_VERSION}" PACITUM_UPDATE_TRACK="${PACITUM_UPDATE_TRACK}")
 # 1.8.8 Google Drive sync: a Google Cloud OAuth client of type "Desktop app" (see SYNC.md).
 # Leave empty to let users paste their own in Settings › Sync › Advanced.
 set(PACITUM_GOOGLE_CLIENT_ID "" CACHE STRING "Google OAuth client ID (Desktop app) for sync")
@@ -166,8 +182,8 @@ if(APPLE)
         MACOSX_BUNDLE_BUNDLE_NAME "Pacitum Browser"
         MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.pacitum.browser"
         MACOSX_BUNDLE_ICON_FILE pacitum.icns
-        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
-        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PACITUM_APP_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PACITUM_APP_VERSION})
 endif()
 if(WIN32)
     set_target_properties(PacitumBrowser PROPERTIES WIN32_EXECUTABLE TRUE)

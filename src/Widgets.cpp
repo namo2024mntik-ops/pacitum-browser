@@ -67,7 +67,9 @@ void AnimatedToolButton::spin() {
     // Interruption: a second click adds another turn, 400 ms from now, starting at the current angle.
     const qreal from = m_spinAnim.state() == QAbstractAnimation::Running ? m_rotation : 0.0;
     const qreal to = m_spinAnim.state() == QAbstractAnimation::Running ? m_spinAnim.endValue().toReal() + 360.0 : 360.0;
-    m_spinAnim.stop(); m_spinAnim.setEasingCurve(QEasingCurve::OutCubic); m_spinAnim.setDuration(280);   // kit #12 m_spinAnim.setStartValue(from); m_spinAnim.setEndValue(to); m_spinAnim.start();
+    // kit #12. (1.9.0 fix: the start of the spin had ended up inside this comment, so it never played.)
+    m_spinAnim.stop(); m_spinAnim.setEasingCurve(QEasingCurve::OutCubic); m_spinAnim.setDuration(280);
+    m_spinAnim.setStartValue(from); m_spinAnim.setEndValue(to); m_spinAnim.start();
 }
 void AnimatedToolButton::bump() {
     // Download start (kit #19): glyph scales 1→1.18→1 over 160 ms OutCubic.
@@ -404,11 +406,31 @@ public:
                              : menu && (QCursor::pos() - w->pos()).manhattanLength() < 24;
         const int ms = Motion::fadeMs(dialog ? Motion::Medium : context ? Motion::Fast : Motion::Quick);
         if (ms <= 0) return false;
+        if (dialog && w->isModal()) addScrim(w);
+        // 1.9.0 / 1.8.11: zoom out of where it was opened (context menus: the cursor; drop-downs: the
+        // edge nearest the button; dialogs: their centre), after the window has been positioned.
+        if (!reduced && !w->property("_pmNoZoom").toBool()) {
+            QPointer<QWidget> g(w);
+            w->setWindowOpacity(0.0);
+            QTimer::singleShot(0, w, [g, dialog, context, ms]{
+                if (!g || !g->isVisible()) return;
+                const QRect r = g->geometry();
+                const QPoint c = QCursor::pos();
+                QPoint origin = dialog ? r.center()
+                              : context ? c
+                              : QPoint(qBound(r.left(), c.x(), r.right()), qAbs(c.y() - r.top()) <= qAbs(c.y() - r.bottom()) ? r.top() : r.bottom());
+                if (!Motion::popIn(g, origin, dialog ? 0.93 : 0.86, dialog ? Motion::Enter : Motion::Medium)) {
+                    auto* a = new QPropertyAnimation(g.data(), "windowOpacity", g.data());   // plain fade fallback
+                    a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+                    a->start(QAbstractAnimation::DeleteWhenStopped);
+                }
+            });
+            return false;
+        }
         w->setWindowOpacity(0.0);
         auto* a = new QPropertyAnimation(w, "windowOpacity", w);
         a->setDuration(ms); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
         a->start(QAbstractAnimation::DeleteWhenStopped);
-        if (dialog && w->isModal()) addScrim(w);
         QPointer<QWidget> guard(w);
         const int dy = (reduced || context || w->property("_pmNoSlide").toBool()) ? 0 : dialog ? 8 : -4;
         if (dy) QTimer::singleShot(0, w, [guard, ms, dy]{   // after the window has been positioned

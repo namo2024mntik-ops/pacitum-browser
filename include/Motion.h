@@ -29,6 +29,19 @@ void pop(QWidget* w);
 // Fade (and gently shrink) a snapshot of a top-level that is being hidden. The snapshot is a
 // separate click-through window that lives ≤ 180 ms, so it never blocks input or follows resizes.
 void ghostOut(QWidget* topLevel, int token, qreal scaleTo);
+// 1.9.0 / 1.8.11 pop-ins: a menu / popup / dialog is shown at opacity 0 while a click-through
+// snapshot zooms out of `originGlobal` (where it was opened from) with a soft overshoot, then the
+// real window takes over. False when it can't be done here (reduced motion, Wayland, no snapshot):
+// the caller falls back to the plain fade.
+bool popIn(QWidget* topLevel, const QPoint& originGlobal, qreal fromScale = 0.88, int token = Medium);
+// A snapshot of a whole browser window flying from `from` to `to` (global rects) while fading out:
+// close (shrinks away), minimize (drops toward the bottom), maximize / restore (morphs). The real
+// window has already changed underneath. Skipped on Windows (DWM animates these itself), on Wayland
+// and with reduced motion.
+bool windowGhostsAllowed();
+void windowGhost(const QPixmap& snapshot, const QRect& from, const QRect& to, int ms, qreal fadeTo = 0.0);
+// New window: the page colour covers it and a circle opens from the centre (plain fade if reduced).
+void reveal(QWidget* window, const QColor& color, int ms = 520);
 // Profile card style hover: lift a child widget by dy px (animating pos); restores on leave.
 void installHoverLift(QWidget* w, int dy = -3);
 // Centred pill near the top of a window: fade in 160, hold, fade out 140 (zoom 900 hold = 1.2 s,

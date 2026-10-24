@@ -37,7 +37,7 @@ const QStringList kSettingKeys = {
     QStringLiteral("clear_on_exit"), QStringLiteral("dark_mode"), QStringLiteral("default_zoom"), QStringLiteral("do_not_track"),
     QStringLiteral("freeze_background_tabs"), QStringLiteral("homepage"), QStringLiteral("pin_downloads_button"),
     QStringLiteral("restore_session"), QStringLiteral("search_engine"), QStringLiteral("show_bookmarks_bar"),
-    QStringLiteral("show_suggestions"), QStringLiteral("search_suggest_online"), QStringLiteral("startup"), QStringLiteral("theme")};
+    QStringLiteral("show_suggestions"), QStringLiteral("search_suggest_online"), QStringLiteral("bookmark_folders"), QStringLiteral("startup"), QStringLiteral("theme")};
 const QStringList kKinds = {QStringLiteral("bookmarks"), QStringLiteral("settings"), QStringLiteral("notes"), QStringLiteral("history")};
 
 QString here(const QString& f) { return QDir::current().absoluteFilePath(f); }
@@ -291,7 +291,11 @@ QJsonObject SyncManager::collectLocal() {
     if (syncs(QStringLiteral("bookmarks"))) {
         BookmarkManager bm(here(QStringLiteral("bookmarks.json"))); bm.load();
         QJsonArray a;
-        for (const Bookmark& b : bm.allBookmarks()) a.append(QJsonObject{{QStringLiteral("title"), b.title}, {QStringLiteral("url"), b.url}, {QStringLiteral("added"), b.added}});
+        for (const Bookmark& b : bm.allBookmarks()) {
+            QJsonObject e{{QStringLiteral("title"), b.title}, {QStringLiteral("url"), b.url}, {QStringLiteral("added"), b.added}};
+            if (!b.folder.isEmpty()) e.insert(QStringLiteral("folder"), b.folder);
+            a.append(e);
+        }
         o.insert(QStringLiteral("bookmarks"), a);
     }
     if (syncs(QStringLiteral("settings"))) {
@@ -359,7 +363,14 @@ QStringList SyncManager::applyLocal(const QJsonObject& merged, const QJsonObject
             const QJsonObject o = v.toObject();
             if (!bm.isBookmarked(o.value(QStringLiteral("url")).toString())) add.append({o.value(QStringLiteral("title")).toString(), o.value(QStringLiteral("url")).toString()});
         }
-        if (!add.isEmpty()) bm.addBookmarks(add); else bm.save();
+        if (!add.isEmpty()) bm.addBookmarks(add);
+        for (const auto& v : merged.value(QStringLiteral("bookmarks")).toArray()) {   // folders and titles from the merge
+            const QJsonObject o = v.toObject();
+            const QString url = o.value(QStringLiteral("url")).toString();
+            bm.moveToFolder(url, o.value(QStringLiteral("folder")).toString());
+            if (!o.value(QStringLiteral("title")).toString().isEmpty()) bm.setTitle(url, o.value(QStringLiteral("title")).toString());
+        }
+        bm.save();
         changedKinds << QStringLiteral("bookmarks");
     }
     if (local.contains(QStringLiteral("settings")) && merged.value(QStringLiteral("settings")) != local.value(QStringLiteral("settings"))) {

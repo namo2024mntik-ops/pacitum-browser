@@ -21,7 +21,17 @@
 void pacitumLog(const QString& line);   // main.cpp (startup.log)
 
 namespace {
-const char* kDefaultFeed = "https://api.github.com/repos/namo2024mntik-ops/pacitum-browser/releases/latest";
+// The release list, not /latest: two lines are released side by side (1.9.x and legacy 1.8.x), and
+// "latest" is simply the newest one published. check() picks the highest version of our own line.
+const char* kDefaultFeed = "https://api.github.com/repos/namo2024mntik-ops/pacitum-browser/releases?per_page=40";
+#ifndef PACITUM_UPDATE_TRACK
+#define PACITUM_UPDATE_TRACK ""
+#endif
+// "1.8" for the legacy (Qt 6.8) build: only 1.8.x releases are offered to it.
+bool onTrack(const QString& version) {
+    const QString track = QStringLiteral(PACITUM_UPDATE_TRACK);
+    return track.isEmpty() || version.startsWith(track + QLatin1Char('.'));
+}
 constexpr int kFirstCheckMs = 45 * 1000;            // well after startup: never competes with the first paint
 constexpr int kIntervalMs = 6 * 60 * 60 * 1000;     // every 6 h while running
 constexpr qint64 kMinCheckGapSecs = 12 * 60 * 60;   // background checks at most twice a day across restarts
@@ -120,8 +130,23 @@ void Updater::check(bool userInitiated) {
         AppSettings::set(QStringLiteral("update_last_check"), double(QDateTime::currentSecsSinceEpoch()));
         const auto doc = QJsonDocument::fromJson(reply->readAll());
         QJsonObject rel = doc.object();
-        if (doc.isArray()) {   // a ".../releases" list: take the newest non-draft, non-prerelease
-            for (const auto& v : doc.array()) { const auto o = v.toObject(); if (!o.value(QStringLiteral("draft")).toBool() && !o.value(QStringLiteral("prerelease")).toBool()) { rel = o; break; } }
+        if (doc.isArray()) {   // a ".../releases" list: the highest non-draft, non-prerelease version of our line
+            QString best;
+            for (const auto& v : doc.array()) {
+                const auto o = v.toObject();
+                if (o.value(QStringLiteral("draft")).toBool() || o.value(QStringLiteral("prerelease")).toBool()) continue;
+                QString ver = o.value(QStringLiteral("tag_name")).toString();
+                if (ver.startsWith(QLatin1Char('v'), Qt::CaseInsensitive)) ver.remove(0, 1);
+                if (!onTrack(ver)) continue;
+                if (best.isEmpty() || compareVersions(ver, best) > 0) { best = ver; rel = o; }
+            }
+        } else if (!onTrack(QString(rel.value(QStringLiteral("tag_name")).toString()).remove(QRegularExpression(QStringLiteral("^[vV]"))))) {
+            rel = {};   // a single-release feed for the other line: nothing for us
+        }
+        if (rel.isEmpty() && (doc.isArray() || doc.object().contains(QStringLiteral("tag_name")))) {   // nothing for our line yet
+            setStatus(tr("Pacitum is up to date (%1).").arg(currentVersion()));
+            emit upToDate(userInitiated);
+            return;
         }
         UpdateInfo info;
         info.tag = rel.value(QStringLiteral("tag_name")).toString();
@@ -171,8 +196,22 @@ void Updater::check(bool userInitiated) {
     });
 }
 
+// 1.9.0 / 1.8.11 security: with the default feed, the installer and its checksum must come over
+// HTTPS from GitHub; a custom feed (setting / PACITUM_UPDATE_FEED) must at least be HTTPS.
+static bool trustedAsset(const QUrl& u) {
+    if (u.scheme() != QLatin1String("https")) return false;
+    if (Updater::feedUrl().toString() != QString::fromLatin1(kDefaultFeed) || !devToken().isEmpty()) return true;
+    const QString h = u.host().toLower();
+    return h == QLatin1String("github.com") || h == QLatin1String("api.github.com") || h.endsWith(QLatin1String(".githubusercontent.com"));
+}
+
 void Updater::download(const UpdateInfo& info) {
     if (m_reply || !info.valid()) return;
+    if (!trustedAsset(info.installerUrl) || (info.shaUrl.isValid() && !trustedAsset(info.shaUrl))) {
+        const QString e = tr("The update link isn't a secure GitHub download, so it wasn't used.");
+        pacitumLog(QStringLiteral("update: refused untrusted asset url %1").arg(info.installerUrl.toString()));
+        setStatus(e); emit downloadFinished(false, e); return;
+    }
     m_pending = info;
     const QString dir = workDir();
     QString name = QFileInfo(info.installerName).fileName();
@@ -225,7 +264,14 @@ void Updater::cancelDownload() {
 }
 
 void Updater::fetchSha() {
-    if (!m_pending.shaUrl.isValid()) { verifyAndFinish({}); return; }
+    // 1.9.0 / 1.8.11: no checksum, no install (every CI release attaches "<installer>.sha256").
+    // PACITUM_UPDATE_ALLOW_UNSIGNED=1 keeps the old size-only check for hand-made test releases.
+    if (!m_pending.shaUrl.isValid()) {
+        if (qEnvironmentVariableIntValue("PACITUM_UPDATE_ALLOW_UNSIGNED")) { verifyAndFinish({}); return; }
+        QFile::remove(m_file + QStringLiteral(".part"));
+        const QString e = tr("This release has no SHA-256 checksum, so Pacitum can't check the download. It wasn't installed.");
+        setStatus(e); emit downloadFinished(false, e); return;
+    }
     QNetworkRequest r(m_pending.shaUrl);
     r.setRawHeader("Accept", "application/octet-stream");
     addAuth(r);

@@ -86,6 +86,25 @@ jobs:
           # The app's own check (window visible + exposed, 1440x900) counts when the handle poll missed it.
           $smokeOk = [bool](Select-String -Path smoke\startup.log -Pattern 'SMOKE OK' -Quiet -ErrorAction SilentlyContinue)
           if ($p.ExitCode -ne 0 -or (-not $smokeOk -and (-not $alive -or $hwnd -eq 0))) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+          # The update pop-up opened by clicking "Update" on the card (1.8.9/1.8.10 crashed there).
+          if (-not (Select-String -Path smoke\startup.log -Pattern 'UPDATE UI OK' -Quiet)) { Write-Error "UPDATE POP-UP TEST FAILED"; exit 1 }
+      - name: Update helper test (starts from a temp copy, shows its pop-up, quits on the marker)
+        shell: pwsh
+        run: |
+          # Same files the browser copies before an update (Updater::startInstall).
+          $h = "$env:TEMP\PacitumHelperTest"; Remove-Item $h -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$h\platforms" | Out-Null
+          foreach ($f in 'PacitumUpdateHelper.exe','Qt6Core.dll','Qt6Gui.dll','Qt6Widgets.dll','platforms\qwindows.dll') { Copy-Item "dist\$f" "$h\$f" }
+          Get-ChildItem dist -File | Where-Object { $_.Name -match '^(vcruntime|msvcp|concrt).*\.dll$' } | Copy-Item -Destination $h
+          $ready = "$h\ready"; $marker = "$h\marker"; $log = "$h\update.log"
+          $p = Start-Process "$h\PacitumUpdateHelper.exe" -ArgumentList '--ready',$ready,'--marker',$marker,'--log',$log,'--version','0.0.0' -WorkingDirectory $h -PassThru
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $ready); $i++) { Start-Sleep -Milliseconds 500; if ($p.HasExited) { break } }
+          $up = Test-Path $ready
+          Set-Content $marker '1'
+          if (-not $p.WaitForExit(20000)) { Write-Host "helper didn't quit on the marker; killing"; $p.Kill() }
+          Get-Content $log -ErrorAction SilentlyContinue
+          Write-Host "pop-up shown=$up exit code=$($p.ExitCode)"
+          if (-not $up -or $p.ExitCode -ne 0) { Write-Error "UPDATE HELPER TEST FAILED"; exit 1 }
       - name: Resize test (Qt resize, SetWindowPos, live drag, maximize/restore)
         shell: pwsh
         run: |

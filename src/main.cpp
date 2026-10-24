@@ -15,6 +15,7 @@
 #include <QtGlobal>
 #include "BrowserWindow.h"
 #include "UpdateOverlay.h"
+#include "UpdateUi.h"
 #include "ChromeExtensions.h"
 #include "ProfileManager.h"
 #include "ProfileUi.h"
@@ -418,6 +419,8 @@ int main(int argc, char *argv[]) {
             else if (stress) QTimer::singleShot(1500, &w, [&w]{ pacitumLog(QStringLiteral("stress test starting")); w.runStressTest(); });
             else if (smoke) {
                 // CI smoke test: window must stay visible; quit cleanly 5 s after it appeared.
+                // Meanwhile the update pop-up is opened the way a user does it (1.8.10 crashed there).
+                QTimer::singleShot(1500, &w, [&w]{ UpdateFlow::instance()->runSelfTest(&w); });
                 QTimer::singleShot(5000, &w, [&w]{
                     const bool ok = w.isVisible() && w.windowHandle() && w.windowHandle()->isExposed() && w.width() > 200 && w.height() > 200;
                     pacitumLog(QStringLiteral("SMOKE %1 visible=%2 exposed=%3 size=%4x%5").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))

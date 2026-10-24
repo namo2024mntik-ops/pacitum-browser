@@ -61,6 +61,8 @@ protected:
 private:
     void place();
     QPointer<QWidget> m_anchor;
+    bool m_leaving = false;
+    QPointer<QVariantAnimation> m_anim;   // slide-in or slide-out in progress
 };
 
 class UpdateFlow : public QObject {
@@ -71,6 +73,9 @@ public:
     void attach(QWidget* window, UpdatePill* pill, QWidget* anchor);
     void offer(const UpdateInfo& info, QWidget* window, bool userInitiated);
     void afterStartup(QWidget* window);   // first window of a run: finish a hand-off, show "Update done"
+    // CI smoke test: offer a dummy update, click "Update" on the card like a user, and check the
+    // download pop-up opens (1.8.9/1.8.10 crashed right there). Logs "UPDATE UI OK|FAIL".
+    void runSelfTest(QWidget* window);
 
     enum State { Idle, Offered, Downloading, Ready, Failed, Installing };
     State state() const { return m_state; }

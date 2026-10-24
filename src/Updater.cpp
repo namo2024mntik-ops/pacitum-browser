@@ -17,6 +17,14 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QDateTime>
+#include <QSet>
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
 
 void pacitumLog(const QString& line);   // main.cpp (startup.log)
 
@@ -110,7 +118,7 @@ void Updater::setAutoCheck(bool on) {
 void Updater::check(bool userInitiated) {
     if (m_reply) return;
     emit checking();
-    pacitumLog(QStringLiteral("update check: %1 (%2)").arg(feedUrl().toString(), userInitiated ? QStringLiteral("user") : QStringLiteral("background")));
+    Updater::logLine(QStringLiteral("update check: %1 (%2)").arg(feedUrl().toString(), userInitiated ? QStringLiteral("user") : QStringLiteral("background")));
     setStatus(tr("Checking for updates…"));
     auto* reply = m_net->get(apiRequest(feedUrl()));
     m_reply = reply;
@@ -122,7 +130,7 @@ void Updater::check(bool userInitiated) {
             QString err = reply->errorString();
             if (http == 404) err = tr("No public release feed found (the repository may be private).");
             else if (http == 403) err = tr("Update server is rate-limiting requests. Try again later.");
-            pacitumLog(QStringLiteral("update check failed: http=%1 %2").arg(http).arg(reply->errorString()));
+            Updater::logLine(QStringLiteral("update check failed: http=%1 %2").arg(http).arg(reply->errorString()));
             setStatus(tr("Couldn't check for updates: %1").arg(err));
             emit checkFailed(err, userInitiated);
             return;
@@ -163,13 +171,21 @@ void Updater::check(bool userInitiated) {
 #else
         static const QRegularExpression setupRe(QStringLiteral("linux.*\\.appimage$"), QRegularExpression::CaseInsensitiveOption);
 #endif
+        // A release can hold more than one matching file (e.g. a hand-uploaded copy next to the CI
+        // build). Prefer the one with its own .sha256, then the standard "PacitumBrowser-" name.
+        QSet<QString> shaNames;
+        for (const auto& av : assets) shaNames.insert(av.toObject().value(QStringLiteral("name")).toString().toLower());
+        int bestScore = -1;
         for (const auto& av : assets) {
             const auto a = av.toObject(); const QString n = a.value(QStringLiteral("name")).toString();
-            if (setupRe.match(n).hasMatch() && info.installerName.isEmpty()) {
-                info.installerName = n;
-                info.installerUrl = QUrl(assetUrl(a));
-                info.installerSize = qint64(a.value(QStringLiteral("size")).toDouble(-1));
-            }
+            if (!setupRe.match(n).hasMatch()) continue;
+            const int score = (shaNames.contains(n.toLower() + QStringLiteral(".sha256")) ? 2 : 0)
+                            + (n.startsWith(QStringLiteral("PacitumBrowser"), Qt::CaseInsensitive) ? 1 : 0);
+            if (score <= bestScore) continue;
+            bestScore = score;
+            info.installerName = n;
+            info.installerUrl = QUrl(assetUrl(a));
+            info.installerSize = qint64(a.value(QStringLiteral("size")).toDouble(-1));
         }
         for (const auto& av : assets) {
             const auto a = av.toObject(); const QString n = a.value(QStringLiteral("name")).toString();
@@ -185,7 +201,7 @@ void Updater::check(bool userInitiated) {
             return;
         }
         m_latest = info;
-        pacitumLog(QStringLiteral("update check: current=%1 latest=%2 installer=%3").arg(currentVersion(), info.version, info.installerName));
+        Updater::logLine(QStringLiteral("update check: current=%1 latest=%2 installer=%3").arg(currentVersion(), info.version, info.installerName));
         if (compareVersions(info.version, currentVersion()) > 0 && info.valid()) {
             setStatus(tr("Pacitum %1 is available.").arg(info.version));
             emit updateAvailable(info, userInitiated);
@@ -209,7 +225,7 @@ void Updater::download(const UpdateInfo& info) {
     if (m_reply || !info.valid()) return;
     if (!trustedAsset(info.installerUrl) || (info.shaUrl.isValid() && !trustedAsset(info.shaUrl))) {
         const QString e = tr("The update link isn't a secure GitHub download, so it wasn't used.");
-        pacitumLog(QStringLiteral("update: refused untrusted asset url %1").arg(info.installerUrl.toString()));
+        Updater::logLine(QStringLiteral("update: refused untrusted asset url %1").arg(info.installerUrl.toString()));
         setStatus(e); emit downloadFinished(false, e); return;
     }
     m_pending = info;
@@ -316,13 +332,13 @@ void Updater::verifyAndFinish(const QByteArray& expectedHex) {
         if (!f.open(QIODevice::ReadOnly) || !h.addData(&f) || h.result().toHex() != expectedHex) {
             f.close(); QFile::remove(part);
             const QString e = tr("Checksum mismatch: the download is damaged or was tampered with.");
-            pacitumLog(QStringLiteral("update: SHA256 mismatch"));
+            Updater::logLine(QStringLiteral("update: SHA256 mismatch"));
             setStatus(e); emit downloadFinished(false, e); return;
         }
     }
     QFile::remove(m_file);
     if (!QFile::rename(part, m_file)) { const QString e = tr("Couldn't finalize the download."); setStatus(e); emit downloadFinished(false, e); return; }
-    pacitumLog(QStringLiteral("update: downloaded %1 (%2)").arg(m_file, expectedHex.isEmpty() ? QStringLiteral("size verified, no SHA256 asset") : QStringLiteral("SHA256 verified")));
+    Updater::logLine(QStringLiteral("update: downloaded %1 (%2)").arg(m_file, expectedHex.isEmpty() ? QStringLiteral("size verified, no SHA256 asset") : QStringLiteral("SHA256 verified")));
     setStatus(expectedHex.isEmpty() ? tr("Downloaded (size verified).") : tr("Downloaded and verified."));
     emit downloadFinished(true, {});
 }
@@ -331,6 +347,48 @@ QString Updater::workDir() {
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/PacitumUpdate");
     QDir().mkpath(dir);
     return dir;
+}
+
+QString Updater::updateLog() { return workDir() + QStringLiteral("/update.log"); }
+
+void Updater::logLine(const QString& line) {
+    pacitumLog(line);
+    QFile f(updateLog());
+    if (f.open(QIODevice::Append | QIODevice::Text))
+        f.write((QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz ")) + QStringLiteral("[browser %1] ").arg(currentVersion()) + line + QLatin1Char('\n')).toUtf8());
+}
+
+bool Updater::helperRunning() const {
+#ifdef Q_OS_WIN
+    if (m_helperPid <= 0) return false;
+    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(m_helperPid));
+    if (!h) return false;
+    DWORD code = 0;
+    const bool alive = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+    CloseHandle(h);
+    return alive;
+#else
+    return true;   // Linux: the overlay is the new AppImage itself; nothing else to fall back to
+#endif
+}
+
+bool Updater::runInstallerYourself() {
+    // The helper didn't come up: run Setup with its normal window instead of quitting with nothing
+    // running. It asks to close Pacitum, installs, and offers to start it again.
+    if (m_file.isEmpty() || !QFile::exists(m_file)) return false;
+#ifdef Q_OS_WIN
+    const std::wstring file = QDir::toNativeSeparators(m_file).toStdWString();
+    SHELLEXECUTEINFOW sei{}; sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_FLAG_NO_UI;
+    sei.lpVerb = L"open"; sei.lpFile = file.c_str();
+    sei.lpParameters = L"/CLOSEAPPLICATIONS";
+    sei.nShow = SW_SHOWNORMAL;
+    const bool ok = ShellExecuteExW(&sei);
+    logLine(QStringLiteral("update: helper not confirmed; started Setup with its window ok=%1 err=%2").arg(ok).arg(ok ? 0 : GetLastError()));
+    return ok;
+#else
+    return false;
+#endif
 }
 
 QStringList Updater::noteLines(const QString& markdown, int max) {
@@ -354,7 +412,10 @@ QStringList Updater::noteLines(const QString& markdown, int max) {
 
 bool Updater::startInstall(const QStringList& overlayArgs) {
     if (m_file.isEmpty() || !QFile::exists(m_file)) return false;
-    const QString log = QDir::currentPath() + QStringLiteral("/startup.log");
+    // The helper logs next to the download (startup.log is cleared when Pacitum opens again).
+    const QString log = updateLog();
+    if (QFileInfo(log).size() > 256 * 1024) QFile::remove(log);
+    m_helperPid = 0;
     QStringList args = overlayArgs;
     args << QStringLiteral("--pid") << QString::number(QCoreApplication::applicationPid())
          << QStringLiteral("--version") << m_pending.version
@@ -375,10 +436,10 @@ bool Updater::startInstall(const QStringList& overlayArgs) {
     if (copied) {
         args << QStringLiteral("--installer") << QDir::toNativeSeparators(m_file)
              << QStringLiteral("--app") << QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
-        const bool ok = QProcess::startDetached(helperDir + QStringLiteral("/PacitumUpdateHelper.exe"), args, helperDir);
-        pacitumLog(QStringLiteral("update: helper started=%1").arg(ok));
+        const bool ok = QProcess::startDetached(helperDir + QStringLiteral("/PacitumUpdateHelper.exe"), args, helperDir, &m_helperPid);
+        logLine(QStringLiteral("update: helper started=%1 pid=%2 installer=%3").arg(ok).arg(m_helperPid).arg(m_file));
         if (ok) return true;
-    } else pacitumLog(QStringLiteral("update: couldn't copy the helper; falling back to the hidden installer"));
+    } else logLine(QStringLiteral("update: couldn't copy the helper; falling back to the hidden installer"));
     // Fallback (developer builds without the helper): a hidden PowerShell waits for us, then runs Setup.
     auto q = [](QString s){ return QStringLiteral("'") + s.replace(QLatin1Char('\''), QStringLiteral("''")) + QStringLiteral("'"); };
     const QString script = QStringLiteral(
@@ -387,12 +448,12 @@ bool Updater::startInstall(const QStringList& overlayArgs) {
         .arg(QCoreApplication::applicationPid()).arg(q(QDir::toNativeSeparators(m_file)));
     const bool ok = QProcess::startDetached(QStringLiteral("powershell.exe"),
         {QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"), QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-Command"), script});
-    pacitumLog(QStringLiteral("update: installer helper (PowerShell) started=%1").arg(ok));
+    logLine(QStringLiteral("update: installer helper (PowerShell) started=%1").arg(ok));
     return ok;
 #elif defined(Q_OS_MACOS)
     // macOS: open the downloaded disk image; the user drags the new app over the old one.
     const bool ok = QProcess::startDetached(QStringLiteral("/usr/bin/open"), {m_file});
-    pacitumLog(QStringLiteral("update: opened %1 ok=%2").arg(m_file).arg(ok));
+    Updater::logLine(QStringLiteral("update: opened %1 ok=%2").arg(m_file).arg(ok));
     Q_UNUSED(args);
     return false;
 #else
@@ -404,10 +465,10 @@ bool Updater::startInstall(const QStringList& overlayArgs) {
     QFile::remove(staged);
     if (!QFile::copy(m_file, staged)) return false;
     QFile::setPermissions(staged, QFile::permissions(current) | QFileDevice::ExeOwner | QFileDevice::ExeUser);
-    if (!QFile::remove(current) || !QFile::rename(staged, current)) { pacitumLog(QStringLiteral("update: could not replace %1").arg(current)); return false; }
+    if (!QFile::remove(current) || !QFile::rename(staged, current)) { Updater::logLine(QStringLiteral("update: could not replace %1").arg(current)); return false; }
     args << QStringLiteral("--relaunch") << current << QStringLiteral("--app") << current;
     bool ok = QProcess::startDetached(current, QStringList{QStringLiteral("--update-overlay")} + args);
-    pacitumLog(QStringLiteral("update: replaced %1, overlay=%2").arg(current).arg(ok));
+    Updater::logLine(QStringLiteral("update: replaced %1, overlay=%2").arg(current).arg(ok));
     if (!ok) ok = QProcess::startDetached(current, {});   // no pop-up, but still restart
     return ok;
 #endif

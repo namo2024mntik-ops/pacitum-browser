@@ -442,7 +442,8 @@ void BrowserWindow::createToolbar() {
         if (auto* t = activeTab()) updateStoreButton(t->currentUrl());
     });
     connect(ChromeExtensions::instance(), &ChromeExtensions::message, this, [this](const QString& m){ if (isActiveWindow()) showNotice(m); });
-    QTimer::singleShot(1200, this, [this]{ rebuildExtensionPins(); });   // after the profile has loaded its extensions lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
+    QTimer::singleShot(1200, this, [this]{ rebuildExtensionPins(); });   // after the profile has loaded its extensions
+    lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
 }
 
 void BrowserWindow::refreshIcons() {

@@ -221,23 +221,32 @@ void UpdateCard::slideIn() {
     if (Pacitum::reducedMotion()) return;
     auto* eff = new QGraphicsOpacityEffect(this); eff->setOpacity(0); setGraphicsEffect(eff);
     auto* a = new QVariantAnimation(this);
+    m_anim = a;
     a->setStartValue(0.0); a->setEndValue(1.0); a->setDuration(360); a->setEasingCurve(QEasingCurve::OutCubic);
     const QPoint end = pos();
-    connect(a, &QVariantAnimation::valueChanged, this, [this, eff, end](const QVariant& v){
-        const double t = v.toDouble(); eff->setOpacity(t); move(end + QPoint(0, qRound(-12 * (1 - t))));
+    QPointer<QGraphicsOpacityEffect> fx(eff);
+    connect(a, &QVariantAnimation::valueChanged, this, [this, fx, end](const QVariant& v){
+        const double t = v.toDouble(); if (fx) fx->setOpacity(t); move(end + QPoint(0, qRound(-12 * (1 - t))));
     });
-    connect(a, &QVariantAnimation::finished, this, [this]{ setGraphicsEffect(nullptr); });
+    connect(a, &QVariantAnimation::finished, this, [this, fx]{ if (fx && graphicsEffect() == fx) setGraphicsEffect(nullptr); });
     a->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
 void UpdateCard::slideOut() {
+    // Once only: a second call replaced the opacity effect, which deletes the one the first fade
+    // was still animating (1.8.9/1.8.10 crashed right after clicking Update).
+    if (m_leaving) return;
+    m_leaving = true;
     if (Pacitum::reducedMotion() || !isVisible()) { deleteLater(); return; }
+    if (m_anim) m_anim->stop();   // the slide-in, if still running (deletes itself when stopped)
     auto* eff = new QGraphicsOpacityEffect(this); setGraphicsEffect(eff);
     auto* a = new QVariantAnimation(this);
+    m_anim = a;
     a->setStartValue(1.0); a->setEndValue(0.0); a->setDuration(200); a->setEasingCurve(QEasingCurve::InCubic);
     const QPoint start = pos();
-    connect(a, &QVariantAnimation::valueChanged, this, [this, eff, start](const QVariant& v){
-        const double t = v.toDouble(); eff->setOpacity(t); move(start + QPoint(0, qRound(-8 * (1 - t))));
+    QPointer<QGraphicsOpacityEffect> fx(eff);
+    connect(a, &QVariantAnimation::valueChanged, this, [this, fx, start](const QVariant& v){
+        const double t = v.toDouble(); if (fx) fx->setOpacity(t); move(start + QPoint(0, qRound(-8 * (1 - t))));
     });
     connect(a, &QVariantAnimation::finished, this, &QObject::deleteLater);
     a->start(QAbstractAnimation::DeleteWhenStopped);
@@ -269,7 +278,7 @@ UpdateFlow::UpdateFlow(QObject* parent) : QObject(parent) {
         }
         if (!ok) {
             m_state = Failed; m_error = err;
-            pacitumLog(QStringLiteral("update: download failed: %1").arg(err));
+            Updater::logLine(QStringLiteral("update: download failed: %1").arg(err));
             setPills(UpdatePill::Available);
             if (m_sheet && m_sheet->isVisible()) fillFailed(err);
             else showSheet(hostWindow());
@@ -336,10 +345,10 @@ void UpdateFlow::offer(const UpdateInfo& info, QWidget* window, bool userInitiat
     setPills(UpdatePill::Hidden);
     auto* card = new UpdateCard(info, window, anchor);
     m_card = card;
-    connect(card, &UpdateCard::updateClicked, this, [this, card]{ QWidget* w = card->window(); card->slideOut(); startDownload(w); });
+    connect(card, &UpdateCard::updateClicked, this, [this, card]{ startDownload(card->window()); });   // startDownload slides the card out
     connect(card, &UpdateCard::laterClicked, this, [this, card]{ card->slideOut(); setPills(UpdatePill::Available); });
     card->slideIn();
-    pacitumLog(QStringLiteral("update: offered %1 (%2)").arg(info.version, userInitiated ? QStringLiteral("user") : QStringLiteral("background")));
+    Updater::logLine(QStringLiteral("update: offered %1 (%2)").arg(info.version, userInitiated ? QStringLiteral("user") : QStringLiteral("background")));
 }
 
 void UpdateFlow::startDownload(QWidget* window) {
@@ -517,7 +526,7 @@ void UpdateFlow::install() {
         setPills(UpdatePill::Ready);
         return;
     }
-    pacitumLog(QStringLiteral("update: installing %1; closing windows").arg(m_info.version));
+    Updater::logLine(QStringLiteral("update: installing %1 from %2; closing windows").arg(m_info.version, Updater::instance()->downloadedPath()));
     // Windows shrink away: a screenshot of each plays the animation while the real window closes
     // at once (sessions are saved in closeEvent), so nothing can sit there "not responding".
     QApplication::setQuitOnLastWindowClosed(false);
@@ -531,20 +540,70 @@ void UpdateFlow::install() {
             mw->close();
         }
     });
-    // Quit once the helper's identical pop-up is on screen (or after 6 s at the latest).
+    // Quit once the helper's identical pop-up is on screen. Never quit with nothing running: when the
+    // helper dies or doesn't show up (antivirus, a missing file), Setup opens with its own window.
     auto* wait = new QTimer(this); wait->setInterval(50);
     auto started = std::make_shared<QElapsedTimer>(); started->start();
     QPointer<Sheet> guard(inst);
-    connect(wait, &QTimer::timeout, this, [wait, started, guard]{
+    connect(wait, &QTimer::timeout, this, [this, wait, started, guard, where = Updater::instance()->downloadedPath()]{
+        const qint64 t = started->elapsed();
         const bool ready = QFile::exists(Updater::readyFile());
-        if (!ready && started->elapsed() < 6000) return;
-        if (started->elapsed() < 900) return;   // let the windows finish shrinking
+        if (t < 900) return;   // let the windows finish shrinking
+        bool fallback = false;
+        if (!ready) {
+#ifdef Q_OS_WIN
+            const bool alive = Updater::instance()->helperRunning();
+            if (alive && t < 20000) return;          // slow start (first run, antivirus scan): keep waiting
+            if (!alive && t < 1500) return;
+            fallback = true;
+            Updater::logLine(QStringLiteral("update: helper %1 after %2 ms").arg(alive ? QStringLiteral("not on screen") : QStringLiteral("exited")).arg(t));
+#else
+            if (t < 6000) return;
+#endif
+        }
         wait->stop();
-        pacitumLog(QStringLiteral("update: helper %1; quitting").arg(ready ? QStringLiteral("ready") : QStringLiteral("not confirmed")));
+        if (fallback && !Updater::instance()->runInstallerYourself()) {
+            // Nothing could start: say where the file is instead of vanishing.
+            if (!guard) { QTimer::singleShot(30, qApp, &QCoreApplication::quit); return; }
+            QFile::remove(Updater::pendingFile());
+            guard->swap([this, inst = guard.data(), where]{
+                inst->hero()->setMode(Hero::Warn);
+                inst->detail()->hide();
+                inst->title()->setText(tr("Install it yourself"));
+                inst->text()->setText(tr("The update couldn't start. The new version was saved to %1").arg(QDir::toNativeSeparators(where)));
+                inst->setButtons(tr("Show file"), tr("Close"));
+                connect(inst->primary(), &QPushButton::clicked, this, [where]{ QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(where).absolutePath())); });
+                connect(inst->secondary(), &QPushButton::clicked, inst, [inst]{ inst->popOut([]{ QCoreApplication::quit(); }); });
+            });
+            return;
+        }
+        Updater::logLine(QStringLiteral("update: helper %1; quitting").arg(ready ? QStringLiteral("ready") : QStringLiteral("not confirmed")));
         if (guard) guard->hide();
         QTimer::singleShot(30, qApp, &QCoreApplication::quit);
     });
     wait->start();
+}
+
+void UpdateFlow::runSelfTest(QWidget* window) {
+    UpdateInfo info;
+    info.version = QStringLiteral("99.0.0"); info.tag = QStringLiteral("v99.0.0"); info.name = QStringLiteral("Pacitum test update");
+    info.notes = QStringLiteral("- self test");
+    info.installerName = QStringLiteral("PacitumBrowser-Setup-99.0.0.exe");
+    info.installerUrl = QUrl(QStringLiteral("https://github.com/namo2024mntik-ops/pacitum-browser/releases/download/v99.0.0/PacitumBrowser-Setup-99.0.0.exe"));
+    info.installerSize = 1;
+    offer(info, window, true);
+    QPointer<UpdateCard> card = m_card;
+    // Click "Update" mid slide-in, then again after it finished: both crashed before the fix.
+    QTimer::singleShot(150, this, [card]{ if (card) emit card->updateClicked(); });
+    QTimer::singleShot(1200, this, [this, window = QPointer<QWidget>(window)]{
+        const bool ok = m_sheet && m_sheet->isVisible() && (m_state == Downloading || m_state == Failed);
+        Updater::logLine(QStringLiteral("UPDATE UI %1 state=%2 sheet=%3").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))
+                         .arg(int(m_state)).arg(m_sheet && m_sheet->isVisible()));
+        if (m_state == Downloading) { m_cancelled = true; Updater::instance()->cancelDownload(); }
+        if (m_sheet) { m_sheet->hide(); m_sheet->deleteLater(); }
+        m_state = Idle; setPills(UpdatePill::Hidden);
+        if (window) window->activateWindow();
+    });
 }
 
 void UpdateFlow::afterStartup(QWidget* window) {
@@ -558,7 +617,7 @@ void UpdateFlow::afterStartup(QWidget* window) {
     { QFile m(Updater::markerFile()); if (m.open(QIODevice::WriteOnly)) m.write("1"); }   // the helper's pop-up can go now
     const QString ver = o.value(QStringLiteral("version")).toString();
     const qint64 age = QDateTime::currentSecsSinceEpoch() - qint64(o.value(QStringLiteral("at")).toDouble());
-    pacitumLog(QStringLiteral("update: started after installing %1 (now %2, %3 s ago)").arg(ver, Updater::currentVersion()).arg(age));
+    Updater::logLine(QStringLiteral("update: started after installing %1 (now %2, %3 s ago)").arg(ver, Updater::currentVersion()).arg(age));
     if (ver.isEmpty() || age > 3600 || Updater::compareVersions(Updater::currentVersion(), ver) < 0) return;
     QPointer<QWidget> w(window);
     QTimer::singleShot(650, this, [this, w, o]{ if (w) showDone(w, o); });   // after the helper's pop-up zooms out

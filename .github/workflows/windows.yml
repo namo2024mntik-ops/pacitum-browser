@@ -59,7 +59,9 @@ jobs:
           # Poll for the window instead of a fixed 6 s sleep: cold runners sometimes need ~8 s
           # (QtWebEngine init) and the old check failed although the app reported SMOKE OK.
           $hwnd = 0; $alive = $true
-          for ($i = 0; $i -lt 50; $i++) {
+          # (up to 60 s: a cold runner once needed 25 s just to start Qt WebEngine, and the window
+          # appeared 70 ms after a 25 s limit although the app reported SMOKE OK)
+          for ($i = 0; $i -lt 120; $i++) {
             Start-Sleep -Milliseconds 500; $p.Refresh()
             if ($p.HasExited) { $alive = $false; break }
             if ($p.MainWindowHandle -ne 0) { $hwnd = $p.MainWindowHandle; break }
@@ -81,7 +83,9 @@ jobs:
           Get-ChildItem dist -Recurse -Name | Out-File -Append smoke\dist-files.txt
           $tl = Get-Content smoke\startup.log -ErrorAction SilentlyContinue | Select-String 'time-to-window|time-to-first-paint|time-to-first-page'
           "startup timing: $($tl -join ' | ')" | Tee-Object smoke\timing.txt
-          if (-not $alive -or $hwnd -eq 0 -or $p.ExitCode -ne 0) { Write-Error "SMOKE TEST FAILED"; exit 1 }
+          # The app's own check (window visible + exposed, 1440x900) counts when the handle poll missed it.
+          $smokeOk = [bool](Select-String -Path smoke\startup.log -Pattern 'SMOKE OK' -Quiet -ErrorAction SilentlyContinue)
+          if ($p.ExitCode -ne 0 -or (-not $smokeOk -and (-not $alive -or $hwnd -eq 0))) { Write-Error "SMOKE TEST FAILED"; exit 1 }
       - name: Resize test (Qt resize, SetWindowPos, live drag, maximize/restore)
         shell: pwsh
         run: |

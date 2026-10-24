@@ -439,6 +439,7 @@ void ChromeExtensions::runSelfTest(QWidget* anchor, const std::function<void(con
     struct Step { QString what; QString source; QString storeId; };
     auto steps = std::make_shared<QList<Step>>(QList<Step>{
         {QStringLiteral("unpacked test extension"), dir, {}},
+        {QStringLiteral("store: Enhancer for YouTube"), {}, QStringLiteral("ponfpcnoihfmfllpaingbgckeeldkhle")},
         {QStringLiteral("store: uBlock Origin Lite"), {}, QStringLiteral("ddkjiahejlhfcafbddmgiahcphecmpfh")},
     });
     auto mgr = m_profile->extensionManager();

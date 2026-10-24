@@ -13,5 +13,7 @@ latest="--latest"
 case "$tag" in v1.8.*) latest="--latest=false" ;; esac
 # Several jobs (Windows, Linux, macOS) may try at once: a failed create is fine if the release now exists.
 tail -n +2 "$notes" > "$RUNNER_TEMP/notes-$tag.md"
-gh release create "$tag" --repo "$repo" --verify-tag --title "$title" --notes-file "$RUNNER_TEMP/notes-$tag.md" $latest \
+# TARGET (a commit) is set by the release workflow, which creates the tag together with the release.
+where=(--verify-tag); [ -n "${TARGET:-}" ] && where=(--target "$TARGET")
+gh release create "$tag" --repo "$repo" "${where[@]}" --title "$title" --notes-file "$RUNNER_TEMP/notes-$tag.md" $latest \
   || { sleep 5; gh release view "$tag" --repo "$repo" >/dev/null 2>&1; }

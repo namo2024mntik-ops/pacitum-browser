@@ -84,7 +84,7 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           [ "${{ github.ref_name }}" = "v$(cat build/pacitum-version.txt)" ] || { echo "tag is for the other line; skipping"; exit 0; }
-          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || { echo "no release yet; skipping"; exit 0; }
+          bash .github/ensure-release.sh "${{ github.ref_name }}" "${{ github.repository }}" || { echo "no release and no release-notes/${{ github.ref_name }}.md; skipping"; exit 0; }
           gh release upload "${{ github.ref_name }}" PacitumBrowser-*.AppImage* --clobber --repo "${{ github.repository }}"
 
   macos:
@@ -145,5 +145,5 @@ jobs:
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           [ "${{ github.ref_name }}" = "v$(cat build/pacitum-version.txt)" ] || { echo "tag is for the other line; skipping"; exit 0; }
-          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" >/dev/null 2>&1 || { echo "no release yet; skipping"; exit 0; }
+          bash .github/ensure-release.sh "${{ github.ref_name }}" "${{ github.repository }}" || { echo "no release and no release-notes/${{ github.ref_name }}.md; skipping"; exit 0; }
           gh release upload "${{ github.ref_name }}" PacitumBrowser-*.dmg* --clobber --repo "${{ github.repository }}"

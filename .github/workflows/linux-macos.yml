@@ -60,7 +60,15 @@ jobs:
           wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy*.AppImage
           export QMAKE="$QT_ROOT_DIR/bin/qmake"
-          export EXTRA_PLATFORM_PLUGINS="libqwayland-egl.so;libqwayland-generic.so"
+          # Wayland platform plugins: Qt 6.8 ships libqwayland-egl / -generic, Qt 6.11 renamed them
+          # (one libqwayland.so). Bundle whichever exist so both editions run on Wayland desktops.
+          plugins=""
+          for p in libqwayland-egl.so libqwayland-generic.so libqwayland.so; do
+            [ -f "$QT_ROOT_DIR/plugins/platforms/$p" ] && plugins="${plugins:+$plugins;}$p"
+          done
+          ls "$QT_ROOT_DIR/plugins/platforms/"
+          echo "extra platform plugins: ${plugins:-none}"
+          [ -n "$plugins" ] && export EXTRA_PLATFORM_PLUGINS="$plugins"
           export OUTPUT="PacitumBrowser-$ver-linux-x86_64.AppImage"
           ./linuxdeploy-x86_64.AppImage --appdir AppDir -e AppDir/usr/bin/PacitumBrowser \
             -d resources/linux/pacitum-browser.desktop -i resources/linux/pacitum-browser.png --plugin qt --output appimage

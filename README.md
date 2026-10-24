@@ -116,19 +116,40 @@ Stored in `browser_settings.json`, `bookmarks.json`, `browser_session.json`, `br
 GitHub Actions (`.github/workflows/windows.yml`) builds `PacitumBrowser.exe` with Qt 6.8 LTS MSVC 2022, bundles it with windeployqt and produces `installer/PacitumBrowser-Setup-<ver>.exe` via Inno Setup (`installer.iss`). The app icon (`resources/pacitum.ico`, 16–256 px) is embedded through `resources/app.rc`.
 
 ## System requirements
-since Pacitum Browser 1.8.7 I have added support to MacOS(Apple silicon) And Linux so here is requirement
+Since Pacitum Browser 1.8.7 Pacitum runs on Windows, macOS (Apple silicon) and Linux.
+Since 1.9.0 there are two editions built from the same source:
+
+| Edition | Built with | Chromium | Chrome extensions | Updates | Support |
+|---|---|---|---|---|---|
+| **Pacitum 1.9.x** (recommended) | Qt 6.11 | newer Chromium | ✅ | newest version | ✅ |
+| **Pacitum 1.8.x legacy** | Qt 6.8 LTS | Chromium 122 base (security fixes backported) | — | stays on 1.8.x | - |
+
+Use the legacy edition only if 1.9 doesn't start or doesn't draw correctly on your computer (for example older graphics drivers).
 
 | | Windows | Linux | macOS |
 |---|---|---|---|
-| **OS** | Windows 10 (1809+) or Windows 11, 64-bit | x86_64 distro with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer) | macOS 12 Monterey or newer |
+| **OS** | Windows 10 (1809+) or Windows 11, 64-bit | x86_64 distro with glibc 2.35+ (Ubuntu 22.04, Debian 12, Fedora 36 or newer) | macOS 12 Monterey or newer (1.8.x legacy); 1.9.x may need a newer macOS |
 | **CPU** | x86_64 | x86_64 | Apple silicon (M1 or newer) |
 | **Download** | `PacitumBrowser-Setup-<ver>.exe` | `PacitumBrowser-<ver>-linux-x86_64.AppImage` | `PacitumBrowser-<ver>-macOS-arm64.dmg` |
 
+Pick the file from the release of your edition: tag `v1.9.x` for 1.9, tag `v1.8.x` for legacy.
+
 - **Memory:** 4 GB RAM minimum, 8 GB recommended (each site runs in its own Chromium process; Pacitum caps this at 8).
-- **Disk:** about 500 MB free for the app plus space for cache and profile data.
+- **Disk:** about 500 MB free for the app plus space for cache, profile data and Chrome extensions.
 - **Graphics:** a GPU with Direct3D 11 (Windows), OpenGL (Linux) or Metal (macOS) support. With a broken driver, start with `PACITUM_DISABLE_GPU=1` to use software rendering.
 - **Linux AppImage:** needs FUSE (`libfuse2`) to run, or run it with `--appimage-extract-and-run`.
 - **macOS:** the app isn't notarized; the first time, right-click → **Open**.
+
+### Building from source
+- Qt with Qt WebEngine, Qt WebChannel and Qt Positioning (optional: Qt Serial Port, Qt Connectivity):
+  - **Qt 6.11 or newer** → builds Pacitum **1.9.x** (Chrome extensions)
+  - **Qt 6.8 LTS** → builds Pacitum **1.8.x legacy**
+  - CMake picks the edition from the Qt it finds and prints it (`-- Pacitum 1.9.0 with Qt 6.11.x`).
+- CMake 3.16+ and Ninja
+- A C++17 compiler: MSVC 2019+ (Windows), GCC 11+ (Linux), Xcode / Apple Clang (macOS)
+- Windows CI note: aqtinstall 3.3.0 can't install Qt 6.11 for MSVC; the workflow pins the upstream fix.
+
+See `BUILD.md` for the steps on each system.
 
 ### Building from source
 - Qt **6.8 or newer** with Qt WebEngine, Qt WebChannel and Qt Positioning (optional: Qt Serial Port, Qt Connectivity)

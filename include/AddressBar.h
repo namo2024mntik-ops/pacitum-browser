@@ -4,10 +4,14 @@
 #include <QLabel>
 #include <QToolButton>
 #include <QCompleter>
-#include <QStringListModel>
 #include <QTimer>
 #include <QVariantAnimation>
+#include <QPointer>
 class StarButton;
+class QNetworkAccessManager;
+class QNetworkReply;
+class QStandardItemModel;
+class OmniDelegate;
 #include "PermissionUi.h"
 class QHBoxLayout;
 
@@ -32,6 +36,9 @@ public:
     void progressFinished(bool ok);
     void syncProgress(bool loading, int value);   // tab switch: jump to that tab's state
     void setSuggestionsEnabled(bool e) { m_suggest = e; }
+    // 1.8.10: keyword suggestions from the search engine ("Google", "Bing", "DuckDuckGo", "Yahoo", "Brave")
+    void setSearchEngine(const QString& name) { m_engine = name; }
+    void setOnlineSuggestions(bool on) { m_online = on; }
     // 1.7.5 permission chips (permissions-spec §1/§4/§5/§6/§9)
     void setPermissionChips(const QList<OmniChip>& chips);
     QPoint bubbleAnchor() const;   // global: omnibox left − 2, toolbar bottom + 6
@@ -51,6 +58,7 @@ private slots:
     void onTextChanged(const QString& text);
     void updateSuggestions();
     void onSuggestionActivated(const QString& value);
+    void fetchSearchSuggestions(const QString& query);
 
 private:
     void updateSecurityIcon(const QString& url);
@@ -84,7 +92,19 @@ private:
     bool m_selectOnClick = false;
     bool inlineHintActive() const;
     void dropInlineHint();                 // remove the selected suffix, keep what was typed
-    QStringListModel* m_model = nullptr;   // reused for every refresh (no per-keystroke allocation)
+    void rebuildPopup();                   // history rows + engine rows -> model, show/hide popup
+    QStandardItemModel* m_model = nullptr; // reused for every refresh
+    OmniDelegate* m_delegate = nullptr;
+    QString m_query;                       // what the popup was built for
+    QString m_hintUrl;                     // typed text + inline hint (first row, what Enter opens)
+    QStringList m_engineRows;              // keyword suggestions for m_query
+    QVector<QPair<QString, QString>> m_historyRows;   // (url, title)
+    QNetworkAccessManager* m_net = nullptr;
+    QPointer<QNetworkReply> m_suggestReply;
+    QString m_engine = QStringLiteral("Google");
+    bool m_online = true;
+    bool m_navigating = false;             // moving through the list with the arrow keys
+    bool m_editing = false;                // focused for typing (survives the list / window switches)
     bool m_noInline = false;               // true after Backspace/Delete: don't re-add a hint
     bool m_composing = false;              // IME preedit active: never rewrite the text
 };

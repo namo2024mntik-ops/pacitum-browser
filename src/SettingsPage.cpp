@@ -216,7 +216,10 @@ QWidget* SettingsPage::searchPage() {
     cb->setCurrentText(m_s.value(QStringLiteral("search_engine")).toString(QStringLiteral("Google")));
     connect(cb, &QComboBox::currentTextChanged, this, [this](const QString& t){ write(QStringLiteral("search_engine"), t); emit settingChanged(QStringLiteral("search_engine")); });
     addRow(c, QStringLiteral("Search engine used in the address bar"), QStringLiteral("Also used by the New Tab page search box"), cb);
-    addRow(c, QStringLiteral("Show suggestions"), QStringLiteral("Suggest pages from your history while typing"), makeSwitch(QStringLiteral("show_suggestions"), true));
+    addRow(c, QStringLiteral("Show suggestions"), QStringLiteral("Suggest searches and pages from your history while typing"), makeSwitch(QStringLiteral("show_suggestions"), true));
+    addRow(c, QStringLiteral("Search suggestions from your search engine"),
+           QStringLiteral("Words you type in the address bar (not addresses) are sent to the search engine to suggest searches, like on its own page"),
+           makeSwitch(QStringLiteral("search_suggest_online"), true));
     return page;
 }
 

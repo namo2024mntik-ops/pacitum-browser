@@ -17,6 +17,16 @@
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QRegularExpression>
+#include <QStandardItemModel>
+#include <QStyledItemDelegate>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QUrlQuery>
+#include <QLocale>
+#include <QApplication>
 
 static QColor cssColor(const QString& s) {
     static const QRegularExpression re(QStringLiteral("rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*(?:,\\s*([\\d.]+))?\\s*\\)"));
@@ -29,13 +39,91 @@ static QColor cssColor(const QString& s) {
 
 // Forms of a URL the user may be typing the start of: "https://www.a.com/x" is also typed as
 // "www.a.com/x" or "a.com/x". Same idea as Chrome, so "gith" can hint "github.com/".
-static QStringList inlineForms(const QString& url) {
-    QStringList f{url};
+// 1.8.10: the full "https://…" form only counts once the user types a scheme ("h" used to fill in
+// "ttps://chatgpt.com/").
+static QStringList inlineForms(const QString& url, const QString& query) {
+    QStringList f;
     QString s = url;
     const int p = s.indexOf(QStringLiteral("://"));
-    if (p > 0 && p < 12) { s = s.mid(p + 3); f << s; }
-    if (s.startsWith(QStringLiteral("www."), Qt::CaseInsensitive)) f << s.mid(4);
+    if (query.contains(QStringLiteral("://"))) f << url;
+    if (p > 0 && p < 12) s = s.mid(p + 3);
+    if (s.startsWith(QStringLiteral("www."), Qt::CaseInsensitive)) { if (query.startsWith(QStringLiteral("www."), Qt::CaseInsensitive)) f << s; f << s.mid(4); }
+    else f << s;
     return f;
+}
+
+// Popup rows. Roles: UserRole = text that goes into the field / is opened, +1 = kind,
+// +2 = second line (URL of a history row), +3 = the typed query (bolding).
+enum { RoleValue = Qt::UserRole, RoleKind, RoleSub, RoleQuery };
+enum { KindSearch = 0, KindHistory = 1, KindUrl = 2 };
+
+// Google-style rows: icon, suggestion with the typed part regular and the rest bold;
+// history rows add the page address in a quieter colour.
+class OmniDelegate : public QStyledItemDelegate {
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+    QColor text, sub, hover, selected; QIcon search, history, globe;
+    QSize sizeHint(const QStyleOptionViewItem& o, const QModelIndex&) const override { return {o.rect.width(), 36}; }
+    void paint(QPainter* p, const QStyleOptionViewItem& o, const QModelIndex& i) const override {
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing);
+        const QRectF r = QRectF(o.rect).adjusted(2, 1, -2, -1);
+        if (o.state & QStyle::State_Selected) { p->setPen(Qt::NoPen); p->setBrush(selected); p->drawRoundedRect(r, 10, 10); }
+        else if (o.state & QStyle::State_MouseOver) { p->setPen(Qt::NoPen); p->setBrush(hover); p->drawRoundedRect(r, 10, 10); }
+        const int kind = i.data(RoleKind).toInt();
+        const QIcon& ic = kind == KindSearch ? search : kind == KindHistory ? history : globe;
+        ic.paint(p, QRect(int(r.left()) + 12, int(r.center().y()) - 8, 16, 16));
+        QRectF tr = r.adjusted(40, 0, -12, 0);
+        const QString main = i.data(Qt::DisplayRole).toString(), q = i.data(RoleQuery).toString();
+        QFont f = o.font; QFont b = f; b.setWeight(QFont::DemiBold);
+        p->setPen(text);
+        auto draw = [&](const QString& s, const QFont& font){
+            if (s.isEmpty() || tr.width() <= 0) return;
+            p->setFont(font);
+            const QFontMetricsF fm(font);
+            const QString e = fm.elidedText(s, Qt::ElideRight, tr.width());
+            p->drawText(tr, Qt::AlignVCenter | Qt::AlignLeft, e);
+            tr.setLeft(tr.left() + fm.horizontalAdvance(e));
+        };
+        if (kind == KindSearch && !q.isEmpty() && main.startsWith(q, Qt::CaseInsensitive)) {
+            draw(main.left(q.size()), f); draw(main.mid(q.size()), b);   // "google" + **search console**
+        } else draw(main, f);
+        const QString s2 = i.data(RoleSub).toString();
+        if (!s2.isEmpty() && tr.width() > 60) {
+            p->setPen(sub); draw(QStringLiteral("  —  "), f); draw(s2, f);
+        }
+        p->restore();
+    }
+};
+
+// Suggest endpoints; all answer ["query", ["s1", "s2", …]].
+static QUrl suggestUrl(const QString& engine, const QString& q) {
+    QUrl u; QUrlQuery qq;
+    if (const QString t = qEnvironmentVariable("PACITUM_SUGGEST_URL"); !t.isEmpty()) {   // tests: any server answering the same JSON
+        u = QUrl(t); qq.addQueryItem(QStringLiteral("q"), q); u.setQuery(qq); return u;
+    }
+    const QString hl = QLocale::system().name().section(QLatin1Char('_'), 0, 0);
+    if (engine == QLatin1String("Bing")) { u = QUrl(QStringLiteral("https://api.bing.com/osjson.aspx")); qq.addQueryItem(QStringLiteral("query"), q); }
+    else if (engine == QLatin1String("DuckDuckGo")) { u = QUrl(QStringLiteral("https://duckduckgo.com/ac/")); qq.addQueryItem(QStringLiteral("q"), q); qq.addQueryItem(QStringLiteral("type"), QStringLiteral("list")); }
+    else if (engine == QLatin1String("Brave")) { u = QUrl(QStringLiteral("https://search.brave.com/api/suggest")); qq.addQueryItem(QStringLiteral("q"), q); }
+    else if (engine == QLatin1String("Yahoo")) { u = QUrl(QStringLiteral("https://ff.search.yahoo.com/gossip")); qq.addQueryItem(QStringLiteral("output"), QStringLiteral("fxjson")); qq.addQueryItem(QStringLiteral("command"), q); }
+    else {
+        u = QUrl(QStringLiteral("https://suggestqueries.google.com/complete/search"));
+        qq.addQueryItem(QStringLiteral("client"), QStringLiteral("firefox"));
+        qq.addQueryItem(QStringLiteral("ie"), QStringLiteral("utf-8")); qq.addQueryItem(QStringLiteral("oe"), QStringLiteral("utf-8"));
+        if (!hl.isEmpty()) qq.addQueryItem(QStringLiteral("hl"), hl);
+        qq.addQueryItem(QStringLiteral("q"), q);
+    }
+    u.setQuery(qq);
+    return u;
+}
+
+// Typed text that is an address, not words to search for.
+static bool looksLikeUrl(const QString& t) {
+    if (t.contains(QLatin1Char(' '))) return false;
+    if (t.contains(QStringLiteral("://")) || t.startsWith(QStringLiteral("localhost")) || t.startsWith(QStringLiteral("pacitum:"))) return true;
+    static const QRegularExpression host(QStringLiteral("^[\\w-]+(\\.[\\w-]+)*\\.[a-zA-Z]{2,}(:\\d+)?([/?#].*)?$"));
+    return host.match(t).hasMatch();
 }
 
 static constexpr qreal kRadius = 12.0;   // omnibox corner radius (1.9 refresh: rounded rectangle, not a pill)
@@ -91,13 +179,27 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
     m_completer = new QCompleter(this);
     m_completer->popup()->setProperty("_pmNoSlide", true);   // re-positioned while typing: fade only
     m_completer->setCaseSensitivity(Qt::CaseInsensitive);
-    // Default filter is "starts with", which hid every suggestion that doesn't begin with the
-    // typed text (typing "github" never matched "https://github.com/...").
-    m_completer->setFilterMode(Qt::MatchContains);
-    m_model = new QStringListModel(m_completer);
+    // 1.8.10: rows are chosen here (search-engine keywords + history), so the completer shows them
+    // all instead of filtering ("goggle" still lists "google search").
+    m_completer->setCompletionMode(QCompleter::UnfilteredPopupCompletion);
+    m_completer->setCompletionRole(RoleValue);
+    m_model = new QStandardItemModel(m_completer);
     m_completer->setModel(m_model);
-    m_completer->setMaxVisibleItems(8);
-    m_input->setCompleter(m_completer);
+    m_completer->setMaxVisibleItems(12);
+    m_delegate = new OmniDelegate(m_completer->popup());
+    m_completer->popup()->setItemDelegate(m_delegate);
+    m_completer->popup()->setMouseTracking(true);
+    m_completer->popup()->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);   // at most 12 rows, all visible
+    m_net = new QNetworkAccessManager(this);
+    // 1.8.10: the list is attached to the field but not as its QLineEdit completer: that one also
+    // inserted row text by itself ("goggle searc" became "goggle searcgoogle.com/search").
+    m_completer->setWidget(m_input);
+    // Arrow keys through the list put the row's text in the field (like Chrome); typing goes on from there.
+    connect(m_completer, QOverload<const QString&>::of(&QCompleter::highlighted), this, [this](const QString& v){
+        if (v.isEmpty()) return;
+        m_navigating = true;
+        m_input->setText(v); m_input->end(false);
+    });
 
     connect(m_input, &QLineEdit::returnPressed, this, &AddressBar::onReturn);
     connect(m_input, &QLineEdit::textEdited, this, &AddressBar::onTextChanged);
@@ -105,7 +207,7 @@ AddressBar::AddressBar(HistoryManager* hm, QWidget* parent) : QFrame(parent), m_
 
     initProgress();
     m_timer.setSingleShot(true);
-    m_timer.setInterval(200);
+    m_timer.setInterval(90);   // history is local; the engine request is cancelled when you keep typing
     connect(&m_timer, &QTimer::timeout, this, &AddressBar::updateSuggestions);
 }
 
@@ -114,10 +216,15 @@ void AddressBar::applyTheme(ThemeManager* tm) {
     setStyleSheet(tm->addressBarStyle());
     const auto& p = tm->palette();
     m_completer->popup()->setStyleSheet(QStringLiteral(
-        "QAbstractItemView{background:%1;color:%2;border:1px solid %3;border-radius:14px;padding:6px;outline:0;}"
-        "QAbstractItemView::item{min-height:40px;padding:0 12px;border-radius:10px;}"
+        "QAbstractItemView{background:%1;color:%2;border:1px solid %3;border-radius:14px;padding:0px;outline:0;}"
+        "QAbstractItemView::item{padding:0px;border-radius:10px;}"
         "QAbstractItemView::item:hover{background:%4;color:%2;}"
         "QAbstractItemView::item:selected{background:%5;color:%2;}").arg(p.toolbar, p.text, p.borderStrong, p.surface, p.accentSoft));
+    m_delegate->text = QColor(p.text); m_delegate->sub = QColor(p.textTertiary.isEmpty() ? p.textSecondary : p.textTertiary);
+    m_delegate->hover = cssColor(p.surface); m_delegate->selected = cssColor(p.accentSoft);
+    m_delegate->search = ThemeManager::icon(QStringLiteral("search"), p.textSecondary, 16);
+    m_delegate->history = ThemeManager::icon(QStringLiteral("history"), p.textSecondary, 16);
+    m_delegate->globe = ThemeManager::icon(QStringLiteral("globe"), p.textSecondary, 16);
     updateSecurityIcon(m_currentUrl);
     updateStar();
     if (!m_input->hasFocus()) showBlurred();
@@ -125,7 +232,8 @@ void AddressBar::applyTheme(ThemeManager* tm) {
 
 void AddressBar::setUrl(const QString& url) {
     m_currentUrl = url;
-    if (!m_input->hasFocus()) showBlurred();
+    // Pages like Google change their own address while you type; never overwrite typed text.
+    if (!m_input->hasFocus() && !(m_editing && m_input->isModified())) showBlurred();
     updateSecurityIcon(url);
 }
 
@@ -179,6 +287,14 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
         if (e->type() == QEvent::Resize && !m_display->isHidden()) {
             m_display->setGeometry(2, 0, m_input->width() - 2, m_input->height());
         } else if (e->type() == QEvent::FocusIn) {
+            // 1.8.10: the suggestion list opening/closing (Popup) or switching back to the window
+            // (ActiveWindow) also sends FocusIn. That used to put the page URL back and select it,
+            // so the next key wiped what you were typing.
+            // Only while already editing (the short display text is not up): a window that opens
+            // with the address bar focused still gets the full URL, selected.
+            const auto reason = static_cast<QFocusEvent*>(e)->reason();
+            if ((reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason) && m_editing) return QFrame::eventFilter(o, e);
+            m_editing = true;
             m_noInline = false; m_composing = false;
             setDisplayMode(false);
             if (!isInternalNewTab(m_currentUrl)) m_input->setText(m_currentUrl);   // full URL on focus
@@ -187,6 +303,10 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
             m_selectOnClick = true;
             QTimer::singleShot(0, m_input, [this]{ m_input->selectAll(); });
         } else if (e->type() == QEvent::FocusOut) {
+            const auto reason = static_cast<QFocusEvent*>(e)->reason();
+            if (reason == Qt::PopupFocusReason || reason == Qt::ActiveWindowFocusReason) return QFrame::eventFilter(o, e);   // keep the typed text
+            m_editing = false;
+            if (m_suggestReply) m_suggestReply->abort();
             setProperty("focused", false); style()->unpolish(this); style()->polish(this);
             animateGlow(0.0);
             if (!m_completer->popup()->isVisible()) showBlurred();
@@ -221,12 +341,14 @@ bool AddressBar::eventFilter(QObject* o, QEvent* e) {
 }
 
 void AddressBar::onReturn() {
-    m_timer.stop();   // a pending refresh must not rewrite the field / reopen the popup after Enter
+    m_timer.stop();
+    if (m_suggestReply) m_suggestReply->abort();
+    m_completer->popup()->hide();   // a pending refresh must not rewrite the field / reopen the popup after Enter
     emit returnPressed(m_input->text().trimmed());
     m_input->clearFocus();
 }
 
-void AddressBar::onTextChanged(const QString&) { m_timer.start(); }
+void AddressBar::onTextChanged(const QString&) { m_navigating = false; m_timer.start(); }
 
 bool AddressBar::inlineHintActive() const {
     if (!m_input->hasSelectedText()) return false;
@@ -252,28 +374,35 @@ void AddressBar::updateSuggestions() {
     // spaces are kept: the old code trimmed and re-set the text, which ate a typed space).
     const QString typed = hint ? raw.left(m_input->selectionStart()) : raw;
     const QString query = typed.trimmed();
-    if (query.isEmpty() || !m_history || !m_suggest) {
-        m_model->setStringList({});
+    if (query.isEmpty() || !m_suggest) {
+        if (m_suggestReply) m_suggestReply->abort();
+        m_query.clear(); m_hintUrl.clear(); m_engineRows.clear(); m_historyRows.clear();
+        m_model->clear();
         m_completer->popup()->hide();
         if (hint) dropInlineHint();
         return;
     }
 
-    // Scan more rows for the hint than the popup shows, so a prefix match is not crowded out
-    // by newer substring matches.
-    const auto results = m_history->search(query, 40);
-    QStringList suggestions; QSet<QString> seen;
+    // History: scan more rows for the hint than the list shows, so a prefix match is not
+    // crowded out by newer substring matches.
+    QVector<HistoryEntry> results;
+    if (m_history) results = m_history->search(query, 40);
+    QSet<QString> seen;
     QString bestHint;
-    // Hint only when the cursor is at the end and there is no stray whitespace.
-    const bool canHint = !m_noInline && typed == query && (hint || m_input->cursorPosition() == raw.size());
+    // Hint only for addresses being typed: cursor at the end, no spaces.
+    const bool canHint = !m_noInline && typed == query && !query.contains(QLatin1Char(' '))
+                         && (hint || m_input->cursorPosition() == raw.size());
+    m_historyRows.clear();
     for (const auto& r : results) {
         if (seen.contains(r.url) || r.url == m_currentUrl || isInternalNewTab(r.url)) continue;
         seen.insert(r.url);
-        if (suggestions.size() < 10) suggestions << r.url;
+        if (m_historyRows.size() < 4) m_historyRows.append({r.url, r.title});
         if (!canHint) continue;
-        for (const QString& form : inlineForms(r.url)) {
+        for (const QString& form : inlineForms(r.url, query)) {
             if (form.size() > query.size() && form.startsWith(query, Qt::CaseInsensitive)) {
-                const QString rest = form.mid(query.size());
+                QString rest = form.mid(query.size());
+                // Complete the site only ("yout" -> "youtube.com/"), not a long deep link.
+                if (const int slash = rest.indexOf(QLatin1Char('/')); slash >= 0 && !query.contains(QLatin1Char('/'))) rest = rest.left(slash + 1);
                 // Shortest completion wins (domain before deep link); ties keep the most recent.
                 if (bestHint.isEmpty() || rest.size() < bestHint.size()) bestHint = rest;
                 break;
@@ -281,12 +410,16 @@ void AddressBar::updateSuggestions() {
         }
     }
 
-    // Same model object every time. QCompleter forgets its prefix on reset, so restore it
-    // (the typed prefix must stay unselected).
-    m_model->setStringList(suggestions);
-    m_completer->setCompletionPrefix(query);
-    if (suggestions.isEmpty()) m_completer->popup()->hide();
-    else m_completer->complete();
+    if (query != m_query) {
+        // Keep the previous keywords while the new ones load when they still fit (no flicker).
+        QStringList keep;
+        for (const QString& k : m_engineRows) if (k.startsWith(query, Qt::CaseInsensitive)) keep << k;
+        m_engineRows = keep;
+        m_query = query;
+        fetchSearchSuggestions(query);
+    }
+    m_hintUrl = bestHint.isEmpty() ? QString() : typed + bestHint;
+    rebuildPopup();
 
     if (!bestHint.isEmpty()) {
         const QString filled = typed + bestHint;   // user's own casing is kept
@@ -295,6 +428,59 @@ void AddressBar::updateSuggestions() {
     } else if (hint) {
         dropInlineHint();   // the old hint no longer matches
     }
+}
+
+void AddressBar::rebuildPopup() {
+    const QString q = m_query;
+    m_model->clear();
+    auto add = [this, &q](int kind, const QString& text, const QString& value, const QString& sub){
+        auto* it = new QStandardItem(text);
+        it->setData(value, RoleValue); it->setData(kind, RoleKind); it->setData(sub, RoleSub); it->setData(q, RoleQuery);
+        it->setToolTip(sub.isEmpty() ? value : sub);
+        m_model->appendRow(it);
+    };
+    if (q.isEmpty()) { m_completer->popup()->hide(); return; }
+    QSet<QString> used{q.toLower()};
+    if (!m_hintUrl.isEmpty()) { add(KindUrl, m_hintUrl, m_hintUrl, {}); used.insert(m_hintUrl.toLower()); }   // what Enter opens
+    if (looksLikeUrl(q)) { if (m_hintUrl.isEmpty()) add(KindUrl, q, q, {}); }
+    else add(KindSearch, q, q, {});                // what you typed, as a search (like Google)
+    int n = 0;
+    for (const QString& k : m_engineRows) {
+        if (n >= 7) break;
+        if (used.contains(k.toLower())) continue;
+        used.insert(k.toLower()); add(KindSearch, k, k, {}); ++n;
+    }
+    for (const auto& h : m_historyRows) {
+        QString shown = h.first;
+        if (const int p = shown.indexOf(QStringLiteral("://")); p > 0 && p < 12) shown = shown.mid(p + 3);
+        if (shown.startsWith(QStringLiteral("www."))) shown = shown.mid(4);
+        add(KindHistory, h.second.trimmed().isEmpty() ? shown : h.second.trimmed(), h.first, h.second.trimmed().isEmpty() ? QString() : shown);
+    }
+    m_completer->setCompletionPrefix(QString());
+    m_completer->complete();
+}
+
+void AddressBar::fetchSearchSuggestions(const QString& query) {
+    if (m_suggestReply) m_suggestReply->abort();
+    // Only words go to the search engine: not addresses, not long pastes.
+    if (!m_online || query.size() > 200 || query.contains(QStringLiteral("://")) || query.startsWith(QStringLiteral("pacitum:"))
+        || query.startsWith(QStringLiteral("file:")) || query.startsWith(QStringLiteral("about:"))) return;
+    QNetworkRequest r(suggestUrl(m_engine, query));
+    r.setRawHeader("User-Agent", QByteArray("Mozilla/5.0 PacitumBrowser/") + QCoreApplication::applicationVersion().toLatin1());
+    r.setTransferTimeout(3000);
+    auto* reply = m_net->get(r);
+    m_suggestReply = reply;
+    connect(reply, &QNetworkReply::finished, this, [this, reply, query]{
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError || query != m_query || !m_input->hasFocus() || m_composing) return;
+        const QJsonArray a = QJsonDocument::fromJson(reply->readAll()).array();
+        QStringList rows;
+        for (const auto& v : a.at(1).toArray()) { const QString t = v.toString().trimmed(); if (!t.isEmpty()) rows << t; }
+        m_engineRows = rows;
+        // Don't reshuffle the list under someone moving through it with the arrow keys.
+        if (m_navigating && m_completer->popup()->isVisible()) return;
+        rebuildPopup();
+    });
 }
 
 void AddressBar::onSuggestionActivated(const QString& v) { m_input->setText(v); emit returnPressed(v); }

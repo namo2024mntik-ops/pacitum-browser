@@ -1130,6 +1130,8 @@ void BrowserWindow::onSettingChanged(const QString& key) {
         if (!BrowserTab::s_freezeEnabled) forTabs([](BrowserTab* t){ t->ensureActive(); });
     } else if (key == QStringLiteral("show_suggestions")) {
         m_addressBar->setSuggestionsEnabled(s.value(key).toBool(true));
+    } else if (key == QStringLiteral("search_suggest_online")) {
+        m_addressBar->setOnlineSuggestions(s.value(key).toBool(true));
     }
     // homepage, startup/restore_session, download_path, ask_download_location, clear_on_exit are read when used.
 }
@@ -1781,6 +1783,8 @@ void BrowserWindow::loadSettings(){
     else Pacitum::clearReducedMotionOverride();
     if (auto* b = qobject_cast<PacitumTabBar*>(m_tabs->stripBar())) b->animationsEnabled = m_animations;
     m_addressBar->setSuggestionsEnabled(s.value(QStringLiteral("show_suggestions")).toBool(true));
+    m_addressBar->setSearchEngine(m_searchEngine);
+    m_addressBar->setOnlineSuggestions(s.value(QStringLiteral("search_suggest_online")).toBool(true));
     m_bookmarksBar->setProperty("_pmTarget", QVariant());
     m_bookmarksBar->setVisible(s.value(QStringLiteral("show_bookmarks_bar")).toBool(true));
     if(s.value(QStringLiteral("vertical_tabs")).toBool(false)){ m_verticalTabs=true; m_tabs->setVertical(true); m_splitTabs->setVertical(true); }

@@ -2,13 +2,21 @@
 # Pacitum Browser (Qt6 WebEngine)
 
 A calm, fast web browser written in C++17 on Qt 6 WebEngine.
-Version 1.9.0 and 1.8.11 (two editions from the same source):
-- **Pacitum 1.9.0** is built with **Qt 6.11** (newer Chromium) and runs **Chrome extensions**: "Add to Pacitum" on a Chrome Web Store page, or add a `.crx` / `.zip` / unpacked folder from the puzzle menu. Pin an extension to the toolbar to open its pop-up; switch it off or remove it from the same menu. Before adding, Pacitum lists what the extension may do.
-- **Pacitum 1.8.11** is the **legacy edition** (Qt 6.8 LTS) for computers that can't run the Qt 6.11 build. It gets everything below, but not Chrome extensions, and its updater stays on 1.8.x.
+Version 1.9.0 and 1.8.12 (two editions from the same source):
+- **Pacitum 1.9.x** is built with **Qt 6.11** (newer Chromium) and runs **Chrome extensions**: "Add to Pacitum" on a Chrome Web Store page, or add a `.crx` / `.zip` / unpacked folder from the puzzle menu. Pin an extension to the toolbar to open its pop-up; switch it off or remove it from the same menu. Before adding, Pacitum lists what the extension may do.
+- **Pacitum 1.8.x** is the **legacy edition** (Qt 6.8 LTS) for computers that can't run the Qt 6.11 build. It gets everything below, but not Chrome extensions, and its updater stays on 1.8.x.
 - Both: **bookmark folders** (on the bookmarks bar, with a drop-down; right-click to make one or move a bookmark; drag a bookmark onto a folder; pick the folder right after pressing ☆). Folders sync.
 - Both: **animations**. Menus, pop-ups and dialogs zoom out of where you opened them, a new window opens with a growing circle, and on macOS and Linux the window shrinks away when closed, drops when minimized and morphs when maximized (Windows animates these itself). The update pop-up zooms in with a soft bounce.
 - Both: **security**. Downloads are marked as "from the internet" on Windows so SmartScreen checks them; more file types that run code are held until you confirm; the updater only installs a release with a SHA-256 checksum, downloaded over HTTPS from GitHub.
 - Both: **fixes**. The reload button's spin animation never played; restoring a minimized window refreshed the wrong tabs; `localhost:3000` and IP addresses were searched instead of opened; `chrome-extension://` addresses broke; old bookmark chips could flash over new ones; bookmarks are saved atomically.
+
+**1.9.0 / 1.8.12 fixes**
+- Clicking **Update** on the update card closed Pacitum (1.8.9–1.8.11). The pop-up now opens. On those versions, click **Later** on the card, then the update button in the toolbar, or download Setup from the releases page.
+- The profile picture and the ⋮ menu sat on top of the Back button. They are back at the right end of the toolbar.
+- The updater picks the installer that has a `.sha256` file, so an extra hand-uploaded file in a release isn't used by mistake.
+- If the install helper can't start, Pacitum opens the normal Setup window instead of closing with nothing installed.
+- Before installing, the helper waits for Pacitum's background processes to close, so Setup doesn't fail on locked files.
+- Update steps are logged to `%TEMP%\PacitumUpdate\update.log`, which is kept when Pacitum restarts.
 
 Version 1.8.10:
 - **Search suggestions in the address bar**: as you type, Pacitum lists keyword suggestions from your search engine (Google, Bing, DuckDuckGo, Brave or Yahoo), with the part you typed in normal text and the rest in bold, then up to 4 pages from your history with their titles. Switch it off in Settings › Search engine.

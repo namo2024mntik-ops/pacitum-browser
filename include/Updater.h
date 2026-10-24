@@ -57,6 +57,10 @@ public:
     static QString readyFile() { return workDir() + QStringLiteral("/overlay-ready"); }    // helper's pop-up is on screen
     static QString markerFile() { return workDir() + QStringLiteral("/relaunched"); }      // new version is running
     static QString pendingFile() { return workDir() + QStringLiteral("/pending.json"); }   // what was installed (for "Update done")
+    static QString updateLog();         // <temp>/PacitumUpdate/update.log: browser + helper, survives restarts
+    static void logLine(const QString& line);   // startup.log and update.log
+    bool helperRunning() const;         // Windows: the install helper process is still alive
+    bool runInstallerYourself();        // Windows: Setup with its own window (when the helper failed)
     static QStringList noteLines(const QString& markdown, int max = 4);   // release-note bullets as plain text
     const UpdateInfo& latest() const { return m_latest; }
     QString downloadedPath() const { return m_file; }
@@ -85,5 +89,6 @@ private:
     UpdateInfo m_pending;
     QFile* m_out = nullptr;
     QString m_file;
+    qint64 m_helperPid = 0;
     QString m_status;
 };

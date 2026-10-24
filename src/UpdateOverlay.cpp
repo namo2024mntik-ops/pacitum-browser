@@ -19,10 +19,12 @@
 #include <QVariantAnimation>
 #include <QtMath>
 #include <cmath>
+#include <iterator>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #else
 #include <cerrno>
 #include <csignal>
@@ -467,6 +469,29 @@ bool processAlive(qint64 pid) {
 void killProcess(qint64 pid) {
     if (HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, DWORD(pid))) { TerminateProcess(h, 1); CloseHandle(h); }
 }
+// Processes still running from the install folder (QtWebEngineProcess.exe and friends): they keep
+// files locked, and Setup in silent mode then stops instead of replacing them.
+QList<qint64> processesIn(const QString& folder) {
+    QList<qint64> out;
+    if (folder.isEmpty()) return out;
+    const QString want = QDir::cleanPath(QDir::fromNativeSeparators(folder)).toLower() + QLatin1Char('/');
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+    PROCESSENTRY32W pe{}; pe.dwSize = sizeof(pe);
+    for (BOOL more = Process32FirstW(snap, &pe); more; more = Process32NextW(snap, &pe)) {
+        if (pe.th32ProcessID == GetCurrentProcessId()) continue;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!h) continue;
+        wchar_t path[MAX_PATH * 2]; DWORD n = DWORD(std::size(path));
+        if (QueryFullProcessImageNameW(h, 0, path, &n)) {
+            const QString p = QDir::cleanPath(QDir::fromNativeSeparators(QString::fromWCharArray(path, int(n)))).toLower();
+            if (p.startsWith(want)) out << qint64(pe.th32ProcessID);
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    return out;
+}
 #else
 bool processAlive(qint64 pid) { return pid > 0 && (::kill(pid_t(pid), 0) == 0 || errno == EPERM); }
 void killProcess(qint64 pid) { if (pid > 0) ::kill(pid_t(pid), SIGKILL); }
@@ -500,9 +525,9 @@ int runInstallOverlay(const QStringList& args) {
         if (logFile.isEmpty()) return;
         QFile f(logFile);
         if (f.open(QIODevice::Append | QIODevice::Text))
-            f.write((QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz ")) + QStringLiteral("[update helper] ") + s + QLatin1Char('\n')).toUtf8());
+            f.write((QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz ")) + QStringLiteral("[update helper] ") + s + QLatin1Char('\n')).toUtf8());
     };
-    log(QStringLiteral("started: pid=%1 installer=%2 relaunch=%3").arg(pid).arg(installer, relaunch));
+    log(QStringLiteral("started: pid=%1 installer=%2 relaunch=%3 app=%4").arg(pid).arg(installer, relaunch, app));
     if (!marker.isEmpty()) QFile::remove(marker);
 
     Sheet sheet(Colors::fromArg(argValue(args, QStringLiteral("--colors"))), nullptr, true);
@@ -522,7 +547,7 @@ int runInstallOverlay(const QStringList& args) {
         QFile f(readyFile); if (!readyFile.isEmpty() && f.open(QIODevice::WriteOnly)) f.write("1");
     });
 
-    enum Phase { WaitExit, Installing, WaitMarker, Failed } phase = WaitExit;
+    enum Phase { WaitExit, WaitHelpers, Installing, WaitMarker, Failed } phase = WaitExit;
     QElapsedTimer clock; clock.start();
     qint64 phaseStart = 0;
     bool killed = false;
@@ -555,6 +580,20 @@ int runInstallOverlay(const QStringList& args) {
                 return;
             }
             log(QStringLiteral("browser exited after %1 ms").arg(inPhase));
+            phaseStart = clock.elapsed();
+            phase = WaitHelpers;
+            return;
+        case WaitHelpers:
+#ifdef Q_OS_WIN
+            if (!installer.isEmpty() && !app.isEmpty()) {
+                const QList<qint64> left = processesIn(QFileInfo(app).absolutePath());
+                if (!left.isEmpty() && inPhase < 8000) return;
+                if (!left.isEmpty()) {
+                    log(QStringLiteral("%1 Pacitum process(es) still running after 8 s; ending them").arg(left.size()));
+                    for (qint64 p : left) killProcess(p);
+                }
+            }
+#endif
             phaseStart = clock.elapsed();
             if (!installer.isEmpty()) {
 #ifdef Q_OS_WIN

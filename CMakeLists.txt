@@ -13,7 +13,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets Svg WebEngineWidgets WebChannel
 # Optional so a Qt without these modules still builds; the shims then report NotSupportedError.
 find_package(Qt6 6.8 QUIET OPTIONAL_COMPONENTS SerialPort Bluetooth)
 
-# Two release lines from one source (1.9.0 / 1.8.11):
+# Two release lines from one source (1.9.x / 1.8.x):
 #   Qt 6.11 or newer -> Pacitum 1.9.x (newer Chromium, Chrome extensions)
 #   Qt 6.8 LTS       -> Pacitum 1.8.x "legacy" for computers that can't run the Qt 6.11 build
 # The updater of each line only offers releases of the same line (PACITUM_UPDATE_TRACK).
@@ -21,7 +21,7 @@ if(Qt6Core_VERSION VERSION_GREATER_EQUAL 6.11)
     set(PACITUM_APP_VERSION ${PROJECT_VERSION})
     set(PACITUM_UPDATE_TRACK "")
 else()
-    set(PACITUM_APP_VERSION 1.8.11)
+    set(PACITUM_APP_VERSION 1.8.12)
     set(PACITUM_UPDATE_TRACK "1.8")
 endif()
 message(STATUS "Pacitum ${PACITUM_APP_VERSION} with Qt ${Qt6Core_VERSION}")

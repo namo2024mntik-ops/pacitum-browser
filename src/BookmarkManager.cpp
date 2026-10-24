@@ -1,9 +1,12 @@
 #include <QSet>
 #include "BookmarkManager.h"
 #include <QFile>
+#include <QSaveFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDateTime>
+#include "AppSettings.h"
 
 BookmarkManager::BookmarkManager(const QString& file) : m_file(file) { load(); }
 
@@ -16,18 +19,22 @@ bool BookmarkManager::load() {
     m_bookmarks.clear();
     for (auto v : doc.array()) {
         auto o = v.toObject();
-        m_bookmarks.push_back({ o["title"].toString(), o["url"].toString(), o["added"].toString() });
+        m_bookmarks.push_back({ o["title"].toString(), o["url"].toString(), o["added"].toString(), o["folder"].toString().trimmed() });
     }
     return true;
 }
 
 bool BookmarkManager::save() const {
     QJsonArray arr;
-    for (auto &b : m_bookmarks) arr.append(QJsonObject{{"title", b.title},{"url", b.url},{"added", b.added}});
-    QFile f(m_file);
+    for (auto &b : m_bookmarks) {
+        QJsonObject o{{"title", b.title},{"url", b.url},{"added", b.added}};
+        if (!b.folder.isEmpty()) o.insert("folder", b.folder);   // older versions just ignore it
+        arr.append(o);
+    }
+    QSaveFile f(m_file);   // atomic: a crash while saving can't leave a half-written bookmarks file
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
     f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
-    return true;
+    return f.commit();
 }
 
 int BookmarkManager::addBookmarks(const QVector<QPair<QString, QString>>& items) {
@@ -42,9 +49,10 @@ int BookmarkManager::addBookmarks(const QVector<QPair<QString, QString>>& items)
     return n;
 }
 
-bool BookmarkManager::addBookmark(const QString& title, const QString& url) {
+bool BookmarkManager::addBookmark(const QString& title, const QString& url, const QString& folder) {
     if (isBookmarked(url)) return false;
-    m_bookmarks.push_back({title, url, QDateTime::currentDateTime().toString(Qt::ISODate)});
+    if (!folder.isEmpty()) addFolder(folder);
+    m_bookmarks.push_back({title, url, QDateTime::currentDateTime().toString(Qt::ISODate), folder});
     save();
     return true;
 }
@@ -65,4 +73,67 @@ QVector<Bookmark> BookmarkManager::search(const QString& q) const {
     QString lq = q.toLower();
     for (auto &b : m_bookmarks) if (b.title.toLower().contains(lq) || b.url.toLower().contains(lq)) r.push_back(b);
     return r;
+}
+
+// ------------------------------------------------------------------ folders
+QStringList BookmarkManager::folders() const {
+    QStringList out;
+    for (const auto& v : AppSettings::get(QStringLiteral("bookmark_folders")).toArray()) {
+        const QString n = v.toString().trimmed();
+        if (!n.isEmpty() && !out.contains(n)) out << n;
+    }
+    for (const auto& b : m_bookmarks) if (!b.folder.isEmpty() && !out.contains(b.folder)) out << b.folder;   // e.g. arrived by sync
+    return out;
+}
+
+void BookmarkManager::setFolderOrder(const QStringList& order) {
+    QJsonArray a; for (const QString& n : order) if (!n.trimmed().isEmpty()) a.append(n.trimmed());
+    AppSettings::set(QStringLiteral("bookmark_folders"), a);
+}
+
+QVector<Bookmark> BookmarkManager::bookmarksIn(const QString& folder) const {
+    QVector<Bookmark> r;
+    for (const auto& b : m_bookmarks) if (b.folder == folder) r.push_back(b);
+    return r;
+}
+
+bool BookmarkManager::addFolder(const QString& raw) {
+    const QString name = raw.trimmed().left(60);
+    if (name.isEmpty()) return false;
+    QStringList f = folders();
+    if (f.contains(name)) return false;
+    f << name; setFolderOrder(f);
+    return true;
+}
+
+bool BookmarkManager::renameFolder(const QString& from, const QString& raw) {
+    const QString to = raw.trimmed().left(60);
+    QStringList f = folders();
+    if (to.isEmpty() || !f.contains(from) || (to != from && f.contains(to))) return false;
+    f[f.indexOf(from)] = to; setFolderOrder(f);
+    for (auto& b : m_bookmarks) if (b.folder == from) b.folder = to;
+    save();
+    return true;
+}
+
+void BookmarkManager::removeFolder(const QString& name, bool keepBookmarks) {
+    QStringList f = folders(); f.removeAll(name); setFolderOrder(f);
+    if (keepBookmarks) { for (auto& b : m_bookmarks) if (b.folder == name) b.folder.clear(); }
+    else m_bookmarks.erase(std::remove_if(m_bookmarks.begin(), m_bookmarks.end(), [&](const Bookmark& b){ return b.folder == name; }), m_bookmarks.end());
+    save();
+}
+
+void BookmarkManager::moveToFolder(const QString& url, const QString& folder) {
+    const QString f = folder.trimmed();
+    bool changed = false;
+    for (auto& b : m_bookmarks) if (b.url == url && b.folder != f) { b.folder = f; changed = true; }
+    if (!changed) return;   // sync calls this for every bookmark
+    if (!f.isEmpty()) addFolder(f);
+    save();
+}
+
+void BookmarkManager::setTitle(const QString& url, const QString& title) {
+    bool changed = false;
+    for (auto& b : m_bookmarks) if (b.url == url && b.title != title) { b.title = title; changed = true; }
+    if (changed) save();
 }

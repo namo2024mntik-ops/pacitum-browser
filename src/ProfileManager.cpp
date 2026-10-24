@@ -171,7 +171,8 @@ static bool copyVerified(const QString& from, const QString& to, const QStringLi
         if (!QFile::copy(s, d)) { if (log) *log += QStringLiteral("copy failed: %1\n").arg(rel); return false; }
         QFile::setPermissions(d, QFile::permissions(s) | QFileDevice::WriteOwner);
         if (QFileInfo(s).size() != QFileInfo(d).size() || fileHash(s) != fileHash(d)) {
-            if (log) *log += QStringLiteral("verify failed: %1\n").arg(rel); return false;
+            if (log) *log += QStringLiteral("verify failed: %1\n").arg(rel);
+            return false;
         }
         if (progress) { done += QFileInfo(s).size(); progress(done, total); }
     }

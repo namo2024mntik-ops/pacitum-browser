@@ -13,6 +13,9 @@
 #include <QVariantAnimation>
 #include <QWidget>
 #include <QTimer>
+#include <QGuiApplication>
+#include <QRadialGradient>
+#include <cmath>
 
 namespace Motion {
 int ms(int token) { return Pacitum::motionMs(token); }
@@ -266,5 +269,140 @@ void FadeOverlay::paintEvent(QPaintEvent* e) {
     if (!m_pm.isNull()) p.drawPixmap(rect(), m_pm);
     else p.fillRect(e->rect(), m_color);
 }
+
+
+// ============================================================================ 1.9.0 motion
+namespace {
+// Snapshot that zooms from an origin point (pop-in) or flies between two rects (window ghost).
+class ZoomGhost : public QWidget {
+public:
+    ZoomGhost(const QPixmap& pm, const QRect& geo)
+        : QWidget(nullptr, Qt::ToolTip | Qt::FramelessWindowHint | Qt::NoDropShadowWindowHint), m_pm(pm) {
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAttribute(Qt::WA_DeleteOnClose);
+        setFocusPolicy(Qt::NoFocus);
+        setGeometry(geo);
+    }
+    // pop-in: scale around `origin` (local), opacity
+    QPointF origin; qreal scale = 1.0, opacity = 1.0;
+    // fly: draw into this local rect instead (when valid)
+    QRectF target;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::SmoothPixmapTransform);
+        p.setOpacity(opacity);
+        if (target.isValid()) { p.drawPixmap(target, m_pm, QRectF(m_pm.rect())); return; }
+        p.translate(origin); p.scale(scale, scale); p.translate(-origin);
+        p.drawPixmap(rect(), m_pm);
+    }
+private:
+    QPixmap m_pm;
+};
+
+bool onWayland() { return QGuiApplication::platformName().startsWith(QLatin1String("wayland")); }
+
+// Page-colour cover with a growing round hole (soft edge), for a new window.
+class RevealOverlay : public QWidget {
+public:
+    RevealOverlay(QWidget* window, const QColor& c) : QWidget(window), m_c(c) {
+        setObjectName(QStringLiteral("PacitumWindowOverlay"));   // BrowserWindow::resizeEvent keeps it full size
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setGeometry(window->rect());
+        raise(); show();
+    }
+    qreal t = 0.0;
+protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        const QPointF c = QRectF(rect()).center();
+        const qreal maxR = std::hypot(width() / 2.0, height() / 2.0) + 40;
+        const qreal r = maxR * t;
+        QRadialGradient g(c, qMax<qreal>(1, r));
+        QColor solid = m_c; solid.setAlphaF(qBound<qreal>(0, 1.0 - t * t, 1));   // the cover also fades
+        QColor clear = m_c; clear.setAlphaF(0);
+        g.setColorAt(0.0, clear); g.setColorAt(0.82, clear); g.setColorAt(1.0, solid);
+        p.fillRect(rect(), r < 1 ? QBrush(solid) : QBrush(g));
+    }
+private:
+    QColor m_c;
+};
 }
 
+bool popIn(QWidget* w, const QPoint& originGlobal, qreal fromScale, int token) {
+    const int d = ms(token);
+    if (!w || d <= 0 || onWayland() || QCoreApplication::closingDown()) return false;
+    if (w->width() < 4 || w->height() < 4 || w->width() * w->height() > 1400 * 1000) return false;
+    const QPixmap pm = w->grab();
+    if (pm.isNull()) return false;
+    auto* g = new ZoomGhost(pm, w->geometry());
+    const QPoint local = originGlobal - w->geometry().topLeft();
+    g->origin = QPointF(qBound(0, local.x(), w->width()), qBound(0, local.y(), w->height()));
+    g->scale = fromScale; g->opacity = 0.0;
+    w->setWindowOpacity(0.0);
+    g->show();
+    QPointer<QWidget> guard(w);
+    auto* a = new QVariantAnimation(g);
+    a->setDuration(d); a->setStartValue(0.0); a->setEndValue(1.0);
+    QObject::connect(a, &QVariantAnimation::valueChanged, g, [g, fromScale, guard](const QVariant& v){
+        if (!guard || !guard->isVisible()) { g->close(); return; }
+        const qreal t = v.toReal();
+        QEasingCurve back(QEasingCurve::OutBack); back.setOvershoot(1.15);
+        g->scale = fromScale + (1.0 - fromScale) * back.valueForProgress(t);
+        g->opacity = QEasingCurve(QEasingCurve::OutCubic).valueForProgress(qMin<qreal>(1.0, t * 1.6));
+        g->update();
+    });
+    QObject::connect(a, &QVariantAnimation::finished, g, [g, guard]{
+        if (guard) guard->setWindowOpacity(1.0);   // the real window takes over in the same frame
+        g->close();
+    });
+    a->start(QAbstractAnimation::DeleteWhenStopped);
+    return true;
+}
+
+bool windowGhostsAllowed() {
+#ifdef Q_OS_WIN
+    return false;   // DWM already animates open / close / minimize / maximize of our window
+#else
+    return enabled() && !onWayland() && !QCoreApplication::closingDown();
+#endif
+}
+
+void windowGhost(const QPixmap& snapshot, const QRect& from, const QRect& to, int msDur, qreal fadeTo) {
+    if (snapshot.isNull() || !from.isValid() || !to.isValid() || msDur <= 0) return;
+    // one window covering both rects; the snapshot is drawn into the moving rect
+    const QRect area = from.united(to);
+    QPixmap pm = snapshot;
+    if (pm.width() > 1600) pm = pm.scaledToWidth(1600, Qt::SmoothTransformation);   // cheap to repaint
+    auto* g = new ZoomGhost(pm, area);
+    g->target = QRectF(from.translated(-area.topLeft()));
+    g->show();
+    auto* a = new QVariantAnimation(g);
+    a->setDuration(msDur); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::InOutCubic);
+    const QRectF f(from.translated(-area.topLeft())), t(to.translated(-area.topLeft()));
+    QObject::connect(a, &QVariantAnimation::valueChanged, g, [g, f, t, fadeTo](const QVariant& v){
+        const qreal k = v.toReal();
+        g->target = QRectF(f.x() + (t.x() - f.x()) * k, f.y() + (t.y() - f.y()) * k,
+                           f.width() + (t.width() - f.width()) * k, f.height() + (t.height() - f.height()) * k);
+        g->opacity = 1.0 + (fadeTo - 1.0) * k;
+        g->update();
+    });
+    QObject::connect(a, &QVariantAnimation::finished, g, &QWidget::close);
+    a->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void reveal(QWidget* window, const QColor& color, int msDur) {
+    if (!window) return;
+    const int d = ms(msDur);
+    auto* o = new RevealOverlay(window, color);
+    if (d <= 0) { o->deleteLater(); return; }
+    auto* a = new QVariantAnimation(o);
+    a->setDuration(d); a->setStartValue(0.0); a->setEndValue(1.0); a->setEasingCurve(QEasingCurve::OutCubic);
+    QObject::connect(a, &QVariantAnimation::valueChanged, o, [o](const QVariant& v){ o->t = v.toReal(); o->update(); });
+    QObject::connect(a, &QVariantAnimation::finished, o, &QObject::deleteLater);
+    QTimer::singleShot(30, a, [a]{ a->start(QAbstractAnimation::DeleteWhenStopped); });   // after the first frame
+}
+}

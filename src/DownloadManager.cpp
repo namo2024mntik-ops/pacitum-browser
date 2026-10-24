@@ -15,6 +15,9 @@
 #include <QDrag>
 #include <QFile>
 #include <QFileInfo>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 #include <QGraphicsDropShadowEffect>
 #include <QHBoxLayout>
 #include <QKeyEvent>
@@ -120,8 +123,34 @@ QString DownloadManager::kindColor(const QString& k) {
     if (k == QStringLiteral("audio")) return QStringLiteral("#EC4899");
     return QStringLiteral("#64748B");
 }
+// 1.9.0 / 1.8.11 security: the Windows "mark of the web" (Zone.Identifier stream, internet zone),
+// as Chrome writes it, so SmartScreen / Office Protected View check the file before it runs.
+// Survives the rename of a held dangerous file (NTFS keeps streams on rename). Other systems: no-op
+// (macOS quarantine needs the LaunchServices API; the held-file prompt still applies).
+void DownloadManager::markFromInternet(const QString& path, const QString& url, const QString& referrer) {
+#ifdef Q_OS_WIN
+    const QUrl u(url);
+    if (u.scheme() == QLatin1String("file") || path.isEmpty()) return;
+    auto strip = [](const QString& s){ QUrl x(s); x.setUserInfo({}); x.setQuery(QString()); x.setFragment({}); return x.toString(); };   // no passwords / tokens in the stream
+    QByteArray body = "[ZoneTransfer]\r\nZoneId=3\r\n";
+    if (!referrer.isEmpty() && !referrer.startsWith(QLatin1String("data:"))) body += "ReferrerUrl=" + strip(referrer).toUtf8() + "\r\n";
+    if (u.scheme().startsWith(QLatin1String("http"))) body += "HostUrl=" + strip(url).toUtf8() + "\r\n";
+    const std::wstring stream = QDir::toNativeSeparators(path).toStdWString() + L":Zone.Identifier";
+    HANDLE h = CreateFileW(stream.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return;   // FAT/exFAT drives have no streams: nothing to do
+    DWORD written = 0;
+    WriteFile(h, body.constData(), DWORD(body.size()), &written, nullptr);
+    CloseHandle(h);
+#else
+    Q_UNUSED(path); Q_UNUSED(url); Q_UNUSED(referrer);
+#endif
+}
+
 bool DownloadManager::isDangerousName(const QString& name) {
-    static const QStringList bad{"exe","msi","bat","cmd","scr","js","vbs","com","pif","jar","ps1","hta","lnk"};
+    // 1.9.0 / 1.8.11: more types that run code when opened (Windows, macOS and Linux)
+    static const QStringList bad{"exe","msi","msix","msixbundle","appx","appxbundle","msp","bat","cmd","scr","js","jse","vbs","vbe","wsf","wsh",
+                                 "com","pif","jar","ps1","psm1","hta","lnk","url","scf","reg","dll","sys","cpl","inf","chm","application",
+                                 "dmg","pkg","mpkg","app","command","workflow","sh","run","bin","deb","rpm","appimage","desktop"};
     return bad.contains(QFileInfo(name).suffix().toLower());
 }
 static QString reasonText(DS::DownloadInterruptReason r) {
@@ -197,7 +226,8 @@ int DownloadManager::activeCount() const { int n = 0; for (auto& e : m_entries) 
 double DownloadManager::aggregateProgress() const {
     qint64 r = 0, t = 0; bool any = false;
     for (auto& e : m_entries) if (e.active()) { any = true; if (e.total > 0) { r += e.received; t += e.total; } }
-    if (!any) return -1; return t > 0 ? double(r) / t : 0.0;
+    if (!any) return -1;
+    return t > 0 ? double(r) / t : 0.0;
 }
 
 QString DownloadManager::downloadDir() const {
@@ -265,6 +295,7 @@ void DownloadManager::onState(qint64 id) {
     case DS::DownloadCompleted:
         e->state = e->holdName.isEmpty() ? DownloadEntry::Completed : DownloadEntry::Dangerous;
         if (e->total <= 0) e->total = e->received;
+        if (prev != DownloadEntry::Completed && prev != DownloadEntry::Dangerous) markFromInternet(e->filePath(), e->url, e->pageUrl);
         break;
     case DS::DownloadCancelled: e->state = DownloadEntry::Cancelled; e->reason.clear(); break;
     case DS::DownloadInterrupted: {

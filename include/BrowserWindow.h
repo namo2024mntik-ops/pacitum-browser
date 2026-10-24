@@ -169,6 +169,8 @@ private:
     void flyToDownloads();
     // built-in updater
     void setupUpdater();
+    void animatedMinimize();          // 1.9.0 window animations (ghost on macOS / Linux)
+    void animatedToggleMaximize();
     void showUpdatePrompt(const struct UpdateInfo& info);
     class Updater* m_updater = nullptr;
     class UpdatePill* m_updatePill = nullptr;   // toolbar: "Update" / download ring / "Restart"
@@ -228,6 +230,11 @@ private:
     QToolButton* m_homeBtn = nullptr;
     AddressBar* m_addressBar = nullptr;
     QToolButton* m_splitBtn = nullptr;
+    // 1.9.0 Chrome extensions: pinned extension buttons + "Add to Pacitum" on Chrome Web Store pages
+    QWidget* m_extPins = nullptr;
+    class QPushButton* m_storeBtn = nullptr;
+    void rebuildExtensionPins();
+    void updateStoreButton(const QString& url);
     QToolButton* m_profileBtn = nullptr;
     QLabel* m_profileAvatar = nullptr;
     void refreshProfileAvatar();

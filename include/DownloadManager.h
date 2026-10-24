@@ -48,6 +48,7 @@ struct DownloadEntry {
 class DownloadManager : public QObject {
     Q_OBJECT
 public:
+    static void markFromInternet(const QString& path, const QString& url, const QString& referrer);   // Windows mark of the web
     static DownloadManager* instance();
     static QString formatSize(qint64 bytes);
     static QString fileKind(const QString& name);           // archive/pdf/video/image/code/audio/text

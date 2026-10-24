@@ -33,6 +33,9 @@
 
 #include "AppSettings.h"
 #include "SyncGuide.h"
+#ifndef PACITUM_UPDATE_TRACK
+#define PACITUM_UPDATE_TRACK ""
+#endif
 #include "PermissionSettings.h"
 #include "SitePermissions.h"
 
@@ -427,7 +430,11 @@ QWidget* SettingsPage::aboutPage() {
     auto* c = card(l, QString());
     auto* logo = new QLabel(); logo->setPixmap(QIcon(QStringLiteral(":/icons/pacitum-icon-128.png")).pixmap(QSize(48,48), devicePixelRatioF()));
     addRow(c, QStringLiteral("Pacitum Browser %1").arg(QCoreApplication::applicationVersion()),
-           QStringLiteral("Qt %1 · Chromium %2").arg(QString::fromLatin1(qVersion()), QString::fromLatin1(qWebEngineChromiumVersion())), logo);
+           QStringLiteral("Qt %1 · Chromium %2").arg(QString::fromLatin1(qVersion()), QString::fromLatin1(qWebEngineChromiumVersion()))
+           // 1.9.0 / 1.8.11: two editions from one source
+           + (QStringLiteral(PACITUM_UPDATE_TRACK).isEmpty()
+              ? QStringLiteral(" · Chrome extensions supported")
+              : QStringLiteral("\nLegacy edition for computers that can't run Pacitum 1.9 (Qt 6.11). Updates stay on %1.x.").arg(QStringLiteral(PACITUM_UPDATE_TRACK))), logo);
     auto* ua = new QLabel(Pacitum::mainProfile()->httpUserAgent()); ua->setObjectName(QStringLiteral("RowSub")); ua->setWordWrap(true);
     ua->setTextInteractionFlags(Qt::TextSelectableByMouse);
     addRow(c, QStringLiteral("User agent"), QString(), ua);

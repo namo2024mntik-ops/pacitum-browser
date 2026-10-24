@@ -1,6 +1,9 @@
 ; Pacitum Browser installer - Inno Setup 6.6+ (CI pins 6.7.1). Design: design-1.5-extra/installer-spec.md
 #define AppName "Pacitum Browser"
-#define AppVer "1.8.10"
+; CI passes /DAppVer=<version from build/pacitum-version.txt> (1.9.x or legacy 1.8.x)
+#ifndef AppVer
+#define AppVer "1.9.0"
+#endif
 #define AppExe "PacitumBrowser.exe"
 [Setup]
 ; Same AppId as 1.0-1.4: Setup finds the existing install and upgrades it in place.

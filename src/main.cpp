@@ -15,6 +15,7 @@
 #include <QtGlobal>
 #include "BrowserWindow.h"
 #include "UpdateOverlay.h"
+#include "ChromeExtensions.h"
 #include "ProfileManager.h"
 #include "ProfileUi.h"
 #include <QMessageBox>
@@ -364,6 +365,7 @@ int main(int argc, char *argv[]) {
         } else pacitumLog(QStringLiteral("spell check off: no qtwebengine_dictionaries"));
     }
     Pacitum::configureProfile(profile, !guest);
+    ChromeExtensions::instance()->attach(profile);   // 1.9.0: installed Chrome extensions load with the profile
     Pacitum::configureProfile(QWebEngineProfile::defaultProfile(), false);
     std::cout << "[Browser] profile off-the-record: " << profile->isOffTheRecord() << " storage: " << profile->persistentStoragePath().toStdString() << std::endl;
 

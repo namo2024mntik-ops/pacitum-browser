@@ -1,4 +1,5 @@
 #include "BrowserTab.h"
+#include <QRegularExpression>
 #include <QResizeEvent>
 #include <QContextMenuEvent>
 #include <QWebEngineContextMenuRequest>
@@ -192,13 +193,16 @@ BrowserTab::BrowserTab(const QString& url, bool privateMode, const QString& sear
 void BrowserTab::loadUrl(const QString& raw) {
     QString url = raw.trimmed();
     if (url.isEmpty()) url = PacitumSchemeHandler::newTabUrl();
-    if (!url.startsWith(QStringLiteral("http://")) && !url.startsWith(QStringLiteral("https://"))
-        && !url.startsWith(QStringLiteral("file://")) && !url.startsWith(QStringLiteral("about:")) && !url.startsWith(QStringLiteral("pacitum:"))
-        && !url.startsWith(QStringLiteral("data:"))) {
-        if (url.contains('.') && !url.contains(' ')) url = QStringLiteral("https://") + url;
-        else {
-            url = searchUrl(url);
-        }
+    // Any "scheme://…" is an address as typed (chrome-extension://, ftp://, view-source: …).
+    // 1.9.0 fixes: "chrome-extension://id/options.html" became "https://chrome-extension://…",
+    // and "localhost:3000" / "192.168.1.1:8080" were searched instead of opened.
+    static const QRegularExpression scheme(QStringLiteral("^[a-zA-Z][a-zA-Z0-9+.-]*://"));
+    static const QRegularExpression local(QStringLiteral("^(localhost|\\d{1,3}(\\.\\d{1,3}){3}|\\[[0-9a-fA-F:]+\\])(:\\d+)?([/?#].*)?$"));
+    if (!scheme.match(url).hasMatch() && !url.startsWith(QStringLiteral("about:")) && !url.startsWith(QStringLiteral("pacitum:"))
+        && !url.startsWith(QStringLiteral("data:")) && !url.startsWith(QStringLiteral("view-source:"))) {
+        if (local.match(url).hasMatch()) url = QStringLiteral("http://") + url;   // local servers rarely have HTTPS
+        else if (url.contains('.') && !url.contains(' ')) url = QStringLiteral("https://") + url;
+        else url = searchUrl(url);
     }
     ensureActive();
     m_view->setUrl(QUrl(url));

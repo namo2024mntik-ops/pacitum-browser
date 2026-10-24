@@ -31,6 +31,8 @@
 #include "WebProfile.h"
 #include "Widgets.h"
 #include <QFileDialog>
+#include <QPushButton>
+#include <QInputDialog>
 #include <QTextDocument>
 #include <QDialog>
 #include <QListWidget>
@@ -93,6 +95,7 @@
 #include <QLineEdit>
 #include "SplitView.h"
 #include "ExtensionManager.h"
+#include "ChromeExtensions.h"
 #include "Tools.h"
 #include "TabOverview.h"
 #include "SyncManager.h"
@@ -169,7 +172,35 @@ void BrowserWindow::resizeEvent(QResizeEvent* e) {
     for (auto* c : findChildren<QWidget*>(QStringLiteral("PacitumWindowOverlay"), Qt::FindDirectChildrenOnly)) c->setGeometry(rect());
 }
 
-void BrowserWindow::fadeInContent() { fadeVeil(Pacitum::guestMode() || m_privateMode ? Motion::Slow : Motion::Medium, 1.0, 30); }   // kit #31 / #41
+// 1.9.0 / 1.8.11: a new window opens with a circle growing from the centre (plain veil fade with
+// reduced motion).
+void BrowserWindow::fadeInContent() {
+    if (Motion::enabled() && centralWidget()) { Motion::reveal(this, QColor(m_theme->palette().page), Pacitum::guestMode() || m_privateMode ? 620 : 520); return; }
+    fadeVeil(Pacitum::guestMode() || m_privateMode ? Motion::Slow : Motion::Medium, 1.0, 30);   // kit #31 / #41
+}
+
+// Close / minimize / maximize on macOS and Linux: our frameless window gets no system animation
+// there, so a snapshot shrinks away / drops / morphs while the real window has already changed.
+void BrowserWindow::animatedMinimize() {
+    if (Motion::windowGhostsAllowed() && isVisible() && !isMinimized()) {
+        const QRect from = frameGeometry();
+        QRect to(QPoint(), from.size() * 0.35); to.moveCenter(QPoint(from.center().x(), (screen() ? screen()->availableGeometry().bottom() : from.bottom()) - to.height() / 3));
+        Motion::windowGhost(grab(), from, to, Motion::ms(Motion::Slow), 0.0);
+    }
+    showMinimized();
+}
+
+void BrowserWindow::animatedToggleMaximize() {
+    const bool ghost = Motion::windowGhostsAllowed() && isVisible();
+    const QPixmap snap = ghost ? grab() : QPixmap();
+    const QRect from = frameGeometry();
+    if (isMaximized()) showNormal(); else showMaximized();
+    if (!ghost) return;
+    QPointer<BrowserWindow> self(this);
+    QTimer::singleShot(30, this, [self, snap, from]{   // once the window manager has applied the new size
+        if (self) Motion::windowGhost(snap, from, self->frameGeometry(), Motion::ms(Motion::Medium), 0.0);
+    });
+}
 // Page-coloured veil over the whole window that fades out (window open, fullscreen enter/exit).
 // It is a direct child named PacitumWindowOverlay, so resizeEvent keeps it at the window size.
 void BrowserWindow::fadeVeil(int duration, qreal from, int delay) {
@@ -260,6 +291,10 @@ void BrowserWindow::setupUI() {
 
     m_bookmarksBar = new BookmarksBar(m_bookmarks, this);
     connect(m_bookmarksBar, &BookmarksBar::urlActivated, this, &BrowserWindow::navigateToUrl);
+    connect(m_bookmarksBar, &BookmarksBar::urlActivatedInNewTab, this, [this](const QString& u){ newTab(u); });
+    connect(m_bookmarksBar, &BookmarksBar::bookmarksChanged, this, [this]{
+        if (auto* t = activeTab()) m_addressBar->setBookmarked(m_bookmarks->isBookmarked(t->currentUrl()));
+    });
     mainLay->addWidget(m_bookmarksBar);
     // 1 px line that separates the chrome from content; always present, even with the bar hidden.
     auto* divider = new QFrame(central); divider->setObjectName(QStringLiteral("ChromeDivider")); divider->setFixedHeight(1);
@@ -295,8 +330,8 @@ void BrowserWindow::setupUI() {
         m_minBtn = new WindowButton(WindowButton::Minimize, m_tabStrip);
         m_maxBtn = new WindowButton(WindowButton::Maximize, m_tabStrip);
         m_closeBtn = new WindowButton(WindowButton::Close, m_tabStrip);
-        connect(m_minBtn, &QToolButton::clicked, this, &QWidget::showMinimized);
-        connect(m_maxBtn, &QToolButton::clicked, this, [this]{ isMaximized() ? showNormal() : showMaximized(); });
+        connect(m_minBtn, &QToolButton::clicked, this, &BrowserWindow::animatedMinimize);
+        connect(m_maxBtn, &QToolButton::clicked, this, &BrowserWindow::animatedToggleMaximize);
         connect(m_closeBtn, &QToolButton::clicked, this, &QWidget::close);
 #ifdef Q_OS_MACOS
         // macOS order and place: close, minimise, zoom on the left, before the tabs
@@ -387,9 +422,27 @@ void BrowserWindow::createToolbar() {
     lay->addSpacing(6);
     lay->addWidget(m_addressBar, 1);
     lay->addSpacing(6);
+    // 1.9.0: "Add to Pacitum" while a Chrome Web Store extension page is open
+    m_storeBtn = new QPushButton(QStringLiteral("Add to Pacitum"), m_toolbar);
+    m_storeBtn->setObjectName(QStringLiteral("StoreButton")); m_storeBtn->setCursor(Qt::PointingHandCursor);
+    m_storeBtn->setToolTip(QStringLiteral("Install this extension from the Chrome Web Store"));
+    m_storeBtn->hide();
+    connect(m_storeBtn, &QPushButton::clicked, this, [this]{
+        if (auto* t = activeTab()) ChromeExtensions::instance()->installFromWebStore(t->currentUrl(), t->currentTitle(), this);
+    });
+    lay->addWidget(m_storeBtn);
+    lay->addSpacing(4);
     m_updatePill = new UpdatePill(m_toolbar);
     lay->addWidget(m_updatePill);
-    lay->addWidget(m_downloadsBtn); lay->addWidget(m_splitBtn); lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
+    m_extPins = new QWidget(m_toolbar);
+    { auto* pl = new QHBoxLayout(m_extPins); pl->setContentsMargins(0, 0, 0, 0); pl->setSpacing(2); }
+    lay->addWidget(m_downloadsBtn); lay->addWidget(m_extPins); lay->addWidget(m_splitBtn);
+    connect(ChromeExtensions::instance(), &ChromeExtensions::changed, this, [this]{
+        rebuildExtensionPins();
+        if (auto* t = activeTab()) updateStoreButton(t->currentUrl());
+    });
+    connect(ChromeExtensions::instance(), &ChromeExtensions::message, this, [this](const QString& m){ if (isActiveWindow()) showNotice(m); });
+    QTimer::singleShot(1200, this, [this]{ rebuildExtensionPins(); });   // after the profile has loaded its extensions lay->addWidget(m_privateBadge); lay->addWidget(m_profileBtn); lay->addWidget(m_menuBtn);
 }
 
 void BrowserWindow::refreshIcons() {
@@ -489,12 +542,91 @@ void BrowserWindow::updateTabAudio(BrowserTab* tab) {
     m_tabs->setTabAudio(idx, tab->view()->page()->recentlyAudible(), tab->isMuted());
 }
 
+void BrowserWindow::rebuildExtensionPins() {
+    if (!m_extPins) return;
+    auto* l = m_extPins->layout();
+    while (auto* it = l->takeAt(0)) { delete it->widget(); delete it; }
+    auto* ce = ChromeExtensions::instance();
+    for (const ChromeExtensionItem& e : ce->items()) {
+        if (!ce->pinned(e.id) || !e.enabled) continue;
+        auto* b = makeToolBtn(e.name);
+        b->setIcon(e.icon.isNull() ? m_theme->secondaryIcon(QStringLiteral("puzzle"), 18) : e.icon);
+        b->setIconSize(QSize(18, 18));
+        const QString id = e.id;
+        connect(b, &QToolButton::clicked, this, [b, id]{ ChromeExtensions::instance()->openPopup(id, b); });
+        l->addWidget(b);
+    }
+    m_extPins->setVisible(l->count() > 0);
+}
+
+void BrowserWindow::updateStoreButton(const QString& url) {
+    if (!m_storeBtn) return;
+    const QString id = ChromeExtensions::webStoreId(QUrl(url));
+    bool show = !id.isEmpty() && !m_privateMode;
+    if (show) for (const auto& e : ChromeExtensions::instance()->items()) if (e.id == id) { show = false; break; }   // already added
+    if (show) {
+        const auto& p = m_theme->palette();
+        m_storeBtn->setStyleSheet(QStringLiteral("QPushButton#StoreButton{background:%1;color:%2;border:none;border-radius:14px;padding:0 14px;min-height:28px;max-height:28px;font-weight:600;}"
+                                                 "QPushButton#StoreButton:hover{background:%3;}").arg(p.accent, p.onAccent, p.accentHover));
+        m_storeBtn->setText(ChromeExtensions::available() ? QStringLiteral("Add to Pacitum") : QStringLiteral("Needs Pacitum 1.9"));
+    }
+    if (show != m_storeBtn->isVisible()) {
+        m_storeBtn->setVisible(show);
+        if (show) Motion::fadeIn(m_storeBtn, Motion::Base);
+    }
+}
+
 void BrowserWindow::showExtensionsMenu() {
     // 1.8.5: Pacitum mini extensions (user scripts / styles) + split view controls.
+    // 1.9.0: Chrome extensions first (Qt 6.11 build); the legacy build says where to get them.
     Pacitum::PopupMenu m(this);
+    auto* ce = ChromeExtensions::instance();
+    {
+        const auto chrome = ce->items();
+        auto* ch = m.addAction(m_theme->secondaryIcon(QStringLiteral("puzzle"), 18),
+                               !ChromeExtensions::available() ? QStringLiteral("Chrome extensions need Pacitum 1.9")
+                               : chrome.isEmpty() ? QStringLiteral("No Chrome extensions yet") : QStringLiteral("Chrome extensions"));
+        ch->setEnabled(false);
+        for (const ChromeExtensionItem& e : chrome) {
+            QString label = e.name;
+            if (!e.enabled) label += QStringLiteral("  (off)");
+            else if (!e.error.isEmpty()) label += QStringLiteral("  (error)");
+            QMenu* sub = m.addMenu(e.icon, label.replace(QLatin1Char('&'), QStringLiteral("&&")));
+            sub->setToolTipsVisible(true);
+            if (!e.description.isEmpty()) { auto* d = sub->addAction(e.description.left(90)); d->setEnabled(false); }
+            if (!e.error.isEmpty()) { auto* er = sub->addAction(QStringLiteral("Error: ") + e.error.left(80)); er->setEnabled(false); }
+            for (const QString& perm : e.permissions) { auto* pa = sub->addAction(QStringLiteral("• ") + perm.left(90)); pa->setEnabled(false); }
+            sub->addSeparator();
+            const QString id = e.id, name = e.name;
+            if (e.popupUrl.isValid() && !e.popupUrl.isEmpty())
+                connect(sub->addAction(QStringLiteral("Open")), &QAction::triggered, this, [this, id]{ ChromeExtensions::instance()->openPopup(id, m_splitBtn); });
+            if (e.optionsUrl.isValid())
+                connect(sub->addAction(QStringLiteral("Options")), &QAction::triggered, this, [this, u = e.optionsUrl]{ newTab(u.toString()); });
+            auto* pin = sub->addAction(QStringLiteral("Pin to toolbar")); pin->setCheckable(true); pin->setChecked(ce->pinned(id));
+            connect(pin, &QAction::toggled, this, [id](bool v){ ChromeExtensions::instance()->setPinned(id, v); });
+            auto* on = sub->addAction(QStringLiteral("Enabled")); on->setCheckable(true); on->setChecked(e.enabled);
+            connect(on, &QAction::toggled, this, [id](bool v){ ChromeExtensions::instance()->setEnabled(id, v); });
+            connect(sub->addAction(QStringLiteral("Remove…")), &QAction::triggered, this, [this, id, name]{
+                if (QMessageBox::question(this, QStringLiteral("Remove extension"), QStringLiteral("Remove \"%1\"?").arg(name)) == QMessageBox::Yes)
+                    ChromeExtensions::instance()->uninstall(id);
+            });
+        }
+        if (ChromeExtensions::available()) {
+            connect(m.addAction(QStringLiteral("Get extensions from the Chrome Web Store")), &QAction::triggered, this, [this]{ newTab(QStringLiteral("https://chromewebstore.google.com/")); });
+            connect(m.addAction(QStringLiteral("Add a .crx or .zip file…")), &QAction::triggered, this, [this]{
+                const QString f = QFileDialog::getOpenFileName(this, QStringLiteral("Add a Chrome extension"), QString(), QStringLiteral("Chrome extensions (*.crx *.zip)"));
+                if (!f.isEmpty()) ChromeExtensions::instance()->installFromFile(f, this);
+            });
+            connect(m.addAction(QStringLiteral("Load unpacked extension…")), &QAction::triggered, this, [this]{
+                const QString d = QFileDialog::getExistingDirectory(this, QStringLiteral("Choose the extension folder (with manifest.json)"));
+                if (!d.isEmpty()) ChromeExtensions::instance()->installFromFile(d, this);
+            });
+        }
+        m.addSeparator();
+    }
     auto* em = ExtensionManager::instance();
     auto* head = m.addAction(m_theme->secondaryIcon(QStringLiteral("extensions"), 18),
-                             em->extensions().isEmpty() ? QStringLiteral("No extensions installed") : QStringLiteral("Extensions"));
+                             em->extensions().isEmpty() ? QStringLiteral("No user scripts") : QStringLiteral("User scripts and styles"));
     head->setEnabled(false);
     for (const PacitumExtension& e : em->extensions()) {
         QMenu* sub = m.addMenu(QStringLiteral("%1  %2").arg(e.name, e.enabled ? QString() : QStringLiteral("(off)")).trimmed().replace(QLatin1Char('&'), QStringLiteral("&&")));
@@ -515,7 +647,7 @@ void BrowserWindow::showExtensionsMenu() {
         });
     }
     m.addSeparator();
-    connect(m.addAction(QStringLiteral("Load extension folder…")), &QAction::triggered, this, [this]{ installExtensionFromFolder(); });
+    connect(m.addAction(QStringLiteral("Load user-script folder…")), &QAction::triggered, this, [this]{ installExtensionFromFolder(); });
     connect(m.addAction(QStringLiteral("Reload extensions")), &QAction::triggered, this, [this]{
         ExtensionManager::instance()->reload(); if (auto* t = activeTab()) t->reload(); });
     connect(m.addAction(QStringLiteral("Open extensions folder")), &QAction::triggered, this, []{
@@ -937,6 +1069,7 @@ void BrowserWindow::navigateToUrl(const QString& url) {
 
 void BrowserWindow::updateAddressBar(const QString& url) {
     m_addressBar->setUrl(url);
+    updateStoreButton(url);
     // (History is recorded per tab in newTab(); switching tabs is not a visit.)
     // bookmark indicator
     m_addressBar->setBookmarked(m_bookmarks->isBookmarked(url));
@@ -978,7 +1111,37 @@ void BrowserWindow::toggleBookmark() {
     QString url = t->currentUrl(), title = t->currentTitle();
     if (url.isEmpty()) return;
     if (m_bookmarks->isBookmarked(url)) { m_bookmarks->removeBookmark(url); m_addressBar->setBookmarked(false, true); statusBar()->showMessage(QStringLiteral("Bookmark removed"), 2000); }
-    else { m_bookmarks->addBookmark(title, url); m_addressBar->setBookmarked(true, true); statusBar()->showMessage(QStringLiteral("Bookmark added"), 2000); }
+    else {
+        m_bookmarks->addBookmark(title, url); m_addressBar->setBookmarked(true, true);
+        m_bookmarksBar->refresh();
+        // 1.9.0 / 1.8.11: pick a folder right away (Chrome's "Bookmark added" bubble)
+        if (!m_bookmarks->folders().isEmpty() || isActiveWindow()) {
+            QPointer<BrowserWindow> self(this);
+            QTimer::singleShot(Motion::enabled() ? 380 : 0, this, [self, url]{   // after the star's pop
+                if (!self) return;
+                Pacitum::PopupMenu m(self);
+                auto* head = m.addAction(self->m_theme->icon(QStringLiteral("star-filled"), 16), QStringLiteral("Bookmark added. Save in:")); head->setEnabled(false);
+                auto* bar = m.addAction(QStringLiteral("Bookmarks bar")); bar->setCheckable(true); bar->setChecked(true);
+                QObject::connect(bar, &QAction::triggered, self, [self, url]{ self->m_bookmarks->moveToFolder(url, QString()); self->m_bookmarksBar->refresh(); });
+                for (const QString& f : self->m_bookmarks->folders()) {
+                    auto* a = m.addAction(self->m_theme->secondaryIcon(QStringLiteral("folder"), 16), QString(f).replace(QLatin1Char('&'), QStringLiteral("&&")));
+                    QObject::connect(a, &QAction::triggered, self, [self, url, f]{ self->m_bookmarks->moveToFolder(url, f); self->m_bookmarksBar->refresh(); self->showNotice(QStringLiteral("Saved in %1").arg(f)); });
+                }
+                m.addSeparator();
+                QObject::connect(m.addAction(self->m_theme->secondaryIcon(QStringLiteral("folder-add"), 16), QStringLiteral("New folder…")), &QAction::triggered, self, [self, url]{
+                    bool ok = false;
+                    const QString name = QInputDialog::getText(self, QStringLiteral("New folder"), QStringLiteral("Folder name"), QLineEdit::Normal, QString(), &ok).trimmed();
+                    if (!ok || name.isEmpty()) return;
+                    self->m_bookmarks->moveToFolder(url, name); self->m_bookmarksBar->refresh(); self->showNotice(QStringLiteral("Saved in %1").arg(name));
+                });
+                QObject::connect(m.addAction(QStringLiteral("Remove")), &QAction::triggered, self, [self, url]{
+                    self->m_bookmarks->removeBookmark(url); self->m_addressBar->setBookmarked(false, true); self->m_bookmarksBar->refresh(); });
+                const QPoint at = self->m_addressBar->mapToGlobal(QPoint(self->m_addressBar->width() - 260, self->m_addressBar->height() + 6));
+                m.exec(at);
+            });
+        }
+        return;
+    }
     m_bookmarksBar->refresh();
 }
 
@@ -1832,6 +1995,12 @@ void BrowserWindow::restoreOrNewTab(){
 }
 
 void BrowserWindow::closeEvent(QCloseEvent* e){
+    // 1.9.0 / 1.8.11 (macOS, Linux): the window shrinks away (Windows animates it natively)
+    if (Motion::windowGhostsAllowed() && isVisible() && !isMinimized() && !m_chromeHidden) {
+        const QRect from = frameGeometry();
+        QRect to(QPoint(), from.size() * 0.9); to.moveCenter(from.center() + QPoint(0, 12));
+        Motion::windowGhost(grab(), from, to, Motion::ms(Motion::Exit) + 40, 0.0);
+    }
     if (m_firstRun) FirstRunBridge::markFirstRunDone();   // the welcome flow is shown once
     m_sessionTimer->stop();
     m_session->waitForPendingSave();
@@ -1874,13 +2043,19 @@ void BrowserWindow::changeEvent(QEvent* e) {
         const bool minimized = isMinimized();
         for (auto* tw : {m_tabs, m_splitTabs})
             if (tw) if (auto* b = qobject_cast<PacitumTabBar*>(tw->stripBar())) b->setSpinnerSuspended(minimized);
+        // 1.9.0 fix: the "else" below used to hang off the loop's inner "if" (a comment had been
+        // placed between them), so the restore branch ran for every non-web tab instead.
         if (minimized) m_spinTimer->stop();
+        else if (m_tabs) {
+            for (int i = 0; i < m_tabs->count(); ++i)
+                if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->isLoading()) updateTabIcon(t);
+        }
         // Minimized: hide the visible pages from Chromium (rAF/timers throttled like a background
         // tab) and let idle background tabs freeze after 1 minute instead of 10.
-        for (auto* tw : {m_tabs, m_splitTabs})
-            if (tw) for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) t->setWindowMinimized(minimized);
-        else if (m_tabs) for (int i = 0; i < m_tabs->count(); ++i)
-            if (auto* t = qobject_cast<BrowserTab*>(m_tabs->widget(i)); t && t->isLoading()) { updateTabIcon(t); }
+        for (auto* tw : {m_tabs, m_splitTabs}) {
+            if (!tw) continue;
+            for (int i = 0; i < tw->count(); ++i) if (auto* t = qobject_cast<BrowserTab*>(tw->widget(i))) t->setWindowMinimized(minimized);
+        }
         // The OS/user left fullscreen some other way (Win+Down, Win+Shift+arrows, display change):
         // bring the chrome back. Checked a moment later and never during our own transition, because
         // Windows reports intermediate states while it changes maximized <-> fullscreen.
@@ -1980,7 +2155,7 @@ bool BrowserWindow::eventFilter(QObject* o, QEvent* e) {
                 // Locked while maximized/fullscreen: a caption drag must not move or un-maximize the window.
                 if (isCaptionArea(mapFromGlobal(g))) { if (!isMaximized() && !isFullScreen() && !m_chromeHidden) windowHandle()->startSystemMove(); return true; }
             } else if (e->type() == QEvent::MouseButtonDblClick && me->button() == Qt::LeftButton && !isFullScreen() && !m_chromeHidden && isCaptionArea(mapFromGlobal(g))) {
-                isMaximized() ? showNormal() : showMaximized(); return true;
+                animatedToggleMaximize(); return true;
             }
         }
     }
@@ -2219,7 +2394,7 @@ bool BrowserWindow::nativeEvent(const QByteArray& eventType, void* message, qint
             const bool click = m_ncMaxPressed;
             m_ncMaxPressed = false;
             if (m_maxBtn) m_maxBtn->setForcedDown(false);
-            if (click) { isMaximized() ? showNormal() : showMaximized(); }
+            if (click) animatedToggleMaximize();
             *result = 0; return true;
         }
         if (m_ncMaxPressed) { m_ncMaxPressed = false; if (m_maxBtn) m_maxBtn->setForcedDown(false); }

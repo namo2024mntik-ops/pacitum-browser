@@ -56,9 +56,17 @@ public:
 signals:
     void changed();
     void message(const QString& text);              // short notices ("Added uBlock Origin")
+    void installed(const QString& id);              // added and ready (with its final ID)
 private:
     explicit ChromeExtensions(QObject* parent);
-    QString crxToZip(const QString& crxPath, QString* error) const;
+    QString crxToZip(const QString& crxPath, QString* error);   // also sets m_lastKey
+    void installSource(const QString& source, const QByteArray& key);
+    static QString idFromKey(const QByteArray& derKey);
+    static QByteArray crxPublicKey(const QByteArray& crx);
+    static bool addKeyToManifest(const QString& dir, const QByteArray& key);
+    QList<QByteArray> m_keys;                       // .crx public key per pending install
+    QByteArray m_lastKey;
+    QString m_expectId;                             // reloading under its store ID
     void downloadFromStore(const QString& id, const QString& name);   // no questions asked (callers ask)
     QPointer<QWebEngineProfile> m_profile;
     QNetworkAccessManager* m_net = nullptr;

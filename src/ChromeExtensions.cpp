@@ -22,6 +22,8 @@
 #include <QWebEnginePage>
 #include <QWebEngineView>
 #include <QtEndian>
+#include <QCryptographicHash>
+#include <QSaveFile>
 #include <QTimer>
 #include <functional>
 #include <memory>
@@ -100,20 +102,48 @@ void ChromeExtensions::attach(QWebEngineProfile* profile) {
     auto* mgr = profile->extensionManager();
     if (!mgr) return;
     connect(mgr, &QWebEngineExtensionManager::installFinished, this, [this](const QWebEngineExtensionInfo& e){
+        const QByteArray key = m_keys.isEmpty() ? QByteArray() : m_keys.takeFirst();
         if (!e.error().isEmpty()) {
             pacitumLog(QStringLiteral("extension install failed: %1").arg(e.error()));
             emit message(tr("Couldn't add the extension: %1").arg(e.error()));
-        } else {
-            pacitumLog(QStringLiteral("extension installed: %1 (%2)").arg(e.name(), e.id()));
-            emit message(tr("Added %1").arg(localized(e.path(), readManifest(e.path()), e.name())));
+            emit changed();
+            return;
         }
+        // 1.9.1: keep the extension's Chrome Web Store ID. Qt installs a package as an unpacked
+        // extension, whose ID comes from the "key" in manifest.json, or else from the folder path.
+        // Store packages carry the key in the .crx header only, so put it in the manifest and load
+        // the extension again (as Chrome does). Extensions that talk to their own ID or to their
+        // website (and "Add to Pacitum" knowing it's installed) need the real one.
+        const QString want = key.isEmpty() ? QString() : idFromKey(key);
+        if (!want.isEmpty() && e.id() != want && addKeyToManifest(e.path(), key)) {
+            pacitumLog(QStringLiteral("extension installed: %1 (%2); reloading with its store id %3").arg(e.name(), e.id(), want));
+            m_expectId = want;
+            m_profile->extensionManager()->unloadExtension(e);
+            m_profile->extensionManager()->loadExtension(e.path());
+            return;   // finished in loadFinished
+        }
+        pacitumLog(QStringLiteral("extension installed: %1 (%2)").arg(e.name(), e.id()));
+        emit message(tr("Added %1").arg(localized(e.path(), readManifest(e.path()), e.name())));
+        emit installed(e.id());
         emit changed();
     });
     connect(mgr, &QWebEngineExtensionManager::uninstallFinished, this, [this](const QWebEngineExtensionInfo& e){
         setPinned(e.id(), false);
         emit changed();
     });
-    connect(mgr, &QWebEngineExtensionManager::loadFinished, this, &ChromeExtensions::changed);
+    connect(mgr, &QWebEngineExtensionManager::loadFinished, this, [this](const QWebEngineExtensionInfo& e){
+        if (!m_expectId.isEmpty() && (e.id() == m_expectId || !e.error().isEmpty())) {
+            const QString id = e.id();
+            m_expectId.clear();
+            if (!e.error().isEmpty()) emit message(tr("Couldn't add the extension: %1").arg(e.error()));
+            else {
+                pacitumLog(QStringLiteral("extension ready with store id %1").arg(id));
+                emit message(tr("Added %1").arg(localized(e.path(), readManifest(e.path()), e.name())));
+                emit installed(id);
+            }
+        }
+        emit changed();
+    });
     connect(mgr, &QWebEngineExtensionManager::unloadFinished, this, &ChromeExtensions::changed);
 #endif
 }
@@ -189,10 +219,81 @@ QStringList ChromeExtensions::describePermissions(const QString& dir) {
     return out;
 }
 
-QString ChromeExtensions::crxToZip(const QString& crxPath, QString* error) const {
+// Chrome extension IDs: the first 16 bytes of SHA-256(public key), each nibble written as 'a'..'p'.
+QString ChromeExtensions::idFromKey(const QByteArray& derKey) {
+    const QByteArray h = QCryptographicHash::hash(derKey, QCryptographicHash::Sha256).left(16);
+    QString id;
+    for (const char c : h) { id += QChar(u'a' + ((uchar(c) >> 4) & 0xF)); id += QChar(u'a' + (uchar(c) & 0xF)); }
+    return id;
+}
+
+// The public key in a .crx header (DER SubjectPublicKeyInfo). CRX2 holds one key; CRX3 holds a
+// protobuf CrxFileHeader with several proofs, and the extension's own key is the one whose ID
+// matches signed_header_data.crx_id.
+QByteArray ChromeExtensions::crxPublicKey(const QByteArray& d) {
+    if (!d.startsWith("Cr24") || d.size() < 16) return {};
+    const quint32 ver = qFromLittleEndian<quint32>(d.constData() + 4);
+    if (ver == 2) {
+        const quint32 keyLen = qFromLittleEndian<quint32>(d.constData() + 8);
+        return qsizetype(16 + keyLen) <= d.size() ? d.mid(16, keyLen) : QByteArray();
+    }
+    if (ver != 3) return {};
+    const quint32 hlen = qFromLittleEndian<quint32>(d.constData() + 8);
+    if (qsizetype(12 + hlen) > d.size()) return {};
+    const QByteArray hdr = d.mid(12, hlen);
+    // minimal protobuf reader: varints and length-delimited fields only
+    auto varint = [](const QByteArray& b, qsizetype& i, bool& ok) -> quint64 {
+        quint64 v = 0; int shift = 0;
+        while (i < b.size() && shift < 64) { const uchar c = uchar(b[i++]); v |= quint64(c & 0x7F) << shift; if (!(c & 0x80)) return v; shift += 7; }
+        ok = false; return 0;
+    };
+    auto fields = [&varint](const QByteArray& b) {
+        QList<QPair<quint64, QByteArray>> out; qsizetype i = 0; bool ok = true;
+        while (i < b.size() && ok) {
+            const quint64 tag = varint(b, i, ok); if (!ok) break;
+            const int wire = int(tag & 7);
+            if (wire == 0) { varint(b, i, ok); continue; }
+            if (wire != 2) break;
+            const quint64 len = varint(b, i, ok);
+            if (!ok || i + qsizetype(len) > b.size()) break;
+            out << qMakePair(tag >> 3, b.mid(i, qsizetype(len))); i += qsizetype(len);
+        }
+        return out;
+    };
+    QByteArray crxId; QList<QByteArray> keys;
+    for (const auto& f : fields(hdr)) {
+        if (f.first == 2 || f.first == 3) {   // sha256_with_rsa / sha256_with_ecdsa: AsymmetricKeyProof
+            for (const auto& g : fields(f.second)) if (g.first == 1) keys << g.second;
+        } else if (f.first == 10000) {        // signed_header_data: SignedData { bytes crx_id = 1; }
+            for (const auto& g : fields(f.second)) if (g.first == 1) crxId = g.second;
+        }
+    }
+    for (const QByteArray& k : keys)
+        if (!crxId.isEmpty() && QCryptographicHash::hash(k, QCryptographicHash::Sha256).left(16) == crxId) return k;
+    return {};
+}
+
+bool ChromeExtensions::addKeyToManifest(const QString& dir, const QByteArray& key) {
+    QFile f(dir + QStringLiteral("/manifest.json"));
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    QByteArray raw = f.readAll(); f.close();
+    if (raw.startsWith("\xEF\xBB\xBF")) raw.remove(0, 3);
+    QJsonParseError err{};
+    QJsonObject m = QJsonDocument::fromJson(raw, &err).object();
+    if (err.error != QJsonParseError::NoError || m.isEmpty()) return false;
+    if (m.contains(QStringLiteral("key"))) return false;   // it has its own ID already
+    m.insert(QStringLiteral("key"), QString::fromLatin1(key.toBase64()));
+    QSaveFile out(dir + QStringLiteral("/manifest.json"));
+    if (!out.open(QIODevice::WriteOnly)) return false;
+    out.write(QJsonDocument(m).toJson(QJsonDocument::Indented));
+    return out.commit();
+}
+
+QString ChromeExtensions::crxToZip(const QString& crxPath, QString* error) {
     QFile f(crxPath);
     if (!f.open(QIODevice::ReadOnly) || f.size() > 256 * 1024 * 1024) { *error = tr("Can't read %1").arg(QFileInfo(crxPath).fileName()); return {}; }
     const QByteArray d = f.readAll();
+    m_lastKey = crxPublicKey(d);
     qsizetype zipAt = -1;
     if (d.startsWith("PK\x03\x04")) zipAt = 0;   // already a zip
     else if (d.startsWith("Cr24") && d.size() > 16) {
@@ -235,7 +336,7 @@ void ChromeExtensions::installFromFile(const QString& path, QWidget* parent) {
         question = tr("Add the extension in \"%1\"?\n\nOnly add extensions from people you trust: an extension can read and change the pages you visit.").arg(fi.fileName());
     }
     if (QMessageBox::question(parent, tr("Add extension"), question) != QMessageBox::Yes) return;
-    m_profile->extensionManager()->installExtension(source);
+    installSource(source, fi.isDir() ? QByteArray() : m_lastKey);
 #else
     Q_UNUSED(path);
     QMessageBox::information(parent, tr("Chrome extensions"), tr("Chrome extensions need Pacitum 1.9 (built with Qt 6.11). This is the %1 version for computers that can't run it.").arg(QCoreApplication::applicationVersion()));
@@ -295,10 +396,20 @@ void ChromeExtensions::downloadFromStore(const QString& id, const QString& name)
         const QString zip = crxToZip(crx, &error);
         QFile::remove(crx);
         if (zip.isEmpty()) { emit message(error); return; }
-        if (m_profile) m_profile->extensionManager()->installExtension(zip);
+        installSource(zip, m_lastKey);
     });
 #else
     Q_UNUSED(id); Q_UNUSED(name);
+#endif
+}
+
+void ChromeExtensions::installSource(const QString& source, const QByteArray& key) {
+#ifdef PACITUM_CHROME_EXTENSIONS
+    if (!m_profile || !m_profile->extensionManager()) return;
+    m_keys << key;   // one per install, in order (installFinished arrives in the same order)
+    m_profile->extensionManager()->installExtension(source);
+#else
+    Q_UNUSED(source); Q_UNUSED(key);
 #endif
 }
 
@@ -448,11 +559,14 @@ void ChromeExtensions::runSelfTest(QWidget* anchor, const std::function<void(con
     auto fails = std::make_shared<int>(0);
     QPointer<QWidget> a(anchor);
     connect(mgr, &QWebEngineExtensionManager::installFinished, this, [=](const QWebEngineExtensionInfo& e){
+        if (waiting->isEmpty() || e.error().isEmpty()) return;
+        const QString what = *waiting; waiting->clear();
+        log(QStringLiteral("%1: install failed: %2").arg(what, e.error())); ++*fails; QTimer::singleShot(0, this, *runNext);
+    });
+    connect(this, &ChromeExtensions::installed, this, [=](const QString& id){
         if (waiting->isEmpty()) return;
         const QString what = *waiting; waiting->clear();
-        if (!e.error().isEmpty() || e.id().isEmpty()) { log(QStringLiteral("%1: install failed: %2").arg(what, e.error())); ++*fails; QTimer::singleShot(0, this, *runNext); return; }
-        const QString id = e.id();
-        log(QStringLiteral("%1: installed id=%2 enabled=%3 loaded=%4").arg(what, id).arg(e.isEnabled()).arg(e.isLoaded()));
+        log(QStringLiteral("%1: installed id=%2").arg(what, id));
         QTimer::singleShot(500, this, [=]{
             log(QStringLiteral("%1: enabling").arg(what));
             setEnabled(id, true);   // the menu's "Enabled" item
@@ -494,7 +608,7 @@ void ChromeExtensions::runSelfTest(QWidget* anchor, const std::function<void(con
         *waiting = st.what;
         log(QStringLiteral("%1: installing").arg(st.what));
         if (!st.storeId.isEmpty()) downloadFromStore(st.storeId, st.what);
-        else mgr->installExtension(st.source);
+        else installSource(st.source, {});
         QTimer::singleShot(60000, this, [=]{ if (*waiting == st.what) { log(st.what + QStringLiteral(": no install result after 60 s")); waiting->clear(); ++*fails; (*runNext)(); } });
     };
     (*runNext)();

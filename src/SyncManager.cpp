@@ -37,7 +37,7 @@ const QStringList kSettingKeys = {
     QStringLiteral("clear_on_exit"), QStringLiteral("dark_mode"), QStringLiteral("default_zoom"), QStringLiteral("do_not_track"),
     QStringLiteral("freeze_background_tabs"), QStringLiteral("homepage"), QStringLiteral("pin_downloads_button"),
     QStringLiteral("restore_session"), QStringLiteral("search_engine"), QStringLiteral("show_bookmarks_bar"),
-    QStringLiteral("show_suggestions"), QStringLiteral("startup"), QStringLiteral("theme")};
+    QStringLiteral("show_suggestions"), QStringLiteral("search_suggest_online"), QStringLiteral("startup"), QStringLiteral("theme")};
 const QStringList kKinds = {QStringLiteral("bookmarks"), QStringLiteral("settings"), QStringLiteral("notes"), QStringLiteral("history")};
 
 QString here(const QString& f) { return QDir::current().absoluteFilePath(f); }

@@ -336,14 +336,18 @@ int main(int argc, char *argv[]) {
     }
 
     // Persistent profile storage (mirrors main.py:82)
-    auto* profile = Pacitum::mainProfile();
     QString storagePath = QDir::currentPath() + QStringLiteral("/browser_data");  // persistent storage incl. cookies
     QDir().mkpath(storagePath + QStringLiteral("/storage"));
     QDir().mkpath(storagePath + QStringLiteral("/cache"));
-    if (!guest) {   // Guest is off-the-record: no storage on disk
+    // 1.9.1: the profile is created with its paths (Qt 6.9+). Setting them afterwards made Qt 6.11
+    // rebuild the profile's preferences under the extension engine, and enabling an extension crashed.
+    if (!guest) Pacitum::setMainProfileStorage(storagePath + QStringLiteral("/storage"), storagePath + QStringLiteral("/cache"));
+    auto* profile = Pacitum::mainProfile();
+    if (!guest && !Pacitum::mainProfileBuiltWithStorage()) {   // Qt 6.8: no builder
         profile->setPersistentStoragePath(storagePath + QStringLiteral("/storage"));
         profile->setCachePath(storagePath + QStringLiteral("/cache"));
     }
+    pacitumLog(QStringLiteral("profile storage: %1 (built with it: %2)").arg(profile->persistentStoragePath()).arg(Pacitum::mainProfileBuiltWithStorage()));
 
     auto* settings = profile->settings();
     settings->setAttribute(QWebEngineSettings::AutoLoadIconsForPage, true);

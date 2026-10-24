@@ -230,8 +230,8 @@ jobs:
         run: |
           # each tag gets the installer of its own line only (v1.9.x <- Qt 6.11 build, v1.8.x <- legacy build)
           if ("${{ github.ref_name }}" -ne "v$env:PACITUM_VERSION") { Write-Host "tag ${{ github.ref_name }} is not this build (v$env:PACITUM_VERSION); skipping"; exit 0 }
-          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" *> $null
-          if ($LASTEXITCODE -ne 0) { Write-Host "no release for ${{ github.ref_name }} yet; skipping upload"; exit 0 }
+          bash .github/ensure-release.sh "${{ github.ref_name }}" "${{ github.repository }}"
+          if ($LASTEXITCODE -ne 0) { Write-Host "no release and no release-notes/${{ github.ref_name }}.md; skipping upload"; exit 0 }
           gh release upload "${{ github.ref_name }}" (Get-ChildItem installer -File).FullName --clobber --repo "${{ github.repository }}"
       - name: Installer pages + in-place upgrade check
         shell: pwsh

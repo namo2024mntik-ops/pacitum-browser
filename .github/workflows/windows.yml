@@ -158,6 +158,32 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         if: failure()   # logs/screens only when a test fails (keeps Actions storage small)
         with: { name: "permissions-test-${{ matrix.line }}", path: permissions/, if-no-files-found: ignore, retention-days: 1 }
+      - name: Chrome extensions test (add from the Web Store, enable, use, remove)
+        shell: pwsh
+        run: |
+          $log = "$env:LOCALAPPDATA\Pacitum\Pacitum Browser"
+          Remove-Item "$log\crash.log" -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force exttest | Out-Null
+          # Chromium's own log: a CHECK failure or crash inside the extension system ends up here.
+          $env:QTWEBENGINE_CHROMIUM_FLAGS = "--enable-logging --log-file=$PWD\exttest\chromium.log --v=0"
+          $started = Get-Date
+          $p = Start-Process dist\PacitumBrowser.exe -ArgumentList '--extensions-test' -PassThru
+          if (-not $p.WaitForExit(300000)) { Write-Host "extensions test hung; killing"; $p.Kill(); $p.WaitForExit() }
+          Copy-Item "$log\startup.log","$log\crash.log" exttest\ -ErrorAction SilentlyContinue
+          Get-Content exttest\startup.log -ErrorAction SilentlyContinue | Select-String 'EXT TEST|EXTENSIONS|extension|FATAL|CRITICAL' | ForEach-Object { $_.Line }
+          Write-Host "exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) {
+            Write-Host "--- Windows crash records"
+            Get-WinEvent -FilterHashtable @{LogName='Application'; StartTime=$started} -ErrorAction SilentlyContinue |
+              Where-Object { $_.ProviderName -in 'Application Error','Windows Error Reporting' } | Select-Object -First 6 | ForEach-Object { $_.Message } | Tee-Object exttest\events.txt
+            Write-Host "--- Chromium log (errors)"
+            Get-Content exttest\chromium.log -ErrorAction SilentlyContinue | Select-String 'FATAL|ERROR|Check failed|NOTREACHED' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+          }
+          $ok = Select-String -Path exttest\startup.log -Pattern 'EXTENSIONS OK' -Quiet
+          if ($p.ExitCode -ne 0 -or -not $ok) { Write-Error "EXTENSIONS TEST FAILED"; exit 1 }
+      - uses: actions/upload-artifact@v7.0.2
+        if: failure()
+        with: { name: "extensions-test-${{ matrix.line }}", path: exttest/, if-no-files-found: ignore, retention-days: 3 }
       - name: Stress test (tabs, switching, fullscreen, loads)
         shell: pwsh
         run: |

@@ -22,6 +22,9 @@
 #include <QWebEnginePage>
 #include <QWebEngineView>
 #include <QtEndian>
+#include <QTimer>
+#include <functional>
+#include <memory>
 #ifdef PACITUM_CHROME_EXTENSIONS
 #include <QWebEngineExtensionManager>
 #include <QWebEngineExtensionInfo>
@@ -250,6 +253,15 @@ void ChromeExtensions::installFromWebStore(const QString& urlOrId, const QString
     if (name.trimmed().isEmpty()) name = id;
     if (QMessageBox::question(parent, tr("Add to Pacitum"),
             tr("Add \"%1\" from the Chrome Web Store?\n\nAn extension can read and change the pages you visit. Pacitum shows what it may do once it's added.").arg(name)) != QMessageBox::Yes) return;
+    downloadFromStore(id, name);
+#else
+    Q_UNUSED(urlOrId); Q_UNUSED(title);
+    installFromFile(QString(), parent);   // explains that 1.9 is needed
+#endif
+}
+
+void ChromeExtensions::downloadFromStore(const QString& id, const QString& name) {
+#ifdef PACITUM_CHROME_EXTENSIONS
     // The store's own download link, the same one Chrome uses.
     QUrl u(QStringLiteral("https://clients2.google.com/service/update2/crx"));
     QUrlQuery q;
@@ -264,8 +276,7 @@ void ChromeExtensions::installFromWebStore(const QString& urlOrId, const QString
     r.setTransferTimeout(60000);
     emit message(tr("Downloading %1…").arg(name));
     auto* reply = m_net->get(r);
-    QPointer<QWidget> guard(parent);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, id, name, guard]{
+    connect(reply, &QNetworkReply::finished, this, [this, reply, id, name]{
         reply->deleteLater();
         // Only over HTTPS from Google (the redirect lands on a googleusercontent.com host).
         const QUrl final = reply->url();
@@ -287,8 +298,7 @@ void ChromeExtensions::installFromWebStore(const QString& urlOrId, const QString
         if (m_profile) m_profile->extensionManager()->installExtension(zip);
     });
 #else
-    Q_UNUSED(urlOrId); Q_UNUSED(title);
-    installFromFile(QString(), parent);   // explains that 1.9 is needed
+    Q_UNUSED(id); Q_UNUSED(name);
 #endif
 }
 
@@ -400,4 +410,96 @@ void ChromeExtensions::openPopup(const QString& id, QWidget* anchor) {
         else emit message(tr("%1 works on its own and has no pop-up").arg(it.name));
         return;
     }
+}
+
+// ============================================================================ CI self test
+// --extensions-test: add extensions the way a user does and switch them on with the same call as
+// the menu's "Enabled" item, then visit a page and open the pop-up. Logs each step (a crash shows
+// where it stopped) and "EXTENSIONS OK" at the end. 1.9.0 crashed when "Enabled" was clicked.
+void ChromeExtensions::runSelfTest(QWidget* anchor, const std::function<void(const QString&)>& openPage) {
+#ifdef PACITUM_CHROME_EXTENSIONS
+    auto log = [](const QString& s){ pacitumLog(QStringLiteral("EXT TEST ") + s); };
+    if (!m_profile || !m_profile->extensionManager()) { log(QStringLiteral("FAIL no extension manager")); QCoreApplication::exit(5); return; }
+    // A small Manifest V3 extension with what most store extensions have: a service worker, a
+    // content script on every page, storage and a toolbar pop-up.
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::TempLocation) + QStringLiteral("/PacitumExtTest/pacitum-test-ext");
+    QDir(dir).removeRecursively(); QDir().mkpath(dir);
+    auto put = [&dir](const char* name, const QByteArray& data){ QFile f(dir + QLatin1Char('/') + QLatin1String(name)); if (f.open(QIODevice::WriteOnly)) f.write(data); };
+    put("manifest.json", R"({"manifest_version":3,"name":"Pacitum test extension","version":"1.0",
+        "description":"CI test","permissions":["storage"],"host_permissions":["<all_urls>"],
+        "background":{"service_worker":"bg.js"},
+        "content_scripts":[{"matches":["<all_urls>"],"js":["cs.js"],"run_at":"document_idle"}],
+        "action":{"default_popup":"popup.html","default_title":"Test"}})");
+    put("bg.js", "chrome.runtime.onInstalled.addListener(() => chrome.storage.local.set({installed: Date.now()}));\n"
+                 "chrome.runtime.onMessage.addListener((m, s, reply) => { reply({ok: true}); });\n");
+    put("cs.js", "document.documentElement.dataset.pacitumTest = '1'; chrome.runtime.sendMessage({hello: 1}, () => void chrome.runtime.lastError);\n");
+    put("popup.html", "<!doctype html><html><body style='width:200px'><p>Pacitum test pop-up</p><script src='popup.js'></script></body></html>");
+    put("popup.js", "chrome.storage.local.get('installed', v => { document.body.append(' ' + JSON.stringify(v)); });\n");
+
+    struct Step { QString what; QString source; QString storeId; };
+    auto steps = std::make_shared<QList<Step>>(QList<Step>{
+        {QStringLiteral("unpacked test extension"), dir, {}},
+        {QStringLiteral("store: uBlock Origin Lite"), {}, QStringLiteral("ddkjiahejlhfcafbddmgiahcphecmpfh")},
+    });
+    auto mgr = m_profile->extensionManager();
+    auto runNext = std::make_shared<std::function<void()>>();
+    auto waiting = std::make_shared<QString>();   // what we wait an installFinished for
+    auto fails = std::make_shared<int>(0);
+    QPointer<QWidget> a(anchor);
+    connect(mgr, &QWebEngineExtensionManager::installFinished, this, [=](const QWebEngineExtensionInfo& e){
+        if (waiting->isEmpty()) return;
+        const QString what = *waiting; waiting->clear();
+        if (!e.error().isEmpty() || e.id().isEmpty()) { log(QStringLiteral("%1: install failed: %2").arg(what, e.error())); ++*fails; QTimer::singleShot(0, this, *runNext); return; }
+        const QString id = e.id();
+        log(QStringLiteral("%1: installed id=%2 enabled=%3 loaded=%4").arg(what, id).arg(e.isEnabled()).arg(e.isLoaded()));
+        QTimer::singleShot(500, this, [=]{
+            log(QStringLiteral("%1: enabling").arg(what));
+            setEnabled(id, true);   // the menu's "Enabled" item
+            log(QStringLiteral("%1: setEnabled returned").arg(what));
+            QTimer::singleShot(3000, this, [=]{
+                bool on = false;
+                for (const auto& it : items()) if (it.id == id) on = it.enabled;
+                log(QStringLiteral("%1: enabled=%2; opening a page").arg(what).arg(on));
+                if (!on) ++*fails;
+                if (openPage) openPage(QStringLiteral("https://example.com/"));
+                QTimer::singleShot(5000, this, [=]{
+                    log(QStringLiteral("%1: opening the pop-up").arg(what));
+                    openPopup(id, a);
+                    QTimer::singleShot(3000, this, [=]{
+                        for (auto* w : QApplication::topLevelWidgets()) if (w->objectName() == QLatin1String("ExtPopup")) w->close();
+                        log(QStringLiteral("%1: turning off and on again").arg(what));
+                        setEnabled(id, false);
+                        QTimer::singleShot(1000, this, [=]{
+                            setEnabled(id, true);
+                            QTimer::singleShot(2000, this, [=]{
+                                log(QStringLiteral("%1: removing").arg(what));
+                                uninstall(id);
+                                QTimer::singleShot(1500, this, *runNext);
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    });
+    *runNext = [=]{
+        if (steps->isEmpty()) {
+            log(*fails ? QStringLiteral("FAIL (%1 step(s))").arg(*fails) : QStringLiteral("all steps passed"));
+            pacitumLog(*fails ? QStringLiteral("EXTENSIONS FAIL") : QStringLiteral("EXTENSIONS OK"));
+            QCoreApplication::exit(*fails ? 3 : 0);
+            return;
+        }
+        const Step st = steps->takeFirst();
+        *waiting = st.what;
+        log(QStringLiteral("%1: installing").arg(st.what));
+        if (!st.storeId.isEmpty()) downloadFromStore(st.storeId, st.what);
+        else mgr->installExtension(st.source);
+        QTimer::singleShot(60000, this, [=]{ if (*waiting == st.what) { log(st.what + QStringLiteral(": no install result after 60 s")); waiting->clear(); ++*fails; (*runNext)(); } });
+    };
+    (*runNext)();
+#else
+    Q_UNUSED(anchor); Q_UNUSED(openPage);
+    pacitumLog(QStringLiteral("EXTENSIONS OK (this build has no Chrome extensions)"));
+    QCoreApplication::exit(0);
+#endif
 }

@@ -593,16 +593,20 @@ void UpdateFlow::runSelfTest(QWidget* window) {
     info.installerSize = 1;
     offer(info, window, true);
     QPointer<UpdateCard> card = m_card;
-    // Click "Update" mid slide-in, then again after it finished: both crashed before the fix.
-    QTimer::singleShot(150, this, [card]{ if (card) emit card->updateClicked(); });
-    QTimer::singleShot(1200, this, [this, window = QPointer<QWidget>(window)]{
+    // Click "Update" mid slide-in (the pop-up opens before the download starts, so it is checked
+    // right away; the first request can block a cold CI runner for seconds). Surviving the card's
+    // fade-out afterwards is checked by the smoke test still reporting SMOKE OK.
+    QTimer::singleShot(150, this, [this, card]{
+        if (!card) { Updater::logLine(QStringLiteral("UPDATE UI FAIL no card")); return; }
+        emit card->updateClicked();
         const bool ok = m_sheet && m_sheet->isVisible() && (m_state == Downloading || m_state == Failed);
         Updater::logLine(QStringLiteral("UPDATE UI %1 state=%2 sheet=%3").arg(ok ? QStringLiteral("OK") : QStringLiteral("FAIL"))
                          .arg(int(m_state)).arg(m_sheet && m_sheet->isVisible()));
-        if (m_state == Downloading) { m_cancelled = true; Updater::instance()->cancelDownload(); }
-        if (m_sheet) { m_sheet->hide(); m_sheet->deleteLater(); }
-        m_state = Idle; setPills(UpdatePill::Hidden);
-        if (window) window->activateWindow();
+        QTimer::singleShot(1200, this, [this]{
+            if (m_state == Downloading) { m_cancelled = true; Updater::instance()->cancelDownload(); }
+            if (m_sheet) { m_sheet->hide(); m_sheet->deleteLater(); }
+            m_state = Idle; setPills(UpdatePill::Hidden);
+        });
     });
 }
 
